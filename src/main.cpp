@@ -1,277 +1,248 @@
+#define WEBGPU_CPP_IMPLEMENTATION
+#include <webgpu/webgpu.hpp>
 #include <GLFW/glfw3.h>
-#include <glfw3webgpu.h>  // glfwGetWGPUSurface için
-#include <webgpu/webgpu.h>
+#include <glfw3webgpu.h>
 #include <iostream>
 #include <cassert>
+#include <fstream>
 
-#ifdef WEBGPU_BACKEND_WGPU
-#  include <webgpu/wgpu.h>
-#endif
-// ============================================================
-// ADAPTER REQUEST - async'i sync gibi sarýyor
-// ============================================================
-WGPUAdapter requestAdapterSync(WGPUInstance instance, WGPURequestAdapterOptions const* options) {
-    struct UserData {
-        WGPUAdapter adapter = nullptr;
-        bool requestEnded = false;
-    };
-    UserData userData;
+using namespace wgpu;
 
-    // Adapter hazýr olunca bu lambda çaðrýlýr
-    auto onAdapterRequestEnded = [](WGPURequestAdapterStatus status,
-        WGPUAdapter adapter,
-        char const* message,
-        void* pUserData) {
-            UserData& ud = *reinterpret_cast<UserData*>(pUserData);
-            if (status == WGPURequestAdapterStatus_Success)
-                ud.adapter = adapter;
-            else
-                std::cout << "Adapter alýnamadý: " << message << std::endl;
-            ud.requestEnded = true;
-        };
+class Application {
+public:
+    bool Initialize();
+    void Terminate();
+    void MainLoop();
+    bool IsRunning();
+    void InitializePipeline();
 
-    wgpuInstanceRequestAdapter(instance, options, onAdapterRequestEnded, &userData);
-    assert(userData.requestEnded);
-    return userData.adapter;
-}
+private:
+    TextureView GetNextSurfaceTextureView();
 
+private:
+    GLFWwindow* window;
+    Device device;
+    Queue queue;
+    Surface surface;
+    TextureFormat surfaceFormat = TextureFormat::Undefined;
+    RenderPipeline pipeline;
+};
 
-// ============================================================
-// DEVICE REQUEST - adapter'dan device alýr
-// ============================================================
-WGPUDevice requestDeviceSync(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor) {
-    struct UserData {
-        WGPUDevice device = nullptr;
-        bool requestEnded = false;
-    };
-    UserData userData;
-
-    auto onDeviceRequestEnded = [](WGPURequestDeviceStatus status,
-        WGPUDevice device,
-        char const* message,
-        void* pUserData) {
-            UserData& ud = *reinterpret_cast<UserData*>(pUserData);
-            if (status == WGPURequestDeviceStatus_Success)
-                ud.device = device;
-            else
-                std::cout << "Device alýnamadý: " << message << std::endl;
-            ud.requestEnded = true;
-        };
-
-    wgpuAdapterRequestDevice(adapter, descriptor, onDeviceRequestEnded, &userData);
-    assert(userData.requestEnded);
-    return userData.device;
-}
-
-
-// ============================================================
-// MAIN
-// ============================================================
 int main() {
-
-    // ----------------------------------------------------------
-    // 1. INSTANCE - WebGPU'nun giriþ noktasý
-    // ----------------------------------------------------------
-    WGPUInstanceDescriptor instanceDesc = {};
-    instanceDesc.nextInChain = nullptr;
-    WGPUInstance instance = wgpuCreateInstance(&instanceDesc);
-    if (!instance) {
-        std::cout << "Instance oluþturulamadý!" << std::endl;
-        return 1;
+    Application app;
+    if (!app.Initialize()) return 1;
+    while (app.IsRunning()) {
+        app.MainLoop();
     }
+    app.Terminate();
+    return 0;
+}
 
+bool Application::Initialize() {
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    window = glfwCreateWindow(640, 480, "WebGPU Triangle", nullptr, nullptr);
 
-    // ----------------------------------------------------------
-    // 2. GLFW WINDOW
-    // ----------------------------------------------------------
-    if (!glfwInit()) return 1;
+    Instance instance = wgpuCreateInstance(nullptr);
+    surface = glfwGetWGPUSurface(instance, window);
 
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);   // OpenGL kullanmýyoruz
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);      // resize surface'ý etkiler, þimdilik kapat
-    GLFWwindow* window = glfwCreateWindow(640, 480, "WebGPU Reference", nullptr, nullptr);
+    RequestAdapterOptions adapterOpts = {};
+    adapterOpts.compatibleSurface = surface;
+    Adapter adapter = instance.requestAdapter(adapterOpts);
+    instance.release();
 
-
-    // ----------------------------------------------------------
-    // 3. SURFACE - GLFW penceresiyle WebGPU arasýndaki köprü
-    // ----------------------------------------------------------
-    WGPUSurface surface = glfwGetWGPUSurface(instance, window);
-
-
-    // ----------------------------------------------------------
-    // 4. ADAPTER - fiziksel GPU'yu temsil eder
-    // ----------------------------------------------------------
-    WGPURequestAdapterOptions adapterOpts = {};
-    adapterOpts.nextInChain = nullptr;
-    adapterOpts.compatibleSurface = surface;    // surface ile uyumlu adapter seç
-    WGPUAdapter adapter = requestAdapterSync(instance, &adapterOpts);
-    std::cout << "Adapter alindi: " << adapter << std::endl;
-
-    // Instance artýk gerekmez
-    wgpuInstanceRelease(instance);
-
-
-    // ----------------------------------------------------------
-    // 5. DEVICE - asýl çalýþma ortamý, tüm objeler buradan
-    // ----------------------------------------------------------
-    WGPUDeviceDescriptor deviceDesc = {};
-    deviceDesc.nextInChain = nullptr;
+    DeviceDescriptor deviceDesc = {};
     deviceDesc.label = "My Device";
     deviceDesc.requiredFeatureCount = 0;
     deviceDesc.requiredLimits = nullptr;
     deviceDesc.defaultQueue.label = "Default Queue";
-
-    // Device kaybolunca (hata veya release) çaðrýlýr
-    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason,
-        char const* message,
-        void*) {
-            std::cout << "Device lost: " << reason;
-            if (message) std::cout << " (" << message << ")";
-            std::cout << std::endl;
+    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
+        std::cout << "Device lost: " << reason;
+        if (message) std::cout << " (" << message << ")";
+        std::cout << std::endl;
         };
+    device = adapter.requestDevice(deviceDesc);
 
-    WGPUDevice device = requestDeviceSync(adapter, &deviceDesc);
-    std::cout << "Device alindi: " << device << std::endl;
+    device.setUncapturedErrorCallback([](ErrorType type, char const* message) {
+        std::cout << "WebGPU error: " << type;
+        if (message) std::cout << " (" << message << ")";
+        std::cout << std::endl;
+        });
 
-    // API'yi yanlýþ kullanýnca çaðrýlýr - hata ayýklamada çok iþe yarar
-    wgpuDeviceSetUncapturedErrorCallback(device, [](WGPUErrorType type,
-        char const* message,
-        void*) {
-            std::cout << "Uncaptured error: " << type;
-            if (message) std::cout << " (" << message << ")";
-            std::cout << std::endl;
-        }, nullptr);
+    queue = device.getQueue();
 
-    // Adapter artýk gerekmez (device'ý aldýktan sonra býrakýlýr)
-    wgpuAdapterRelease(adapter);
+    SurfaceConfiguration config = {};
+    config.width = 640;
+    config.height = 480;
+    config.usage = TextureUsage::RenderAttachment;
+    surfaceFormat = surface.getPreferredFormat(adapter);
+    config.format = surfaceFormat;
+    config.viewFormatCount = 0;
+    config.viewFormats = nullptr;
+    config.device = device;
+    config.presentMode = PresentMode::Fifo;
+    config.alphaMode = CompositeAlphaMode::Auto;
+    surface.configure(config);
 
+    adapter.release();
+    InitializePipeline();
 
-    // ----------------------------------------------------------
-    // 6. QUEUE - CPU'dan GPU'ya komut gönderme kanalý
-    // ----------------------------------------------------------
-    WGPUQueue queue = wgpuDeviceGetQueue(device);
+    return true;
+}
 
-    // Queue iþi bitince çaðrýlýr
-    wgpuQueueOnSubmittedWorkDone(queue, [](WGPUQueueWorkDoneStatus status, void*) {
-        std::cout << "Queue is bitti, status: " << status << std::endl;
-        }, nullptr);
-
-
-    // ----------------------------------------------------------
-    // 7. SURFACE CONFIGURATION - swap chain ayarlarý
-    // ----------------------------------------------------------
-    WGPUSurfaceConfiguration surfaceConfig = {};
-    surfaceConfig.nextInChain = nullptr;
-    surfaceConfig.device = device;
-    surfaceConfig.width = 640;
-    surfaceConfig.height = 480;
-    surfaceConfig.usage = WGPUTextureUsage_RenderAttachment;
-    surfaceConfig.format = wgpuSurfaceGetPreferredFormat(surface, adapter);
-    surfaceConfig.viewFormatCount = 0;
-    surfaceConfig.viewFormats = nullptr;
-    surfaceConfig.presentMode = WGPUPresentMode_Fifo;       // sýradaki frame'i göster
-    surfaceConfig.alphaMode = WGPUCompositeAlphaMode_Auto;
-    wgpuSurfaceConfigure(surface, &surfaceConfig);
-
-
-    // ----------------------------------------------------------
-    // 8. ANA DÖNGÜ
-    // ----------------------------------------------------------
-    while (!glfwWindowShouldClose(window)) {
-        glfwPollEvents();
-
-        // --- Surface texture al ---
-        WGPUSurfaceTexture surfaceTexture;
-        wgpuSurfaceGetCurrentTexture(surface, &surfaceTexture);
-        if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_Success)
-            break;
-
-        // --- Texture view oluþtur (render pass bunu hedef alýr) ---
-        WGPUTextureViewDescriptor viewDesc = {};
-        viewDesc.nextInChain = nullptr;
-        viewDesc.label = "Surface texture view";
-        viewDesc.format = wgpuTextureGetFormat(surfaceTexture.texture);
-        viewDesc.dimension = WGPUTextureViewDimension_2D;
-        viewDesc.baseMipLevel = 0;
-        viewDesc.mipLevelCount = 1;
-        viewDesc.baseArrayLayer = 0;
-        viewDesc.arrayLayerCount = 1;
-        viewDesc.aspect = WGPUTextureAspect_All;
-        WGPUTextureView targetView = wgpuTextureCreateView(surfaceTexture.texture, &viewDesc);
-
-        // --- Command encoder oluþtur ---
-        // GPU'ya gönderilecek komutlarý encode eder
-        WGPUCommandEncoderDescriptor encoderDesc = {};
-        encoderDesc.nextInChain = nullptr;
-        encoderDesc.label = "Command encoder";
-        WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(device, &encoderDesc);
-
-        // --- Color attachment - render pass neyin üzerine çizecek ---
-        WGPURenderPassColorAttachment colorAttachment = {};
-        colorAttachment.view = targetView;         // hedef texture
-        colorAttachment.resolveTarget = nullptr;
-        colorAttachment.loadOp = WGPULoadOp_Clear;   // pass baþlamadan ekraný temizle
-        colorAttachment.storeOp = WGPUStoreOp_Store;  // sonucu kaydet
-        colorAttachment.clearValue = WGPUColor{ 0.1, 0.3, 0.6, 1.0 }; // R G B A (mavi)
-
-#ifndef WEBGPU_BACKEND_WGPU
-        colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-#endif
-
-        // --- Render pass - GPU'nun 3D render devresini kullanýr ---
-        WGPURenderPassDescriptor renderPassDesc = {};
-        renderPassDesc.nextInChain = nullptr;
-        renderPassDesc.colorAttachmentCount = 1;
-        renderPassDesc.colorAttachments = &colorAttachment;
-        renderPassDesc.depthStencilAttachment = nullptr;  // depth buffer yok þimdilik
-        renderPassDesc.timestampWrites = nullptr;
-
-        WGPURenderPassEncoder renderPass = wgpuCommandEncoderBeginRenderPass(encoder, &renderPassDesc);
-        // Buraya draw komutlarý gelecek (triangle, mesh vs.)
-        wgpuRenderPassEncoderEnd(renderPass);
-        wgpuRenderPassEncoderRelease(renderPass);
-
-        // --- Encoder'ý bitir ve command buffer üret ---
-        WGPUCommandBufferDescriptor cmdBufferDesc = {};
-        cmdBufferDesc.nextInChain = nullptr;
-        cmdBufferDesc.label = "Command buffer";
-        WGPUCommandBuffer command = wgpuCommandEncoderFinish(encoder, &cmdBufferDesc);
-        wgpuCommandEncoderRelease(encoder);
-
-        // --- Queue'ya gönder ---
-        wgpuQueueSubmit(queue, 1, &command);
-        wgpuCommandBufferRelease(command);
-
-        // --- Frame'i ekranda göster ---
-        wgpuTextureViewRelease(targetView);
-
-#ifndef WEBGPU_BACKEND_WGPU
-        wgpuTextureRelease(surfaceTexture.texture);
-#endif
-
-        wgpuSurfacePresent(surface);
-
-#ifdef WEBGPU_BACKEND_WGPU
-        wgpuTextureRelease(surfaceTexture.texture);
-#endif
-
-        // --- Device tick (Dawn'da callback'lerin iþlenmesi için gerekli) ---
-#if defined(WEBGPU_BACKEND_DAWN)
-        wgpuDeviceTick(device);
-#elif defined(WEBGPU_BACKEND_WGPU)
-        wgpuDevicePoll(device, false, nullptr);
-#endif
-    }
-
-
-    // ----------------------------------------------------------
-    // 9. CLEANUP - ters sýrada release
-    // ----------------------------------------------------------
-    wgpuSurfaceUnconfigure(surface);
-    wgpuQueueRelease(queue);
-    wgpuSurfaceRelease(surface);
-    wgpuDeviceRelease(device);
+void Application::Terminate() {
+    surface.unconfigure();
+    queue.release();
+    surface.release();
+    device.release();
     glfwDestroyWindow(window);
     glfwTerminate();
+}
 
-    return 0;
+void Application::MainLoop() {
+    glfwPollEvents();
+
+    TextureView targetView = GetNextSurfaceTextureView();
+    if (!targetView) return;
+
+    CommandEncoderDescriptor encoderDesc = {};
+    encoderDesc.label = "My command encoder";
+    CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+
+    RenderPassColorAttachment colorAttachment = {};
+    colorAttachment.view = targetView;
+    colorAttachment.resolveTarget = nullptr;
+    colorAttachment.loadOp = LoadOp::Clear;
+    colorAttachment.storeOp = StoreOp::Store;
+    colorAttachment.clearValue = WGPUColor{ 0.9, 0.1, 0.2, 1.0 };
+
+    RenderPassDescriptor renderPassDesc = {};
+    renderPassDesc.colorAttachmentCount = 1;
+    renderPassDesc.colorAttachments = &colorAttachment;
+    renderPassDesc.depthStencilAttachment = nullptr;
+    renderPassDesc.timestampWrites = nullptr;
+
+    RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
+    // Draw komutlarý buraya gelecek
+    
+    renderPass.setPipeline(pipeline);
+    renderPass.draw(3, 1, 0, 0);
+    renderPass.end();
+    renderPass.release();
+
+    CommandBufferDescriptor cmdBufDesc = {};
+    cmdBufDesc.label = "Command buffer";
+    CommandBuffer cmdBuf = encoder.finish(cmdBufDesc);
+    encoder.release();
+
+    queue.submit(1, &cmdBuf);
+    cmdBuf.release();
+
+    targetView.release();
+    surface.present();
+
+    device.poll(false);
+}
+
+bool Application::IsRunning() {
+    return !glfwWindowShouldClose(window);
+}
+
+TextureView Application::GetNextSurfaceTextureView() {
+    SurfaceTexture surfaceTexture;
+    surface.getCurrentTexture(&surfaceTexture);
+    if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success)
+        return nullptr;
+
+    Texture texture = surfaceTexture.texture;
+
+    TextureViewDescriptor viewDesc = {};
+    viewDesc.label = "Surface texture view";
+    viewDesc.format = texture.getFormat();
+    viewDesc.dimension = TextureViewDimension::_2D;
+    viewDesc.baseMipLevel = 0;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.baseArrayLayer = 0;
+    viewDesc.arrayLayerCount = 1;
+    viewDesc.aspect = TextureAspect::All;
+
+    return texture.createView(viewDesc);
+}
+
+void Application::InitializePipeline() {
+
+    // Shader dosyasýný oku
+    std::ifstream file("shader.wgsl");
+    std::string shaderSource((std::istreambuf_iterator<char>(file)),
+        std::istreambuf_iterator<char>());
+
+    // Shader module oluþtur
+    ShaderModuleDescriptor shaderDesc = {};
+    ShaderModuleWGSLDescriptor shaderCodeDesc = {};
+    shaderCodeDesc.chain.next = nullptr;
+    shaderCodeDesc.chain.sType = SType::ShaderModuleWGSLDescriptor;
+    shaderDesc.nextInChain = &shaderCodeDesc.chain;
+    shaderCodeDesc.code = shaderSource.c_str();
+    ShaderModule shaderModule = device.createShaderModule(shaderDesc);
+
+    // Pipeline descriptor
+    RenderPipelineDescriptor pipelineDesc = {};
+
+    // Vertex aþamasý - vertex buffer yok, koordinatlar shader içinde
+    pipelineDesc.vertex.bufferCount = 0;
+    pipelineDesc.vertex.buffers = nullptr;
+    pipelineDesc.vertex.module = shaderModule;
+    pipelineDesc.vertex.entryPoint = "vs_main";
+    pipelineDesc.vertex.constantCount = 0;
+    pipelineDesc.vertex.constants = nullptr;
+
+    // Primitive aþamasý - vertex'leri nasýl birleþtir
+    pipelineDesc.primitive.topology = PrimitiveTopology::TriangleList;  // her 3 vertex bir üçgen
+    pipelineDesc.primitive.stripIndexFormat = IndexFormat::Undefined;
+    pipelineDesc.primitive.frontFace = FrontFace::CCW;                  // counter-clockwise = ön yüz
+    pipelineDesc.primitive.cullMode = CullMode::None;                   // arka yüzleri gizleme
+
+    // Fragment aþamasý
+    FragmentState fragmentState = {};
+    fragmentState.module = shaderModule;
+    fragmentState.entryPoint = "fs_main";
+    fragmentState.constantCount = 0;
+    fragmentState.constants = nullptr;
+
+    // Blend state - alpha blending
+    BlendState blendState = {};
+    blendState.color.srcFactor = BlendFactor::SrcAlpha;
+    blendState.color.dstFactor = BlendFactor::OneMinusSrcAlpha;
+    blendState.color.operation = BlendOperation::Add;
+    blendState.alpha.srcFactor = BlendFactor::Zero;
+    blendState.alpha.dstFactor = BlendFactor::One;
+    blendState.alpha.operation = BlendOperation::Add;
+
+    // Color target - hangi texture'a çizileceði
+    ColorTargetState colorTarget = {};
+    colorTarget.format = surfaceFormat;
+    colorTarget.blend = &blendState;
+    colorTarget.writeMask = ColorWriteMask::All;
+
+    fragmentState.targetCount = 1;
+    fragmentState.targets = &colorTarget;
+    pipelineDesc.fragment = &fragmentState;
+
+    // Depth/stencil yok
+    pipelineDesc.depthStencil = nullptr;
+
+    // Multisample - anti-aliasing yok
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = ~0u;
+    pipelineDesc.multisample.alphaToCoverageEnabled = false;
+
+    // Layout - bind group yok þimdilik
+    pipelineDesc.layout = nullptr;
+
+    // Pipeline oluþtur
+    pipeline = device.createRenderPipeline(pipelineDesc);
+
+    // Shader module artýk gerekmez
+    shaderModule.release();
 }

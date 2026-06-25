@@ -16,3 +16,5 @@ add_subdirectory(deps/glfw3webgpu)
 add_executable(main src/main.cpp)
 target_link_libraries(main PRIVATE webgpu glfw glfw3webgpu)
 target_copy_webgpu_binaries(main)
+
+configure_file(src/shader.wgsl shader.wgsl COPYONLY)
