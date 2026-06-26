@@ -129,7 +129,7 @@ void Application::MainLoop() {
     colorAttachment.resolveTarget = nullptr;
     colorAttachment.loadOp = LoadOp::Clear;
     colorAttachment.storeOp = StoreOp::Store;
-    colorAttachment.clearValue = WGPUColor{ 0.9, 0.1, 0.2, 1.0 };
+    colorAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.1, 1.0 };
 
     RenderPassDescriptor renderPassDesc = {};
     renderPassDesc.colorAttachmentCount = 1;
@@ -188,21 +188,19 @@ TextureView Application::GetNextSurfaceTextureView() {
 }
 
 void Application::InitializeBuffers() {
-    // CPU tarafýnda vertex verisi - her vertex için x, y
     std::vector<float> vertexData = {
-        // Ýlk üçgen
-        -0.5, -0.5,
-        +0.5, -0.5,
-        +0.0, +0.5,
+        // x,     y,     r,    g,    b
+        -0.5,  -0.5,  1.0,  0.0,  0.0,  // kýrmýzý
+        +0.5,  -0.5,  0.0,  1.0,  0.0,  // yeþil
+        +0.0,  +0.5,  0.0,  0.0,  1.0,  // mavi
 
-        // Ýkinci üçgen
-        -0.55f, -0.5,
-        -0.05f, +0.5,
-        -0.55f, +0.5
+        -0.55f, -0.5,  1.0,  1.0,  0.0,  // sarý
+        -0.05f, +0.5,  1.0,  0.0,  1.0,  // mor
+        -0.55f, +0.5,  0.0,  1.0,  1.0   // cyan
     };
 
-    // vertexData.size() / 2 çünkü her vertex 2 float
-    vertexCount = static_cast<uint32_t>(vertexData.size() / 2);
+    // Her vertex artýk 5 float
+    vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
 
     // GPU tarafýnda vertex buffer oluþtur
     BufferDescriptor bufferDesc = {};
@@ -240,13 +238,21 @@ void Application::InitializePipeline() {
     positionAttrib.format = VertexFormat::Float32x2; // vec2f
     positionAttrib.offset = 0;                  // buffer'ýn baþýndan itibaren
 
-    // Vertex buffer layout - buffer'ý nasýl oku
-    VertexBufferLayout vertexBufferLayout = {};
-    vertexBufferLayout.attributeCount = 1;
-    vertexBufferLayout.attributes = &positionAttrib;
-    vertexBufferLayout.arrayStride = 2 * sizeof(float); // bir vertex 8 byte
-    vertexBufferLayout.stepMode = VertexStepMode::Vertex; // her vertex için bir adým
+    // Color attribute - yeni
+    VertexAttribute colorAttrib = {};
+    colorAttrib.shaderLocation = 1;                    // @location(1)
+    colorAttrib.format = VertexFormat::Float32x3;      // vec3f
+    colorAttrib.offset = 2 * sizeof(float);            // x,y'den sonra baþlýyor
 
+    // Ýki attribute'u vector'e koy
+    std::vector<VertexAttribute> vertexAttribs = { positionAttrib, colorAttrib };
+
+    // Layout güncelle
+    VertexBufferLayout vertexBufferLayout = {};
+    vertexBufferLayout.attributeCount = static_cast<uint32_t>(vertexAttribs.size());
+    vertexBufferLayout.attributes = vertexAttribs.data();
+    vertexBufferLayout.arrayStride = 5 * sizeof(float); // x,y,r,g,b = 5 float
+    vertexBufferLayout.stepMode = VertexStepMode::Vertex;
     // Vertex aþamasý
     pipelineDesc.vertex.bufferCount = 1;
     pipelineDesc.vertex.buffers = &vertexBufferLayout;
