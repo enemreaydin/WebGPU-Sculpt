@@ -5,6 +5,7 @@
 #include <iostream>
 #include <cassert>
 #include <fstream>
+#include <vector>
 
 using namespace wgpu;
 
@@ -14,10 +15,12 @@ public:
     void Terminate();
     void MainLoop();
     bool IsRunning();
-    void InitializePipeline();
 
 private:
     TextureView GetNextSurfaceTextureView();
+    void InitializePipeline();
+    void InitializeBuffers();
+    RequiredLimits GetRequiredLimits(Adapter adapter) const;
 
 private:
     GLFWwindow* window;
@@ -26,6 +29,8 @@ private:
     Surface surface;
     TextureFormat surfaceFormat = TextureFormat::Undefined;
     RenderPipeline pipeline;
+    Buffer vertexBuffer;
+    uint32_t vertexCount;
 };
 
 int main() {
@@ -52,16 +57,20 @@ bool Application::Initialize() {
     Adapter adapter = instance.requestAdapter(adapterOpts);
     instance.release();
 
+    // Device descriptor - required limits ile birlikte
     DeviceDescriptor deviceDesc = {};
     deviceDesc.label = "My Device";
     deviceDesc.requiredFeatureCount = 0;
-    deviceDesc.requiredLimits = nullptr;
     deviceDesc.defaultQueue.label = "Default Queue";
     deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
         std::cout << "Device lost: " << reason;
         if (message) std::cout << " (" << message << ")";
         std::cout << std::endl;
         };
+
+    // Adapter'dan önce required limits al
+    deviceDesc.requiredLimits = nullptr;
+
     device = adapter.requestDevice(deviceDesc);
 
     device.setUncapturedErrorCallback([](ErrorType type, char const* message) {
@@ -86,12 +95,17 @@ bool Application::Initialize() {
     surface.configure(config);
 
     adapter.release();
+
     InitializePipeline();
+    InitializeBuffers();
 
     return true;
 }
 
 void Application::Terminate() {
+    // Oluþturma sýrasýnýn tersi
+    vertexBuffer.release();
+    pipeline.release();
     surface.unconfigure();
     queue.release();
     surface.release();
@@ -124,10 +138,13 @@ void Application::MainLoop() {
     renderPassDesc.timestampWrites = nullptr;
 
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
-    // Draw komutlarý buraya gelecek
-    
+
     renderPass.setPipeline(pipeline);
-    renderPass.draw(3, 1, 0, 0);
+    // Vertex buffer'ý render pass'e baðla
+    renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexBuffer.getSize());
+    // vertexCount deðiþkeni, hardcoded sayý deðil
+    renderPass.draw(vertexCount, 1, 0, 0);
+
     renderPass.end();
     renderPass.release();
 
@@ -170,6 +187,34 @@ TextureView Application::GetNextSurfaceTextureView() {
     return texture.createView(viewDesc);
 }
 
+void Application::InitializeBuffers() {
+    // CPU tarafýnda vertex verisi - her vertex için x, y
+    std::vector<float> vertexData = {
+        // Ýlk üçgen
+        -0.5, -0.5,
+        +0.5, -0.5,
+        +0.0, +0.5,
+
+        // Ýkinci üçgen
+        -0.55f, -0.5,
+        -0.05f, +0.5,
+        -0.55f, +0.5
+    };
+
+    // vertexData.size() / 2 çünkü her vertex 2 float
+    vertexCount = static_cast<uint32_t>(vertexData.size() / 2);
+
+    // GPU tarafýnda vertex buffer oluþtur
+    BufferDescriptor bufferDesc = {};
+    bufferDesc.size = vertexData.size() * sizeof(float);
+    bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex;
+    bufferDesc.mappedAtCreation = false;
+    vertexBuffer = device.createBuffer(bufferDesc);
+
+    // CPU'dan GPU'ya veriyi yükle
+    queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
+}
+
 void Application::InitializePipeline() {
 
     // Shader dosyasýný oku
@@ -189,9 +234,22 @@ void Application::InitializePipeline() {
     // Pipeline descriptor
     RenderPipelineDescriptor pipelineDesc = {};
 
-    // Vertex aþamasý - vertex buffer yok, koordinatlar shader içinde
-    pipelineDesc.vertex.bufferCount = 0;
-    pipelineDesc.vertex.buffers = nullptr;
+    // Vertex attribute - shader'daki @location(0) ile eþleþir
+    VertexAttribute positionAttrib = {};
+    positionAttrib.shaderLocation = 0;          // @location(0)
+    positionAttrib.format = VertexFormat::Float32x2; // vec2f
+    positionAttrib.offset = 0;                  // buffer'ýn baþýndan itibaren
+
+    // Vertex buffer layout - buffer'ý nasýl oku
+    VertexBufferLayout vertexBufferLayout = {};
+    vertexBufferLayout.attributeCount = 1;
+    vertexBufferLayout.attributes = &positionAttrib;
+    vertexBufferLayout.arrayStride = 2 * sizeof(float); // bir vertex 8 byte
+    vertexBufferLayout.stepMode = VertexStepMode::Vertex; // her vertex için bir adým
+
+    // Vertex aþamasý
+    pipelineDesc.vertex.bufferCount = 1;
+    pipelineDesc.vertex.buffers = &vertexBufferLayout;
     pipelineDesc.vertex.module = shaderModule;
     pipelineDesc.vertex.entryPoint = "vs_main";
     pipelineDesc.vertex.constantCount = 0;
