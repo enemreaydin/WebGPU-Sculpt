@@ -29,8 +29,9 @@ private:
     Surface surface;
     TextureFormat surfaceFormat = TextureFormat::Undefined;
     RenderPipeline pipeline;
-    Buffer vertexBuffer;
-    uint32_t vertexCount;
+    Buffer pointBuffer;
+    Buffer indexBuffer;
+    uint32_t indexCount;
 };
 
 int main() {
@@ -104,7 +105,8 @@ bool Application::Initialize() {
 
 void Application::Terminate() {
     // Oluþturma sýrasýnýn tersi
-    vertexBuffer.release();
+    pointBuffer.release();
+    indexBuffer.release();
     pipeline.release();
     surface.unconfigure();
     queue.release();
@@ -140,11 +142,9 @@ void Application::MainLoop() {
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
 
     renderPass.setPipeline(pipeline);
-    // Vertex buffer'ý render pass'e baðla
-    renderPass.setVertexBuffer(0, vertexBuffer, 0, vertexBuffer.getSize());
-    // vertexCount deðiþkeni, hardcoded sayý deðil
-    renderPass.draw(vertexCount, 1, 0, 0);
-
+    renderPass.setVertexBuffer(0, pointBuffer, 0, pointBuffer.getSize());
+    renderPass.setIndexBuffer(indexBuffer, IndexFormat::Uint16, 0, indexBuffer.getSize());
+    renderPass.drawIndexed(indexCount, 1, 0, 0, 0);
     renderPass.end();
     renderPass.release();
 
@@ -188,29 +188,37 @@ TextureView Application::GetNextSurfaceTextureView() {
 }
 
 void Application::InitializeBuffers() {
-    std::vector<float> vertexData = {
-        // x,     y,     r,    g,    b
-        -0.5,  -0.5,  1.0,  0.0,  0.0,  // kýrmýzý
-        +0.5,  -0.5,  0.0,  1.0,  0.0,  // yeþil
-        +0.0,  +0.5,  0.0,  0.0,  1.0,  // mavi
-
-        -0.55f, -0.5,  1.0,  1.0,  0.0,  // sarý
-        -0.05f, +0.5,  1.0,  0.0,  1.0,  // mor
-        -0.55f, +0.5,  0.0,  1.0,  1.0   // cyan
+    // 4 benzersiz nokta, tekrar yok
+    std::vector<float> pointData = {
+        // x,     y,    r,    g,    b
+        -0.5, -0.5,  1.0,  0.0,  0.0,  // nokta 0 - kýrmýzý
+        +0.5, -0.5,  0.0,  1.0,  0.0,  // nokta 1 - yeþil
+        +0.5, +0.5,  0.0,  0.0,  1.0,  // nokta 2 - mavi
+        -0.5, +0.5,  1.0,  1.0,  0.0,  // nokta 3 - sarý
     };
 
-    // Her vertex artýk 5 float
-    vertexCount = static_cast<uint32_t>(vertexData.size() / 5);
+    // Hangi noktalarýn hangi üçgeni oluþturduðu
+    std::vector<uint16_t> indexData = {
+        0, 1, 2,  // üçgen 1
+        0, 2, 3   // üçgen 2
+    };
 
-    // GPU tarafýnda vertex buffer oluþtur
+    indexCount = static_cast<uint32_t>(indexData.size());
+
+    // Point buffer oluþtur
     BufferDescriptor bufferDesc = {};
-    bufferDesc.size = vertexData.size() * sizeof(float);
+    bufferDesc.size = pointData.size() * sizeof(float);
     bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Vertex;
     bufferDesc.mappedAtCreation = false;
-    vertexBuffer = device.createBuffer(bufferDesc);
+    pointBuffer = device.createBuffer(bufferDesc);
+    queue.writeBuffer(pointBuffer, 0, pointData.data(), bufferDesc.size);
 
-    // CPU'dan GPU'ya veriyi yükle
-    queue.writeBuffer(vertexBuffer, 0, vertexData.data(), bufferDesc.size);
+    // Index buffer oluþtur
+    bufferDesc.size = indexData.size() * sizeof(uint16_t);
+    bufferDesc.size = (bufferDesc.size + 3) & ~3; // 4'ün katýna yuvarla
+    bufferDesc.usage = BufferUsage::CopyDst | BufferUsage::Index;
+    indexBuffer = device.createBuffer(bufferDesc);
+    queue.writeBuffer(indexBuffer, 0, indexData.data(), bufferDesc.size);
 }
 
 void Application::InitializePipeline() {
