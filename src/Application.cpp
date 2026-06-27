@@ -2,10 +2,6 @@
 #include <glfw3webgpu.h>
 #include <iostream>
 
-// ============================================================
-// PUBLIC
-// ============================================================
-
 bool Application::Initialize() {
     InitializeWindow();
     InitializeInstance();
@@ -15,7 +11,6 @@ bool Application::Initialize() {
     InitializeQueue();
     ConfigureSurface();
 
-    // Adapter ve instance artýk gerekmez
     adapter.release();
     instance.release();
 
@@ -75,22 +70,16 @@ void Application::MainLoop() {
     device.poll(false);
 }
 
-// ============================================================
-// BAÞLANGIÇ ZÝNCÝRÝ
-// ============================================================
-
+// Initialize chain
 void Application::InitializeWindow() {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    // Resizable AÇIK - pencere boyutu deðiþtirilebilir
     glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
     window = glfwCreateWindow(width, height, "SDF Editor", nullptr, nullptr);
 
-    // 'this' pointer'ýný pencereye baðla ki callback'ten eriþebilelim
+    // Resizable property
     glfwSetWindowUserPointer(window, this);
-
-    // Pencere boyutu deðiþince çaðrýlacak callback
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int newWidth, int newHeight) {
         auto app = static_cast<Application*>(glfwGetWindowUserPointer(w));
         app->OnResize(newWidth, newHeight);
