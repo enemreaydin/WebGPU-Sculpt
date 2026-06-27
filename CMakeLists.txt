@@ -30,7 +30,7 @@ add_library(imgui STATIC
     # Backend'ler: ImGui'yi GLFW ve WebGPU'ya baðlar
     deps/imgui/backends/imgui_impl_glfw.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
-)
+ "src/io/ExtensionLoader.h" "src/io/ExtensionLoader.cpp" "sdf_test.cpp")
 target_include_directories(imgui PUBLIC
     deps/imgui
     deps/imgui/backends
@@ -50,12 +50,24 @@ add_executable(main
     src/Application.h
 )
 
+# SDF MÝMARÝSÝ TESTÝ
+add_executable(sdf_test_run
+    sdf_test.cpp
+    src/scene/SceneManager.cpp
+    src/io/ExtensionLoader.cpp
+)
+
+
 target_link_libraries(main PRIVATE
     webgpu
     glfw
     glfw3webgpu
     imgui
 )
+
+# CMake'e wgsl dosyalarýný exe'nin yanýna kopyalamasýný söylüyoruz 
+# scene içinde olunca direkt derlemiyomuþ
+configure_file(${CMAKE_SOURCE_DIR}/src/scene/sdf_core.wgsl ${CMAKE_CURRENT_BINARY_DIR}/sdf_core.wgsl COPYONLY)
 
 # ============================================================
 # DERLEME SONRASI
