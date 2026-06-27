@@ -13,7 +13,7 @@ endif()
 
 add_subdirectory(deps/glfw3webgpu)
 
-add_executable(main src/main.cpp)
+add_executable(main src/main.cpp "src/Application.cpp" "src/Application.h")
 target_link_libraries(main PRIVATE webgpu glfw glfw3webgpu)
 target_copy_webgpu_binaries(main)
 

@@ -1,0 +1,186 @@
+#include "Application.h"
+#include <glfw3webgpu.h>
+#include <iostream>
+
+// ============================================================
+// PUBLIC
+// ============================================================
+
+bool Application::Initialize() {
+    InitializeWindow();
+    InitializeInstance();
+    InitializeSurface();
+    InitializeAdapter();
+    InitializeDevice();
+    InitializeQueue();
+    ConfigureSurface();
+
+    // Adapter ve instance artýk gerekmez
+    adapter.release();
+    instance.release();
+
+    return true;
+}
+
+void Application::Terminate() {
+    surface.unconfigure();
+    queue.release();
+    surface.release();
+    device.release();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+}
+
+bool Application::IsRunning() {
+    return !glfwWindowShouldClose(window);
+}
+
+void Application::MainLoop() {
+    glfwPollEvents();
+
+    TextureView targetView = GetNextSurfaceTextureView();
+    if (!targetView) return;
+
+    CommandEncoderDescriptor encoderDesc = {};
+    CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+
+    // Þimdilik sadece ekraný temizliyoruz (koyu gri)
+    RenderPassColorAttachment colorAttachment = {};
+    colorAttachment.view = targetView;
+    colorAttachment.resolveTarget = nullptr;
+    colorAttachment.loadOp = LoadOp::Clear;
+    colorAttachment.storeOp = StoreOp::Store;
+    colorAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.12, 1.0 };
+
+    RenderPassDescriptor renderPassDesc = {};
+    renderPassDesc.colorAttachmentCount = 1;
+    renderPassDesc.colorAttachments = &colorAttachment;
+    renderPassDesc.depthStencilAttachment = nullptr;
+    renderPassDesc.timestampWrites = nullptr;
+
+    RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
+    // Ýleride buraya çizim gelecek
+    renderPass.end();
+    renderPass.release();
+
+    CommandBufferDescriptor cmdBufDesc = {};
+    CommandBuffer cmdBuf = encoder.finish(cmdBufDesc);
+    encoder.release();
+
+    queue.submit(1, &cmdBuf);
+    cmdBuf.release();
+
+    targetView.release();
+    surface.present();
+    device.poll(false);
+}
+
+// ============================================================
+// BAÞLANGIÇ ZÝNCÝRÝ
+// ============================================================
+
+void Application::InitializeWindow() {
+    glfwInit();
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    // Resizable AÇIK - pencere boyutu deðiþtirilebilir
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
+    window = glfwCreateWindow(width, height, "SDF Editor", nullptr, nullptr);
+
+    // 'this' pointer'ýný pencereye baðla ki callback'ten eriþebilelim
+    glfwSetWindowUserPointer(window, this);
+
+    // Pencere boyutu deðiþince çaðrýlacak callback
+    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int newWidth, int newHeight) {
+        auto app = static_cast<Application*>(glfwGetWindowUserPointer(w));
+        app->OnResize(newWidth, newHeight);
+        });
+}
+
+void Application::InitializeInstance() {
+    instance = wgpuCreateInstance(nullptr);
+}
+
+void Application::InitializeSurface() {
+    surface = glfwGetWGPUSurface(instance, window);
+}
+
+void Application::InitializeAdapter() {
+    RequestAdapterOptions adapterOpts = {};
+    adapterOpts.compatibleSurface = surface;
+    adapter = instance.requestAdapter(adapterOpts);
+
+    // surfaceFormat'ý adapter varken al
+    surfaceFormat = surface.getPreferredFormat(adapter);
+}
+
+void Application::InitializeDevice() {
+    DeviceDescriptor deviceDesc = {};
+    deviceDesc.label = "Device";
+    deviceDesc.requiredLimits = nullptr;
+    deviceDesc.defaultQueue.label = "Queue";
+    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
+        std::cout << "Device lost: " << reason;
+        if (message) std::cout << " (" << message << ")";
+        std::cout << std::endl;
+        };
+    device = adapter.requestDevice(deviceDesc);
+}
+
+void Application::InitializeQueue() {
+    queue = device.getQueue();
+}
+
+void Application::ConfigureSurface() {
+    SurfaceConfiguration config = {};
+    config.width = width;
+    config.height = height;
+    config.usage = TextureUsage::RenderAttachment;
+    config.format = surfaceFormat;
+    config.viewFormatCount = 0;
+    config.viewFormats = nullptr;
+    config.device = device;
+    config.presentMode = PresentMode::Fifo;
+    config.alphaMode = CompositeAlphaMode::Auto;
+    surface.configure(config);
+}
+
+// ============================================================
+// RESIZE
+// ============================================================
+
+void Application::OnResize(int newWidth, int newHeight) {
+    // Minimize edilince 0 olabilir, o durumda configure etme
+    if (newWidth == 0 || newHeight == 0) return;
+
+    width = newWidth;
+    height = newHeight;
+
+    // Surface'ý yeni boyutla yeniden configure et
+    ConfigureSurface();
+}
+
+// ============================================================
+// FRAME YARDIMCILARI
+// ============================================================
+
+TextureView Application::GetNextSurfaceTextureView() {
+    SurfaceTexture surfaceTexture;
+    surface.getCurrentTexture(&surfaceTexture);
+    if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success)
+        return nullptr;
+
+    Texture texture = surfaceTexture.texture;
+
+    TextureViewDescriptor viewDesc = {};
+    viewDesc.label = "Surface texture view";
+    viewDesc.format = texture.getFormat();
+    viewDesc.dimension = TextureViewDimension::_2D;
+    viewDesc.baseMipLevel = 0;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.baseArrayLayer = 0;
+    viewDesc.arrayLayerCount = 1;
+    viewDesc.aspect = TextureAspect::All;
+
+    return texture.createView(viewDesc);
+}
