@@ -22,42 +22,49 @@ add_subdirectory(deps/glfw3webgpu)
 
 # --- Dear ImGui (arayüz) ---
 # ImGui'nin CMake'i yok, kaynaklarý elle derliyoruz
+# NOT: Buraya SADECE ImGui'nin kendi dosyalarý girer, bizim kodumuz deðil
 add_library(imgui STATIC
     deps/imgui/imgui.cpp
     deps/imgui/imgui_draw.cpp
     deps/imgui/imgui_tables.cpp
     deps/imgui/imgui_widgets.cpp
-    # Backend'ler: ImGui'yi GLFW ve WebGPU'ya baðlar
+    deps/imgui/imgui_demo.cpp          # DEMO ÝÇÝN, SONRADAN SÝLÝNECEK
     deps/imgui/backends/imgui_impl_glfw.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
- "src/io/ExtensionLoader.h" "src/io/ExtensionLoader.cpp" "sdf_test.cpp")
+)
 target_include_directories(imgui PUBLIC
     deps/imgui
     deps/imgui/backends
 )
-# ImGui'nin WebGPU backend'i webgpu ve glfw header'larýna ihtiyaç duyar
 target_link_libraries(imgui PUBLIC webgpu glfw)
-# wgpu-native backend kullandýðýmýzý ImGui'ye bildir
 target_compile_definitions(imgui PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_WGPU)
 
-# ============================================================
-# ANA UYGULAMA (src/)
-# ============================================================
+# --- Font'u exe'nin yanýna kopyala ---
+configure_file(assets/fonts/Inter_18pt-Regular.ttf fonts/Inter_18pt-Regular.ttf COPYONLY)
 
+
+# ============================================================
+# 1. ANA UYGULAMA (Arayüz + WebGPU + SDF Motoru)
+# ============================================================
 add_executable(main
     src/main.cpp
     src/Application.cpp
     src/Application.h
-)
-
-# SDF MÝMARÝSÝ TESTÝ
-add_executable(sdf_test_run
-    sdf_test.cpp
+    
+    # ImGui Arayüz Dosyalarý
+    src/ui/DrawGuiElements.cpp
+    src/ui/Theme.cpp
+    src/ui/Theme.h
+    
+    # SDF Mimari Dosyalarýmýz (Application.cpp bunlarý kullanýyor)
     src/scene/SceneManager.cpp
     src/io/ExtensionLoader.cpp
 )
 
+# src/ klasörünü include path'e ekle ki "Application.h" yazabilelim
+target_include_directories(main PRIVATE src)
 
+# Kütüphaneleri ana programa baðlýyoruz
 target_link_libraries(main PRIVATE
     webgpu
     glfw
@@ -65,11 +72,27 @@ target_link_libraries(main PRIVATE
     imgui
 )
 
-# CMake'e wgsl dosyalarýný exe'nin yanýna kopyalamasýný söylüyoruz 
-# scene içinde olunca direkt derlemiyomuþ
-configure_file(${CMAKE_SOURCE_DIR}/src/scene/sdf_core.wgsl ${CMAKE_CURRENT_BINARY_DIR}/sdf_core.wgsl COPYONLY)
+
+# ============================================================
+# 2. SDF MÝMARÝSÝ TEST PROGRAMI (Sadece konsol testi için)
+# ============================================================
+add_executable(sdf_test_run
+    sdf_test.cpp
+    src/scene/SceneManager.cpp
+    src/io/ExtensionLoader.cpp
+)
+
+
+# ============================================================
+# DOSYA KOPYALAMA ÝÞLEMLERÝ
+# ============================================================
+# CMake'e wgsl shader dosyalarýný exe'nin yanýna kopyalamasýný söylüyoruz 
+# (Tüm assets klasörünü shaderlar ve ui ikonlarýyla beraber kopyalar)
+file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
 
 # ============================================================
 # DERLEME SONRASI
 # ============================================================
-
+# WebGPU DLL'ini exe'nin yanýna kopyala
+target_copy_webgpu_binaries(main)

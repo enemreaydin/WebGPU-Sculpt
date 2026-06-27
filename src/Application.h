@@ -21,6 +21,9 @@ private:
     void InitializeDevice();
     void InitializeQueue();
     void ConfigureSurface();
+    void InitializeImgui();
+    void DrawGui();
+    void DrawMainMenuBar();
 
     // --- Frame yardýmcýlarý ---
     TextureView GetNextSurfaceTextureView();

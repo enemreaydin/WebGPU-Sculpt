@@ -1,6 +1,10 @@
 #include "Application.h"
 #include <glfw3webgpu.h>
+#include <imgui.h>
+#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_wgpu.h>
 #include <iostream>
+#include "ui/Theme.h"
 
 bool Application::Initialize() {
     InitializeWindow();
@@ -13,11 +17,15 @@ bool Application::Initialize() {
 
     adapter.release();
     instance.release();
+    InitializeImgui();
 
     return true;
 }
 
 void Application::Terminate() {
+    ImGui_ImplWGPU_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
     surface.unconfigure();
     queue.release();
     surface.release();
@@ -33,13 +41,16 @@ bool Application::IsRunning() {
 void Application::MainLoop() {
     glfwPollEvents();
 
+    ImGui_ImplWGPU_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
     TextureView targetView = GetNextSurfaceTextureView();
     if (!targetView) return;
 
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
-    // Þimdilik sadece ekraný temizliyoruz (koyu gri)
     RenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
     colorAttachment.resolveTarget = nullptr;
@@ -54,7 +65,14 @@ void Application::MainLoop() {
     renderPassDesc.timestampWrites = nullptr;
 
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
-    // Ýleride buraya çizim gelecek
+    // Renderpass çizimleri
+
+
+    // Imgui çizimleri
+    DrawGui();
+    
+    ImGui::Render();
+    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
     renderPass.end();
     renderPass.release();
 
@@ -134,24 +152,28 @@ void Application::ConfigureSurface() {
     surface.configure(config);
 }
 
-// ============================================================
-// RESIZE
-// ============================================================
-
 void Application::OnResize(int newWidth, int newHeight) {
-    // Minimize edilince 0 olabilir, o durumda configure etme
     if (newWidth == 0 || newHeight == 0) return;
 
     width = newWidth;
     height = newHeight;
 
-    // Surface'ý yeni boyutla yeniden configure et
     ConfigureSurface();
 }
 
-// ============================================================
-// FRAME YARDIMCILARI
-// ============================================================
+void Application::InitializeImgui() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ApplyTheme(); // Theme customization
+    ImGui_ImplGlfw_InitForOther(window, true); // Glfw initialization
+
+    ImGui_ImplWGPU_InitInfo initInfo;
+    initInfo.Device = device;
+    initInfo.NumFramesInFlight = 3;
+    initInfo.RenderTargetFormat = (WGPUTextureFormat)surfaceFormat;
+    initInfo.DepthStencilFormat = WGPUTextureFormat_Undefined;
+    ImGui_ImplWGPU_Init(&initInfo); // wgpu initialization
+}
 
 TextureView Application::GetNextSurfaceTextureView() {
     SurfaceTexture surfaceTexture;
