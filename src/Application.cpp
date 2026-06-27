@@ -4,6 +4,7 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_wgpu.h>
 #include <iostream>
+#include "ui/Theme.h"
 
 bool Application::Initialize() {
     InitializeWindow();
@@ -44,10 +45,6 @@ void Application::MainLoop() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    ImGui::ShowDemoWindow();
-
-
-
     TextureView targetView = GetNextSurfaceTextureView();
     if (!targetView) return;
 
@@ -72,8 +69,7 @@ void Application::MainLoop() {
 
 
     // Imgui çizimleri
-   
-    
+    DrawGui();
     
     ImGui::Render();
     ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
@@ -168,7 +164,7 @@ void Application::OnResize(int newWidth, int newHeight) {
 void Application::InitializeImgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-
+    ApplyTheme(); // Theme customization
     ImGui_ImplGlfw_InitForOther(window, true); // Glfw initialization
 
     ImGui_ImplWGPU_InitInfo initInfo;
