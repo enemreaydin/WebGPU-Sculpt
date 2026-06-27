@@ -27,6 +27,7 @@ add_library(imgui STATIC
     deps/imgui/imgui_draw.cpp
     deps/imgui/imgui_tables.cpp
     deps/imgui/imgui_widgets.cpp
+    deps/imgui/imgui_demo.cpp          # DEMO ÝÇÝN SONRADAN SÝLÝNECEK
     # Backend'ler: ImGui'yi GLFW ve WebGPU'ya baðlar
     deps/imgui/backends/imgui_impl_glfw.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
