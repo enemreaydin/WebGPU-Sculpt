@@ -5,7 +5,7 @@
 void Application::DrawGui() {
     DrawMainMenuBar();
     DrawSettings();
-
+    DrawWorkspace();
 }
 
 void Application::DrawMainMenuBar() {
@@ -128,4 +128,38 @@ void Application::DrawSettings() {
     ImGui::End();
 }
 
+void Application::DrawWorkspace() {
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
 
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar
+        | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoCollapse
+        | ImGuiWindowFlags_NoBringToFrontOnFocus;  // arkada kalsýn
+
+    if (ImGui::Begin("Workspace", nullptr, flags))
+    {
+        // SDF Render Scene
+        if (ImGui::BeginChild("SceneView", ImVec2(-300, 0), true))
+        {
+            ImGui::Text("Sahne buraya render edilecek");
+            ImGui::EndChild();
+        }
+
+        ImGui::SameLine();
+        
+        // Scene Properties
+        if (ImGui::BeginChild("SceneProperties", ImVec2(300, 0), true))
+        {
+            ImGui::Text("Nesne ayarlari");
+            ImGui::EndChild();
+        }
+
+        ImGui::End();
+    }
+
+
+
+}

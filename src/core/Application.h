@@ -28,6 +28,7 @@ private:
     void DrawGui();
     void DrawMainMenuBar();
     void DrawSettings();
+    void DrawWorkspace();
 
 
 
