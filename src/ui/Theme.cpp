@@ -1,26 +1,23 @@
-#include "Theme.h"
 #include <imgui.h>
+#include "Theme.h"
 
-void ApplyTheme() {
+void ApplyTheme(AppTheme& theme) {
 	ImGuiStyle& style = ImGui::GetStyle();
 	ImVec4* colors = style.Colors;
 	ImGuiIO& io = ImGui::GetIO();
 
+	theme.fontDefault = io.Fonts->AddFontFromFileTTF("fonts/Inter_18pt-Regular.ttf", 16.0f);
+	theme.fontLarge = io.Fonts->AddFontFromFileTTF("fonts/Inter_18pt-Regular.ttf", 30.0f);
 	// Genel
 	io.Fonts->AddFontFromFileTTF("fonts/Inter_18pt-Regular.ttf", 16.0f);
-	style.FrameRounding = 4;
-	colors[ImGuiCol_WindowBg] = ImColor(40, 40, 40, 255);
-	colors[ImGuiCol_TitleBgActive] = ImColor(40, 40, 40, 255);
-
+	style.FrameRounding = 2;
+	colors[ImGuiCol_WindowBg] = theme.pBackground;
+	colors[ImGuiCol_TitleBgActive] = theme.pBackground;
+	colors[ImGuiCol_MenuBarBg] = theme.pBackground;
+	colors[ImGuiCol_PopupBg] = theme.pBackground;
 	// MenuBar
-	colors[ImGuiCol_MenuBarBg] = ImColor(40, 40, 40, 255);
-	colors[ImGuiCol_PopupBg] = ImColor(40, 40, 40, 255);
-	colors[ImGuiCol_HeaderHovered] = ImColor(64, 64, 64, 255);
-	colors[ImGuiCol_Header] = ImColor(64, 64, 64, 255);
-	colors[ImGuiCol_HeaderActive] = ImColor(64, 64, 64, 255);
+	colors[ImGuiCol_HeaderHovered] = theme.pHovered;
+	colors[ImGuiCol_Header] = theme.pHovered;
+	colors[ImGuiCol_HeaderActive] = theme.pHovered;
 
-}
-
-ImVec4 RGB(int r, int g, int b, float a = 1.0f) {
-	return ImVec4(r / 255.0f, g / 255.0f, b / 255.0f, a);
 }

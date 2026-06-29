@@ -25,6 +25,8 @@ private:
 
     // GUI fonksiyon ve deðiþkenleri
     Settings appSettings;
+    AppTheme appTheme;
+
     void DrawGui();
     void DrawMainMenuBar();
     void DrawSettings();

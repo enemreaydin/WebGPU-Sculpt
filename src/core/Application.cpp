@@ -14,10 +14,10 @@ bool Application::Initialize() {
     InitializeDevice();
     InitializeQueue();
     ConfigureSurface();
-
     adapter.release();
     instance.release();
     InitializeImgui();
+
 
     return true;
 }
@@ -164,7 +164,7 @@ void Application::OnResize(int newWidth, int newHeight) {
 void Application::InitializeImgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ApplyTheme(); // Theme customization
+    ApplyTheme(appTheme); // Theme customization
     ImGui_ImplGlfw_InitForOther(window, true); // Glfw initialization
 
     ImGui_ImplWGPU_InitInfo initInfo;
