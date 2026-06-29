@@ -3,6 +3,7 @@
 #include "../scene/SceneManager.h"
 #include "../core/SdfDefinitions.h"
 #include <vector>
+#include <filesystem>
 
 class SdfRenderer {
 public:
@@ -17,4 +18,11 @@ public:
     wgpu::PipelineLayout pipelineLayout = nullptr;
     wgpu::BindGroupLayout bindGroupLayout = nullptr;
     wgpu::ShaderModule shaderModule = nullptr;
+
+public:
+    void SetProjectRoot(const std::filesystem::path& root);
+
+private:
+    std::filesystem::path projectRoot;
+
 };

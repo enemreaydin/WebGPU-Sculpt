@@ -7,6 +7,8 @@
 #include <backends/imgui_impl_wgpu.h>
 #include <iostream>
 #include "ui/Theme.h"
+#include <filesystem>
+
 
 bool Application::Initialize() {
     InitializeWindow();
@@ -15,8 +17,15 @@ bool Application::Initialize() {
     InitializeAdapter();
     InitializeDevice();
     InitializeQueue();
+    FindProjectRoot(); 
     ConfigureSurface();
     InitializeImgui();
+
+    namespace fs = std::filesystem;
+
+    fs::path cwd = fs::current_path();
+
+    std::cout << cwd << std::endl;
 
     // 1. Renderer'ý baþlat (Pipeline ve Shader kurulumu burada)
     renderer.Initialize(device, surfaceFormat);
@@ -194,6 +203,24 @@ TextureView Application::GetNextSurfaceTextureView() {
     return texture.createView(viewDesc);
 }
 
-// Boþ býrakýlanlarý doldurabilirsin
-void Application::DrawGui() {}
-void Application::DrawMainMenuBar() {}
+void Application::FindProjectRoot()
+    {
+    namespace fs = std::filesystem;
+    fs::path current = fs::current_path();
+    
+    while (!current.empty())
+    {
+        if (fs::exists(current / "assets") &&
+            fs::exists(current / "src"))
+        {
+            projectRoot = current;
+
+            std::cout << "Project Root bulundu:\n"
+                << projectRoot << std::endl;
+            return;
+        }
+        current = current.parent_path();
+    }
+    throw std::runtime_error("Project Root bulunamadi!");
+}
+

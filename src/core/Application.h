@@ -5,6 +5,7 @@
 #include "scene/SceneManager.h"
 #include "render/SdfRenderer.h" // Renderer modülümüzü dahil ediyoruz
 #include "core/SdfDefinitions.h"
+#include <filesystem>
 
 using namespace wgpu;
 
@@ -50,4 +51,7 @@ private:
     // Modüllerimiz (Sorumluluklar ayrýldý)
     SceneManager sceneManager;
     SdfRenderer renderer; // Artýk tüm pipeline, buffer ve shader iþleri burada
+
+    std::filesystem::path projectRoot;
+    void FindProjectRoot();
 };

@@ -2,10 +2,18 @@
 #include "../utils/FileHelper.h"
 #include <iostream>
 
+
+void SdfRenderer::SetProjectRoot(const std::filesystem::path& root)
+{
+    projectRoot = root;
+}
+
+// std::cout << __FILE__ << ":" << __LINE__ << std::endl;
+
 void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     // 1. Shader Okuma
-    std::string coreShader = Utils::ReadFile("src/scene/sdf_core.wgsl");
-    std::string mainShader = Utils::ReadFile("assets/shaders/main.wgsl");
+    std::string coreShader = Utils::ReadFile(projectRoot / "src/scene/sdf_core.wgsl");
+    std::string mainShader = Utils::ReadFile(projectRoot / "assets/shaders/main.wgsl");
 
     if (coreShader.empty() || mainShader.empty()) {
         std::cerr << "[KRITIK]: Shader dosyalari okunamadi!\n";
@@ -21,7 +29,6 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     wgpu::ShaderModuleDescriptor shaderDesc{};
     shaderDesc.nextInChain = reinterpret_cast<const wgpu::ChainedStruct*>(&wgslDesc);
     shaderModule = device.createShaderModule(shaderDesc);
-    shaderModule = device.createShaderModule(shaderDesc);
 
     // 3. Bind Group Layout
     wgpu::BindGroupLayoutEntry bglEntry{};
@@ -34,19 +41,30 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     bglDesc.entries = &bglEntry;
     bindGroupLayout = device.createBindGroupLayout(bglDesc);
 
-    // 4. Pipeline Layout
+ if (!bindGroupLayout) { std::cerr << "BindGroupLayout oluþturulamadý!\n"; return; }
+
+    wgpu::BindGroupLayout layouts[] =
+    {
+        bindGroupLayout
+    };
     wgpu::PipelineLayoutDescriptor layoutDesc{};
     layoutDesc.bindGroupLayoutCount = 1;
-    // 1. Önce ham (raw) handle'ý al
-    // Bu satýrý yukarýdaki 3 alternatifi deneyerek deðiþtir:
-    WGPUBindGroupLayout rawBGL = static_cast<WGPUBindGroupLayout>(bindGroupLayout); 
+    layoutDesc.bindGroupLayouts = layouts;
+
     pipelineLayout = device.createPipelineLayout(layoutDesc);
+
+    if (!pipelineLayout)
+    {
+        std::cerr << "PipelineLayout oluþturulamadý!\n";
+        return;
+    }
 
     // 5. Pipeline
     wgpu::RenderPipelineDescriptor pipelineDesc{};
     pipelineDesc.layout = pipelineLayout;
     pipelineDesc.vertex.module = shaderModule;
     pipelineDesc.vertex.entryPoint = "vs_main";
+    pipelineDesc.vertex.bufferCount = 0;
 
     wgpu::ColorTargetState colorTarget{};
     colorTarget.format = format;
@@ -60,31 +78,74 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     pipelineDesc.fragment = &fragmentState;
 
     pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    pipelineDesc.primitive.frontFace = wgpu::FrontFace::CCW;
+    pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
+
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = ~0u;
     pipeline = device.createRenderPipeline(pipelineDesc);
+
+    if (!pipeline)
+    {
+        std::cerr << "RenderPipeline oluþturulamadý!\n";
+        return;
+    }
+
+    std::cout << "Pipeline baþarýyla oluþturuldu.\n";
 }
 
 void SdfRenderer::CreateSceneBuffer(wgpu::Device device, wgpu::Queue queue, const std::vector<SdfObjectData>& objects) {
     if (objects.empty()) return;
+
+    // 1. GÜVENLÝK: Device yoksa iþleme girme
+    if (!device) {
+        std::cerr << "[KRÝTÝK]: CreateSceneBuffer çaðrýldý ama device geçerli deðil!" << std::endl;
+        return;
+    }
+
+    // 2. GÜVENLÝK: Layout yoksa bu fonksiyonun çalýþmasý imkansýzdýr (Crash sebebi burasý olabilir)
+    if (!bindGroupLayout) {
+        std::cerr << "[KRÝTÝK]: bindGroupLayout NULL! "
+            << "Initialize() fonksiyonunda bir sorun var, shader derlenmemiþ olabilir." << std::endl;
+        return;
+    }
 
     uint64_t bufferSize = objects.size() * sizeof(SdfObjectData);
 
     wgpu::BufferDescriptor bufferDesc{};
     bufferDesc.size = bufferSize;
     bufferDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+
     sceneBuffer = device.createBuffer(bufferDesc);
+
+    // 3. GÜVENLÝK: Buffer oluþturulamadýysa kontrol et
+    if (!sceneBuffer) {
+        std::cerr << "[KRÝTÝK]: sceneBuffer oluþturulamadý!" << std::endl;
+        return;
+    }
 
     queue.writeBuffer(sceneBuffer, 0, objects.data(), bufferSize);
 
     wgpu::BindGroupEntry bgEntry{};
     bgEntry.binding = 0;
     bgEntry.buffer = sceneBuffer;
+    bgEntry.offset = 0;
     bgEntry.size = bufferSize;
 
     wgpu::BindGroupDescriptor bgDesc{};
-    bgDesc.layout = bindGroupLayout;
+    bgDesc.layout = bindGroupLayout; // Burasý artýk güvenli çünkü yukarýda kontrol ettik
     bgDesc.entryCount = 1;
     bgDesc.entries = &bgEntry;
+
+    // 4. BindGroup oluþtur ve sonucu kontrol et
     bindGroup = device.createBindGroup(bgDesc);
+
+    if (!bindGroup) {
+        std::cerr << "[KRÝTÝK]: BindGroup oluþturulamadý!" << std::endl;
+    }
+    else {
+        std::cout << "[BÝLGÝ]: Sahne tamponu ve BindGroup baþarýyla oluþturuldu." << std::endl;
+    }
 }
 
 void SdfRenderer::Destroy() {
