@@ -1,9 +1,13 @@
 #pragma once
-#include "../scene/SceneManager.h"
+#include <vector>
 #include <string>
+#include "../core/SdfDefinitions.h"
+#include "../scene/SceneManager.h"
 
 class ExtensionLoader {
 public:
-    // Ýleride burasý gerçek bir dosya okuyacak, þimdilik sahte (mock) veri üretecek.
+    // Fonksiyonlarýn baþýnda static olmasý þart, çünkü bir nesne üretmeden çaðýrýyorsun.
     static bool LoadMockFile(const std::string& filepath, SceneManager& sceneManager);
+    static bool SaveToBDF(const std::string& filepath, const std::vector<SdfObjectData>& objects);
+    static bool LoadFromBDF(const std::string& filepath, SceneManager& sceneManager);
 };

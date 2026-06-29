@@ -1,27 +1,50 @@
 #pragma once
+
 #include <array>
+#include <cstdint>
 
-// 1. KÜTÜPHANEMÝZDEKÝ GEOMETRÝK ÞEKÝLLER (ID Sistemi)
-enum class SdfObjectType : int {
-    Sphere = 0, // Küre
-    Box = 1,    // Kutu
-    Cylinder = 2 // Silindir
+//====================================================
+// SDF Primitive Types
+//====================================================
+
+enum class SdfObjectType : int32_t
+{
+    Sphere = 0,
+    Box = 1,
+    Cylinder = 2
 };
 
-// 2. BLENDER TARZI OPERASYONLAR
-enum class SdfOperationType : int {
-    None = 0,        // Ýlk nesne ise etkileþim yok, taban kabul et
-    Union = 1,       // Birleþtir (Eriterek ekle)
-    Subtract = 2,    // Oy (Ýçinden çýkart)
-    Intersection = 3 // Kesiþim (Sadece ortak alaný býrak)
+//====================================================
+// Boolean Operations
+//====================================================
+
+enum class SdfOperationType : int32_t
+{
+    None = 0,
+    Union = 1,
+    Subtract = 2,
+    Intersection = 3
 };
 
-// 3. GPU'YA VE EXTENSION SÝSTEMÝNE AKACAK OLAN STANDART KUTU (Struct)
-struct SdfObjectData {
-    SdfObjectType type;            // Þekil Türü (Küre, Kutu vb.)
-    SdfOperationType op;           // Ýþlem Türü (Oyma, Birleþtirme vb.)
-    std::array<float, 3> position; // Sahnedeki Konumu (X, Y, Z)
-    std::array<float, 3> size;     // Boyutlarý (Yarýçap veya Kenar Uzunluklarý)
-    std::array<float, 3> color;    // Kendine has rengi (R, G, B)
-    float _pad;                    // WebGPU donanýmýnýn 16-byte hizalama kuralý için dolgu
+//====================================================
+// GPU STRUCTURE
+//
+// WGSL ile %100 ayný hizalamaya sahiptir.
+// Her vec3 yerine vec4 mantýðý kullanýlýr.
+//====================================================
+
+struct alignas(16) SdfObjectData
+{
+    int32_t type;
+    int32_t op;
+
+    int32_t pad0;
+    int32_t pad1;
+
+    std::array<float, 4> position;
+    std::array<float, 4> size;
+    std::array<float, 4> color;
 };
+
+static_assert(sizeof(SdfObjectData) == 64,
+    "SdfObjectData must be exactly 64 bytes.");

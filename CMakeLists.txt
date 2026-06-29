@@ -31,7 +31,7 @@ add_library(imgui STATIC
     deps/imgui/imgui_demo.cpp          # DEMO ÝÇÝN, SONRADAN SÝLÝNECEK
     deps/imgui/backends/imgui_impl_glfw.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
-)
+ "src/utils/FileHelper.h" "src/utils/FileHelper.cpp" "src/render/SdfRenderer.h" "src/render/SdfRenderer.cpp")
 target_include_directories(imgui PUBLIC
     deps/imgui
     deps/imgui/backends
@@ -48,8 +48,8 @@ configure_file(assets/fonts/Inter_18pt-Regular.ttf fonts/Inter_18pt-Regular.ttf 
 # ============================================================
 add_executable(main
     src/main.cpp
-    src/Application.cpp
-    src/Application.h
+    "src/core/Application.cpp"
+    "src/core/Application.h"
     
     # ImGui Arayüz Dosyalarý
     src/ui/DrawGuiElements.cpp
@@ -59,7 +59,7 @@ add_executable(main
     # SDF Mimari Dosyalarýmýz (Application.cpp bunlarý kullanýyor)
     src/scene/SceneManager.cpp
     src/io/ExtensionLoader.cpp
-)
+ "src/utils/FileHelper.h" "src/utils/FileHelper.cpp" "src/render/SdfRenderer.h" "src/render/SdfRenderer.cpp")
 
 # src/ klasörünü include path'e ekle ki "Application.h" yazabilelim
 target_include_directories(main PRIVATE src)
@@ -80,7 +80,7 @@ add_executable(sdf_test_run
     sdf_test.cpp
     src/scene/SceneManager.cpp
     src/io/ExtensionLoader.cpp
-)
+ "src/utils/FileHelper.h" "src/utils/FileHelper.cpp" "src/render/SdfRenderer.h" "src/render/SdfRenderer.cpp")
 
 
 # ============================================================
@@ -96,3 +96,4 @@ file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 # ============================================================
 # WebGPU DLL'ini exe'nin yanýna kopyala
 target_copy_webgpu_binaries(main)
+

@@ -1,30 +1,85 @@
 #include "ExtensionLoader.h"
+#include <fstream>
 #include <iostream>
+#include <vector>
 
+// 1. MOCK FILE (Test Ýçin)
 bool ExtensionLoader::LoadMockFile(const std::string& filepath, SceneManager& sceneManager) {
-    std::cout << "[ExtensionLoader] '" << filepath << "' dosyasi analiz ediliyor...\n";
+    std::cout << "[ExtensionLoader] Mock dosya hazirlaniyor...\n";
 
-    // Eski sahneyi temizle
     sceneManager.ClearScene();
 
-    // DOSYADAN OKUNMUÞ GÝBÝ YAPILAN 1. NESNE (Mavi Bir Küre)
+    // Mavi Küre
     SdfObjectData sphere;
-    sphere.type = SdfObjectType::Sphere;
-    sphere.op = SdfOperationType::None;      // Ýlk nesne tabandýr
-    sphere.position = { 0.0f, 0.0f, 0.0f };    // Tam merkezde
-    sphere.size = { 1.5f, 0.0f, 0.0f };        // Yarýçap = 1.5
-    sphere.color = { 0.0f, 0.45f, 0.85f };     // Baykar Mavisi
+    sphere.type = 0; // Sphere
+    sphere.op = 0;   // None
+    sphere.position = { 0.0f, 0.0f, 0.0f, 0.0f }; // Array'in 4. elemaný padding
+    sphere.size = { 1.5f, 0.0f, 0.0f, 0.0f };
+    sphere.color = { 0.0f, 0.45f, 0.85f, 0.0f };
     sceneManager.AddObject(sphere);
 
-    // DOSYADAN OKUNMUÞ GÝBÝ YAPILAN 2. NESNE (Oyan Kýrmýzý Kutu)
+    // Kýrmýzý Kutu
     SdfObjectData box;
-    box.type = SdfObjectType::Box;
-    box.op = SdfOperationType::Subtract;     // OYMA (SUBTRACT) ÝÞLEMÝ!
-    box.position = { 1.0f, 1.0f, 0.0f };       // Sað üste doðru kaykýlmýþ
-    box.size = { 1.0f, 1.0f, 1.0f };           // Boyutlarý 1x1x1
-    box.color = { 0.8f, 0.1f, 0.1f };          // Kýrmýzý
+    box.type = 1; // Box
+    box.op = 2;   // Subtract
+    box.position = { 1.0f, 1.0f, 0.0f, 0.0f };
+    box.size = { 1.0f, 1.0f, 1.0f, 0.0f };
+    box.color = { 0.8f, 0.1f, 0.1f, 0.0f };
     sceneManager.AddObject(box);
 
-    std::cout << "[ExtensionLoader] Dosya basariyla okundu. Sahneye nesneler dizildi.\n";
+    std::cout << "[ExtensionLoader] Mock nesneler sahneye eklendi.\n";
+    return true;
+}
+
+// 2. SAVE TO BDF (Binary Kaydetme)
+bool ExtensionLoader::SaveToBDF(const std::string& filepath, const std::vector<SdfObjectData>& objects) {
+    std::ofstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "[ExtensionLoader] HATA: Dosya yazma hatasi: " << filepath << "\n";
+        return false;
+    }
+
+    // Header
+    char magic[4] = { 'B', 'D', 'F', '!' };
+    int32_t count = (int32_t)objects.size();
+
+    file.write(magic, 4);
+    file.write((char*)&count, sizeof(int32_t));
+
+    // Veri
+    file.write((char*)objects.data(), objects.size() * sizeof(SdfObjectData));
+
+    file.close();
+    std::cout << "[ExtensionLoader] Dosya basariyla kaydedildi: " << filepath << "\n";
+    return true;
+}
+
+// 3. LOAD FROM BDF (Binary Okuma)
+bool ExtensionLoader::LoadFromBDF(const std::string& filepath, SceneManager& sceneManager) {
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "[ExtensionLoader] HATA: Dosya okuma hatasi: " << filepath << "\n";
+        return false;
+    }
+
+    char magic[4];
+    int32_t count;
+    file.read(magic, 4);
+    file.read((char*)&count, sizeof(int32_t));
+
+    if (std::string(magic, 4) != "BDF!") {
+        std::cerr << "[ExtensionLoader] HATA: Gecersiz dosya formati!\n";
+        return false;
+    }
+
+    sceneManager.ClearScene();
+    for (int i = 0; i < count; ++i) {
+        SdfObjectData obj;
+        file.read((char*)&obj, sizeof(SdfObjectData));
+        sceneManager.AddObject(obj);
+    }
+
+    file.close();
+    std::cout << "[ExtensionLoader] Dosya basariyla yuklendi: " << filepath << "\n";
     return true;
 }
