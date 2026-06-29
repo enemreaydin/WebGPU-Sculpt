@@ -2,7 +2,7 @@
 
 #include <webgpu/webgpu.hpp>
 #include <GLFW/glfw3.h>
-
+#include <Settings.h>
 using namespace wgpu;
 
 class Application {
@@ -22,8 +22,14 @@ private:
     void InitializeQueue();
     void ConfigureSurface();
     void InitializeImgui();
+
+    // GUI fonksiyon ve deðiþkenleri
+    Settings appSettings;
     void DrawGui();
     void DrawMainMenuBar();
+    void DrawSettings();
+
+
 
     // --- Frame yardýmcýlarý ---
     TextureView GetNextSurfaceTextureView();

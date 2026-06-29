@@ -4,56 +4,134 @@
 
 void Application::DrawGui() {
     DrawMainMenuBar();
+    DrawSettings();
+
 }
 
-// Üstte sabit duran araç çubuðu - placeholder þuanlýk
 void Application::DrawMainMenuBar() {
-    // Ana viewport'u al (tüm pencere alaný)
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Open")) {
+
+            }
+            if (ImGui::MenuItem("New")) {
+
+            }
+            if (ImGui::MenuItem("Save")) {
+
+            }
+            if (ImGui::MenuItem("Export as")) {
+
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Object"))
+        {
+            if (ImGui::BeginMenu("New")) {
+                if (ImGui::MenuItem("Sphere")) {
+                    // küre ekle
+                }
+                if (ImGui::MenuItem("Box")) {
+                    // kutu ekle
+                }
+                if (ImGui::MenuItem("Cylinder")) {
+                    // silindir ekle
+                }
+                if (ImGui::MenuItem("Torus")) {
+                    // torus ekle
+                }
+                ImGui::EndMenu();  
+            }
+            if (ImGui::MenuItem("Select")) {
+
+            }
+            if (ImGui::MenuItem("Copy")) {
+
+            }
+            if (ImGui::MenuItem("Paste")) {
+
+            }
+            if (ImGui::MenuItem("Delete")) {
+
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("View"))
+        {
+            if (ImGui::MenuItem("Reset Camera")) {
+
+            }
+            if (ImGui::MenuItem("Show/Hide Grid")) {
+
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem("Settings"))
+        {
+            appSettings.show = true;
+        }
+        ImGui::EndMainMenuBar();
+    }
+    
+}
+
+void Application::DrawSettings() {
+    
+    if (!appSettings.show) return;
+
+    ImGuiWindowFlags settingsWindowFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize
+        | ImGuiWindowFlags_NoCollapse;
     ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2 center = viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x - 50, viewport->WorkSize.y - 30), ImGuiCond_Appearing);
+    if (ImGui::Begin("Settings", &appSettings.show, settingsWindowFlags))
+    {
+        // Menu Bar
+        if (ImGui::BeginChild("SettingsLeftBar", ImVec2(150, 0), false))
+        {
+            const char* tabs[] = { "General", "Render", "UI" };
+            for (int i = 0; i < 3; i++)
+            {
+                if (ImGui::Selectable(tabs[i], appSettings.selectedTab == i))
+                {
+                    appSettings.selectedTab = i;
+                }
+            }
+            ImGui::EndChild();
+        }
+        ImGui::SameLine();
+        // Content
+        if (ImGui::BeginChild("SettingsRightContent", ImVec2(0, 0), false))
+        {
+            if (appSettings.selectedTab == 0)
+            {
+                ImGui::Text("General Settings");
+            }
 
-    // Toolbar'ý viewport'un sol üstüne yapýþtýr
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    // Geniþlik tüm ekran, yükseklik sabit (50 px)
-    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, 50));
+            if (appSettings.selectedTab == 1)
+            {
+                ImGui::Text("Render Settings");
 
-    // Pencereyi sabitleyen flag'ler
-    ImGuiWindowFlags flags =
-        ImGuiWindowFlags_NoMove          // taþýnamaz
-        | ImGuiWindowFlags_NoResize      // boyutlandýrýlamaz
-        | ImGuiWindowFlags_NoTitleBar    // baþlýk çubuðu yok
-        | ImGuiWindowFlags_NoScrollbar   // kaydýrma çubuðu yok
-        | ImGuiWindowFlags_NoCollapse;   // katlanamaz
+            }
+            if (appSettings.selectedTab == 2)
+            {
+                ImGui::Text("UI Settings");
 
-    ImGui::Begin("Toolbar", nullptr, flags);
+            }
+            ImGui::EndChild();
+        }
 
-    // --- Butonlar yan yana ---
-    if (ImGui::Button("Kure")) {
-        // küre ekleme iþlemi buraya
+        
+
+
     }
-    ImGui::SameLine();  // sonraki öðeyi yan yana koy
 
-    if (ImGui::Button("Kutu")) {
-        // kutu ekleme
-    }
-    ImGui::SameLine();
-
-    if (ImGui::Button("Silindir")) {
-        // silindir ekleme
-    }
-    ImGui::SameLine();
-
-    // Araya boþluk koymak için
-    ImGui::Dummy(ImVec2(20, 0));
-    ImGui::SameLine();
-
-    if (ImGui::Button("Kaydet")) {
-        // kaydet
-    }
-    ImGui::SameLine();
-
-    if (ImGui::Button("Yukle")) {
-        // yükle
-    }
 
     ImGui::End();
 }
+
+
