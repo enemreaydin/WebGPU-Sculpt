@@ -1,4 +1,4 @@
-#include "Application.h"
+#include "core/Application.h"
 #include <imgui.h>
 
 
@@ -124,13 +124,7 @@ void Application::DrawSettings() {
             }
             ImGui::EndChild();
         }
-
-        
-
-
     }
-
-
     ImGui::End();
 }
 
