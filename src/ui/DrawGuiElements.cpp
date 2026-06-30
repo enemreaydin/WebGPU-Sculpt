@@ -150,7 +150,8 @@ void Application::DrawWorkspace() {
         ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoCollapse |
         ImGuiWindowFlags_NoBringToFrontOnFocus;
-
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     if (ImGui::Begin("Workspace", nullptr, flags)) {
         // SDF Render Sahnesi
         if (ImGui::BeginChild("SceneView", ImVec2(-300, 0), true)) {
@@ -169,11 +170,11 @@ void Application::DrawWorkspace() {
 
         ImGui::SameLine();
 
-        // Sahne �zellikleri
         if (ImGui::BeginChild("SceneProperties", ImVec2(300, 0), true)) {
             ImGui::Text("Nesne ayarlari");
         }
         ImGui::EndChild(); 
     }
+    ImGui::PopStyleVar(2);
     ImGui::End();
 }

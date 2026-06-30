@@ -1,7 +1,3 @@
-// ==========================================
-// BAYKAR MODULAR 3D SDF CORE LIBRARY
-// ==========================================
-
 struct SdfObject
 {
     obj_type : i32,

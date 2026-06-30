@@ -18,14 +18,33 @@ bool ExtensionLoader::LoadMockFile(const std::string& filepath, SceneManager& sc
     sphere.color = { 0.0f, 0.45f, 0.85f, 0.0f };
     sceneManager.AddObject(sphere);
 
-    // Kýrmýzý Kutu
-    SdfObjectData box;
-    box.type = 1; // Box
-    box.op = 2;   // Subtract
-    box.position = { 1.0f, 1.0f, 0.0f, 0.0f };
-    box.size = { 1.0f, 1.0f, 1.0f, 0.0f };
-    box.color = { 0.8f, 0.1f, 0.1f, 0.0f };
-    sceneManager.AddObject(box);
+
+    // X Ekseni (Kýrmýzý)
+    SdfObjectData xAxis;
+    xAxis.type = static_cast<int32_t>(SdfObjectType::Box);
+    xAxis.op = static_cast<int32_t>(SdfOperationType::Union);
+    xAxis.position = { 0.0f, 0.0f, 0.0f, 0.0f };
+    xAxis.size = { 3.0f, 0.015f, 0.015f, 0.0f };
+    xAxis.color = { 1.0f, 0.0f, 0.0f, 0.0f };
+    sceneManager.AddObject(xAxis);
+
+    // Y Ekseni (Yeþil)
+    SdfObjectData yAxis;
+    yAxis.type = static_cast<int32_t>(SdfObjectType::Box);
+    yAxis.op = static_cast<int32_t>(SdfOperationType::Union);
+    yAxis.position = { 0.0f, 0.0f, 0.0f, 0.0f };
+    yAxis.size = { 0.015f, 3.0f, 0.015f, 0.0f };
+    yAxis.color = { 0.0f, 1.0f, 0.0f, 0.0f };
+    sceneManager.AddObject(yAxis);
+
+    // Z Ekseni (Mavi)
+    SdfObjectData zAxis;
+    zAxis.type = static_cast<int32_t>(SdfObjectType::Box);
+    zAxis.op = static_cast<int32_t>(SdfOperationType::Union);
+    zAxis.position = { 0.0f, 0.0f, 0.0f, 0.0f };
+    zAxis.size = { 0.015f, 0.015f, 3.0f, 0.0f };
+    zAxis.color = { 0.0f, 0.0f, 1.0f, 0.0f };
+    sceneManager.AddObject(zAxis);
 
     std::cout << "[ExtensionLoader] Mock nesneler sahneye eklendi.\n";
     return true;
