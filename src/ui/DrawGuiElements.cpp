@@ -61,7 +61,7 @@ void Application::DrawSettings() {
     ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(
         ImVec2(viewport->WorkSize.x - 50.0f, viewport->WorkSize.y - 30.0f),
-        ImGuiCond_Appearing
+        ImGuiCond_Always
     );
 
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
