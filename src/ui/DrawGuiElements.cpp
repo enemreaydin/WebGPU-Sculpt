@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 ﻿#include "core/Application.h"
+=======
+#include "../core/Application.h"
+>>>>>>> origin/zeynep
 #include <imgui.h>
 #include "Theme.h"
 
