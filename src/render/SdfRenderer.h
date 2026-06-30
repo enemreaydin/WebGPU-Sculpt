@@ -9,6 +9,12 @@ class SdfRenderer {
 public:
     void Initialize(wgpu::Device device, wgpu::TextureFormat format);
     void CreateSceneBuffer(wgpu::Device device, wgpu::Queue queue, const std::vector<SdfObjectData>& objects);
+    
+    void CreateRenderTarget(wgpu::Device device, uint32_t width, uint32_t height);
+    wgpu::TextureView GetRenderTargetView() const { return renderTargetView; }
+    uint32_t GetRenderWidth() const { return renderWidth; }
+    uint32_t GetRenderHeight() const { return renderHeight; }
+
     void Destroy();
 
     // Application'ýn çizebilmesi için public (ya da getter metodlarý yazabilirsin)
@@ -18,11 +24,14 @@ public:
     wgpu::PipelineLayout pipelineLayout = nullptr;
     wgpu::BindGroupLayout bindGroupLayout = nullptr;
     wgpu::ShaderModule shaderModule = nullptr;
-
-public:
     void SetProjectRoot(const std::filesystem::path& root);
 
 private:
     std::filesystem::path projectRoot;
+    wgpu::Texture renderTargetTexture = nullptr;
+    wgpu::TextureView renderTargetView = nullptr;
+    wgpu::TextureFormat renderTargetFormat = wgpu::TextureFormat::Undefined;
+    uint32_t renderWidth = 0;
+    uint32_t renderHeight = 0;
 
 };

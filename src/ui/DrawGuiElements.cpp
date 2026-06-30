@@ -154,9 +154,18 @@ void Application::DrawWorkspace() {
     if (ImGui::Begin("Workspace", nullptr, flags)) {
         // SDF Render Sahnesi
         if (ImGui::BeginChild("SceneView", ImVec2(-300, 0), true)) {
-            ImGui::Text("Sahne buraya render edilecek");
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            uint32_t w = static_cast<uint32_t>(avail.x);
+            uint32_t h = static_cast<uint32_t>(avail.y);
+
+            if (w > 0 && h > 0) {
+                renderer.CreateRenderTarget(device, w, h);
+
+                ImTextureID texId = (ImTextureID)(WGPUTextureView)renderer.GetRenderTargetView();
+                ImGui::Image(texId, avail);
+            }
         }
-        ImGui::EndChild(); 
+        ImGui::EndChild();
 
         ImGui::SameLine();
 

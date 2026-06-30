@@ -12,6 +12,7 @@ void SdfRenderer::SetProjectRoot(const std::filesystem::path& root)
 
 void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     // 1. Shader Okuma
+    renderTargetFormat = format;
     std::string coreShader = Utils::ReadFile(projectRoot / "src/scene/sdf_core.wgsl");
     std::string mainShader = Utils::ReadFile(projectRoot / "assets/shaders/main.wgsl");
 
@@ -156,4 +157,33 @@ void SdfRenderer::Destroy() {
     if (pipelineLayout) pipelineLayout.release();
     if (bindGroupLayout) bindGroupLayout.release();
     if (shaderModule) shaderModule.release();
+}
+
+void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32_t height) {
+    if (width == 0 || height == 0) return;
+    if (width == renderWidth && height == renderHeight && renderTargetTexture) return; // boyut deðiþmediyse yeniden oluþturma
+
+    // Eski texture varsa serbest býrak (resize durumunda sýzýntý olmasýn)
+    if (renderTargetView) renderTargetView.release();
+    if (renderTargetTexture) renderTargetTexture.release();
+
+    wgpu::TextureDescriptor texDesc{};
+    texDesc.size = { width, height, 1 };
+    texDesc.format = renderTargetFormat;
+    texDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+    texDesc.dimension = wgpu::TextureDimension::_2D;
+    texDesc.mipLevelCount = 1;
+    texDesc.sampleCount = 1;
+
+    renderTargetTexture = device.createTexture(texDesc);
+
+    wgpu::TextureViewDescriptor viewDesc{};
+    viewDesc.format = renderTargetFormat;
+    viewDesc.dimension = wgpu::TextureViewDimension::_2D;
+    viewDesc.mipLevelCount = 1;
+    viewDesc.arrayLayerCount = 1;
+    renderTargetView = renderTargetTexture.createView(viewDesc);
+
+    renderWidth = width;
+    renderHeight = height;
 }

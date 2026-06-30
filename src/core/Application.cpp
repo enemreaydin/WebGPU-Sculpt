@@ -32,7 +32,7 @@ bool Application::Initialize() {
     // 1. Renderer'ý baþlat (Pipeline ve Shader kurulumu burada)
     renderer.SetProjectRoot(projectRoot);
     renderer.Initialize(device, surfaceFormat);
-
+    renderer.CreateRenderTarget(device, 1000, 800);
     // 2. Sahneyi yükle ve GPU Buffer'larýný hazýrla
     if (ExtensionLoader::LoadMockFile("test.bdf", sceneManager)) {
         renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
@@ -76,16 +76,39 @@ void Application::MainLoop() {
     }
 
     glfwPollEvents();
-
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    TextureView targetView = GetNextSurfaceTextureView();
-    if (!targetView) return;
-
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+
+    // --- YENÝ: 1. PASS - SDF sahnesini offscreen texture'a çiz ---
+    {
+        RenderPassColorAttachment sceneAttachment = {};
+        sceneAttachment.view = renderer.GetRenderTargetView();
+        sceneAttachment.resolveTarget = nullptr;
+        sceneAttachment.loadOp = LoadOp::Clear;
+        sceneAttachment.storeOp = StoreOp::Store;
+        sceneAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.12, 1.0 };
+
+        RenderPassDescriptor scenePassDesc = {};
+        scenePassDesc.colorAttachmentCount = 1;
+        scenePassDesc.colorAttachments = &sceneAttachment;
+        scenePassDesc.depthStencilAttachment = nullptr;
+        scenePassDesc.timestampWrites = nullptr;
+
+        RenderPassEncoder scenePass = encoder.beginRenderPass(scenePassDesc);
+        scenePass.setPipeline(renderer.pipeline);
+        scenePass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
+        scenePass.draw(6, 1, 0, 0);
+        scenePass.end();
+        scenePass.release();
+    }
+
+    // --- 2. PASS - ImGui'yi swapchain'e çiz (SDF çizimi artýk burada YOK) ---
+    TextureView targetView = GetNextSurfaceTextureView();
+    if (!targetView) return;
 
     RenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
@@ -101,16 +124,9 @@ void Application::MainLoop() {
     renderPassDesc.timestampWrites = nullptr;
 
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
-    // Renderpass çizimleri
-
-    // ÇÝZÝM
-    renderPass.setPipeline(renderer.pipeline);
-    renderPass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
-    renderPass.draw(6, 1, 0, 0);
 
     // Imgui çizimleri
     DrawGui();
-
     ImGui::Render();
     ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
 
@@ -122,12 +138,10 @@ void Application::MainLoop() {
     encoder.release();
     queue.submit(1, &cmdBuf);
     cmdBuf.release();
-
     targetView.release();
     surface.present();
     device.poll(false);
 }
-
 // ============================================================
 // YARDIMCI ÝLK YÜKLEME FONKSÝYONLARI
 // ============================================================
