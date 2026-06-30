@@ -9,7 +9,11 @@ void ApplyTheme(AppTheme& theme) {
 	theme.fontDefault = io.Fonts->AddFontFromFileTTF("fonts/Inter_18pt-Regular.ttf", 16.0f);
 	theme.fontLarge = io.Fonts->AddFontFromFileTTF("fonts/Inter_18pt-Regular.ttf", 30.0f);
 	// Genel
-	io.Fonts->AddFontFromFileTTF("fonts/Inter_18pt-Regular.ttf", 16.0f);
+	style.FrameBorderSize = 0;
+	style.ChildBorderSize = 0;
+	style.WindowBorderSize = 0;
+	style.PopupBorderSize = 0;
+
 	style.FrameRounding = 2;
 	colors[ImGuiCol_WindowBg] = theme.pBackground;
 	colors[ImGuiCol_TitleBgActive] = theme.pBackground;

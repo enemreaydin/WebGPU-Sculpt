@@ -17,7 +17,14 @@ bool ExtensionLoader::LoadMockFile(const std::string& filepath, SceneManager& sc
     sphere.size = { 1.5f, 0.0f, 0.0f, 0.0f };
     sphere.color = { 0.0f, 0.45f, 0.85f, 0.0f };
     sceneManager.AddObject(sphere);
-
+    // Mavi Küre
+    SdfObjectData box;
+    sphere.type = 1; // Sphere
+    sphere.op = 1;   // None
+    sphere.position = { 0.0f, 0.0f, 0.0f, 0.0f }; // Array'in 4. elemaný padding
+    sphere.size = { 2.0f, 1.0f, 1.0f, 0.0f };
+    sphere.color = { 0.8f, 0.65f, 0.85f, 0.0f };
+    sceneManager.AddObject(sphere);
 
     // X Ekseni (Kýrmýzý)
     SdfObjectData xAxis;
