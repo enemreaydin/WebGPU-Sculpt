@@ -33,7 +33,7 @@ add_library(imgui STATIC
     deps/imgui/imgui_widgets.cpp
     deps/imgui/backends/imgui_impl_glfw.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
-)
+ "src/sdf/SDFNode.h")
 target_include_directories(imgui PUBLIC
     deps/imgui
     deps/imgui/backends
@@ -53,7 +53,7 @@ add_executable(main
     src/ui/DrawGuiElements.cpp
     src/ui/Theme.cpp
     src/ui/Theme.h
-)
+ "src/sdf/SDFNode.h")
 
 # src/ klasörünü include path'e ekle ki "core/Application.h" yazabilelim
 target_include_directories(main PRIVATE src)
