@@ -24,6 +24,8 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
 
     // 2. Shader Modülü
     wgpu::ShaderModuleWGSLDescriptor wgslDesc{};
+    wgslDesc.chain.next = nullptr;
+    wgslDesc.chain.sType = wgpu::SType::ShaderModuleWGSLDescriptor; // <- eksik olan satýr
     wgslDesc.code = combinedShader.c_str();
 
     wgpu::ShaderModuleDescriptor shaderDesc{};
@@ -49,8 +51,7 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     };
     wgpu::PipelineLayoutDescriptor layoutDesc{};
     layoutDesc.bindGroupLayoutCount = 1;
-    layoutDesc.bindGroupLayouts = layouts;
-
+    layoutDesc.bindGroupLayouts = reinterpret_cast<WGPUBindGroupLayout const*>(layouts);
     pipelineLayout = device.createPipelineLayout(layoutDesc);
 
     if (!pipelineLayout)

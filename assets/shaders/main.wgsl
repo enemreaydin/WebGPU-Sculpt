@@ -33,8 +33,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
         
-        // DÜZELTME: Diziyi parametre olarak göndermiyoruz! 
-        // evaluateScene onu global olarak zaten görecek.
         let result = evaluateScene(p);
 
         if (result.distance < 0.001) {

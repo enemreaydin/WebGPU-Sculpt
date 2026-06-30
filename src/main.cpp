@@ -1,9 +1,4 @@
-#define WEBGPU_CPP_IMPLEMENTATION
 #include <webgpu/webgpu.hpp>
-<<<<<<< HEAD
-
-=======
->>>>>>> origin/zeynep
 #include "core/Application.h"
 
 int main() {

@@ -1,16 +1,13 @@
 #pragma once
-
 #include <webgpu/webgpu.hpp>
 #include <GLFW/glfw3.h>
-<<<<<<< HEAD
-#include <core/Settings.h>
-=======
-#include "scene/SceneManager.h"
-#include "render/SdfRenderer.h" // Renderer modülümüzü dahil ediyoruz
-#include "core/SdfDefinitions.h"
 #include <filesystem>
 
->>>>>>> origin/zeynep
+#include "core/Settings.h"
+#include "scene/SceneManager.h"
+#include "render/SdfRenderer.h"     // Renderer modulumuzu dahil ediyoruz
+#include "core/SdfDefinitions.h"
+
 using namespace wgpu;
 
 class Application {
@@ -23,7 +20,7 @@ public:
     bool IsRunning();
 
 private:
-    // --- Baþlangýç zinciri ---
+    // --- Baþlangýç zinciri (her biri Initialize içinde sýrayla çaðrýlýr) ---
     void InitializeWindow();
     void InitializeInstance();
     void InitializeSurface();
@@ -32,29 +29,22 @@ private:
     void InitializeQueue();
     void ConfigureSurface();
     void InitializeImgui();
-<<<<<<< HEAD
 
-    // GUI fonksiyon ve deðiþkenleri
-    Settings appSettings;
-    AppTheme appTheme;
+    // --- Proje / dosya sistemi ---
+    void FindProjectRoot();
 
+    // --- Frame yardýmcýlarý ---
+    TextureView GetNextSurfaceTextureView();
+    void OnResize(int width, int height); // Pencere yeniden boyutlandýðýnda surface'ý yeniden configure et
+
+    // --- GUI çizimi ---
     void DrawGui();
     void DrawMainMenuBar();
     void DrawSettings();
     void DrawWorkspace();
 
-
-=======
->>>>>>> origin/zeynep
-
-    // --- Frame yardýmcýlarý ---
-    TextureView GetNextSurfaceTextureView();
-    void OnResize(int width, int height);
-    void DrawGui();
-    void DrawMainMenuBar();
-
 private:
-    // Window & WGPU Temel Altyapýsý
+    // Window & WGPU temel altyapýsý
     GLFWwindow* window = nullptr;
     Instance instance = nullptr;
     Surface surface = nullptr;
@@ -62,14 +52,17 @@ private:
     Device device = nullptr;
     Queue queue = nullptr;
     TextureFormat surfaceFormat = TextureFormat::Undefined;
-
     int width;
     int height;
 
-    // Modüllerimiz (Sorumluluklar ayrýldý)
+    // Modüller (sorumluluklar ayrýldý)
     SceneManager sceneManager;
-    SdfRenderer renderer; // Artýk tüm pipeline, buffer ve shader iþleri burada
+    SdfRenderer renderer;       // Tüm pipeline, buffer ve shader iþleri burada
 
+    // GUI durumu
+    Settings appSettings;
+    AppTheme appTheme;
+
+    // Proje dosya sistemi
     std::filesystem::path projectRoot;
-    void FindProjectRoot();
 };

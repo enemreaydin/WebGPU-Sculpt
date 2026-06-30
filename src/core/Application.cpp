@@ -19,12 +19,8 @@ bool Application::Initialize() {
     InitializeQueue();
     FindProjectRoot(); 
     ConfigureSurface();
-<<<<<<< HEAD
     adapter.release();
     instance.release();
-    InitializeImgui();
-
-=======
     InitializeImgui();
 
     namespace fs = std::filesystem;
@@ -34,6 +30,7 @@ bool Application::Initialize() {
     std::cout << cwd << std::endl;
 
     // 1. Renderer'ý baþlat (Pipeline ve Shader kurulumu burada)
+    renderer.SetProjectRoot(projectRoot);
     renderer.Initialize(device, surfaceFormat);
 
     // 2. Sahneyi yükle ve GPU Buffer'larýný hazýrla
@@ -43,7 +40,6 @@ bool Application::Initialize() {
     else {
         std::cerr << "[UYARI]: Sahne yüklenemedi, boþ sahnede baþlatýlýyor.\n";
     }
->>>>>>> origin/zeynep
 
     return true;
 }
@@ -88,25 +84,31 @@ void Application::MainLoop() {
     TextureView targetView = GetNextSurfaceTextureView();
     if (!targetView) return;
 
-    CommandEncoder encoder = device.createCommandEncoder({});
+    CommandEncoderDescriptor encoderDesc = {};
+    CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
     RenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
+    colorAttachment.resolveTarget = nullptr;
     colorAttachment.loadOp = LoadOp::Clear;
     colorAttachment.storeOp = StoreOp::Store;
-    colorAttachment.clearValue = { 0.1, 0.1, 0.12, 1.0 };
+    colorAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.12, 1.0 };
 
     RenderPassDescriptor renderPassDesc = {};
     renderPassDesc.colorAttachmentCount = 1;
     renderPassDesc.colorAttachments = &colorAttachment;
+    renderPassDesc.depthStencilAttachment = nullptr;
+    renderPassDesc.timestampWrites = nullptr;
 
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
+    // Renderpass çizimleri
 
     // ÇÝZÝM
     renderPass.setPipeline(renderer.pipeline);
     renderPass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
     renderPass.draw(6, 1, 0, 0);
 
+    // Imgui çizimleri
     DrawGui();
 
     ImGui::Render();
@@ -115,7 +117,8 @@ void Application::MainLoop() {
     renderPass.end();
     renderPass.release();
 
-    CommandBuffer cmdBuf = encoder.finish({});
+    CommandBufferDescriptor cmdBufDesc = {};
+    CommandBuffer cmdBuf = encoder.finish(cmdBufDesc);
     encoder.release();
     queue.submit(1, &cmdBuf);
     cmdBuf.release();
@@ -132,12 +135,11 @@ void Application::MainLoop() {
 void Application::InitializeWindow() {
     glfwInit();
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+
     window = glfwCreateWindow(width, height, "SDF Editor", nullptr, nullptr);
-<<<<<<< HEAD
     glfwSetWindowSizeLimits(window, 1000, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
     // Resizable property
-=======
->>>>>>> origin/zeynep
     glfwSetWindowUserPointer(window, this);
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int nw, int nh) {
         auto app = static_cast<Application*>(glfwGetWindowUserPointer(w));
@@ -150,27 +152,42 @@ void Application::InitializeInstance() { instance = createInstance({}); }
 void Application::InitializeSurface() { surface = glfwGetWGPUSurface(instance, window); }
 
 void Application::InitializeAdapter() {
-    RequestAdapterOptions opts{};
-    opts.compatibleSurface = surface;
-    adapter = instance.requestAdapter(opts);
+    RequestAdapterOptions adapterOpts = {};
+    adapterOpts.compatibleSurface = surface;
+    adapter = instance.requestAdapter(adapterOpts);
+
+    // surfaceFormat'ý adapter varken al
     surfaceFormat = surface.getPreferredFormat(adapter);
 }
 
 void Application::InitializeDevice() {
-    device = adapter.requestDevice({});
+    DeviceDescriptor deviceDesc = {};
+    deviceDesc.label = "Device";
+    deviceDesc.requiredLimits = nullptr;
+    deviceDesc.defaultQueue.label = "Queue";
+    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
+        std::cout << "Device lost: " << reason;
+        if (message) std::cout << " (" << message << ")";
+        std::cout << std::endl;
+        };
+    device = adapter.requestDevice(deviceDesc);
+}
+
+void Application::InitializeQueue() {
     queue = device.getQueue();
 }
 
-void Application::InitializeQueue() { /* queue device'tan alýndý */ }
-
 void Application::ConfigureSurface() {
-    SurfaceConfiguration config{};
+    SurfaceConfiguration config = {};
     config.width = width;
     config.height = height;
     config.usage = TextureUsage::RenderAttachment;
     config.format = surfaceFormat;
+    config.viewFormatCount = 0;
+    config.viewFormats = nullptr;
     config.device = device;
     config.presentMode = PresentMode::Fifo;
+    config.alphaMode = CompositeAlphaMode::Auto;
     surface.configure(config);
 }
 

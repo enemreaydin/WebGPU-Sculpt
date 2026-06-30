@@ -23,21 +23,21 @@ endif()
 # --- GLFW <-> WebGPU köprüsü ---
 add_subdirectory(deps/glfw3webgpu)
 
+# --- GLM (matematik kütüphanesi, SDF hesaplarında kullanılıyor) ---
+add_subdirectory(deps/glm)
+
 # --- Dear ImGui (arayüz) ---
-# ImGui'nin CMake'i yok, kaynakları elle derliyoruz
-# NOT: Buraya SADECE ImGui'nin kendi dosyaları girer, bizim kodumuz GİRMEZ
+# ImGui'nin CMake'i yok, kaynakları elle derliyoruz.
+# NOT: Buraya SADECE ImGui'nin kendi dosyaları girer, bizim kodumuz GİRMEZ.
 add_library(imgui STATIC
     deps/imgui/imgui.cpp
     deps/imgui/imgui_draw.cpp
     deps/imgui/imgui_tables.cpp
     deps/imgui/imgui_widgets.cpp
+    deps/imgui/imgui_demo.cpp          # DEMO İÇİN, SONRADAN SİLİNECEK
     deps/imgui/backends/imgui_impl_glfw.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
-<<<<<<< HEAD
- "src/sdf/SDFNode.h")
-=======
-  "src/utils/FileHelper.cpp"  "src/render/SdfRenderer.cpp")
->>>>>>> origin/zeynep
+)
 target_include_directories(imgui PUBLIC
     deps/imgui
     deps/imgui/backends
@@ -45,82 +45,72 @@ target_include_directories(imgui PUBLIC
 target_link_libraries(imgui PUBLIC webgpu glfw)
 target_compile_definitions(imgui PUBLIC IMGUI_IMPL_WEBGPU_BACKEND_WGPU)
 
-<<<<<<< HEAD
 # ============================================================
-# ANA UYGULAMA (src/)
+# PROJE KAYNAK DOSYALARI (src/)
 # ============================================================
-=======
-# --- Font'u exe'nin yan�na kopyala ---
-configure_file(assets/fonts/Inter_18pt-Regular.ttf fonts/Inter_18pt-Regular.ttf COPYONLY)
 
->>>>>>> origin/zeynep
+# SDF mantığını oluşturan dosyalar - hem ana uygulamada hem konsol test
+# programında kullanılıyor, o yüzden tek yerden tanımlayıp ikisine de
+# paylaştırıyoruz (aynı listeyi iki kere yazmamak için).
+set(SDF_CORE_SOURCES
+    src/core/WebGPUImpl.cpp 
+    src/render/SdfRenderer.cpp
+    src/utils/FileHelper.cpp
+    src/scene/SceneManager.cpp
+    src/io/ExtensionLoader.cpp
+)
 
 # ============================================================
-# 1. ANA UYGULAMA (Aray�z + WebGPU + SDF Motoru)
+# 1. ANA UYGULAMA (Arayüz + WebGPU + SDF Motoru)
 # ============================================================
 add_executable(main
     src/main.cpp
     src/core/Application.cpp
-<<<<<<< HEAD
     src/core/Application.h
     src/core/Settings.h
     src/ui/DrawGuiElements.cpp
     src/ui/Theme.cpp
     src/ui/Theme.h
- "src/sdf/SDFNode.h")
+    ${SDF_CORE_SOURCES}
+)
 
 # src/ klasörünü include path'e ekle ki "core/Application.h" yazabilelim
-=======
-    src/render/SdfRenderer.cpp
-    src/utils/FileHelper.cpp
-    src/scene/SceneManager.cpp
-    src/io/ExtensionLoader.cpp
-)
-# src/ klas�r�n� include path'e ekle ki "Application.h" yazabilelim
->>>>>>> origin/zeynep
 target_include_directories(main PRIVATE src)
 
-# K�t�phaneleri ana programa ba�l�yoruz
 target_link_libraries(main PRIVATE
     webgpu
     glfw
     glfw3webgpu
     imgui
+    glm::glm
 )
 
-
 # ============================================================
-# 2. SDF M�MAR�S� TEST PROGRAMI (Sadece konsol testi i�in)
+# 2. SDF MİMARİSİ TEST PROGRAMI (Sadece konsol testi için)
 # ============================================================
+# NOT: WebGPU/GLFW/ImGui'ye bağlı değil - sadece SDF mantığını
+# (evalSDF, ağaç/sahne yapısı) pencere açmadan test etmek için.
+# TODO: SdfRenderer.cpp WebGPU tiplerine dokunuyorsa buraya
+# target_link_libraries(sdf_test_run PRIVATE webgpu) eklemek gerekebilir.
 add_executable(sdf_test_run
     sdf_test.cpp
-    src/render/SdfRenderer.cpp
-    src/utils/FileHelper.cpp
-    src/scene/SceneManager.cpp
-    src/io/ExtensionLoader.cpp
+    ${SDF_CORE_SOURCES}
 )
+target_include_directories(sdf_test_run PRIVATE src)
+target_link_libraries(sdf_test_run PRIVATE webgpu glm::glm)
 
 # ============================================================
-# DOSYA KOPYALAMA ��LEMLER�
+# DERLEME SONRASI - varlıkları exe'nin GERÇEK konumuna kopyala
 # ============================================================
-# CMake'e wgsl shader dosyalar�n� exe'nin yan�na kopyalamas�n� s�yl�yoruz 
-# (T�m assets klas�r�n� shaderlar ve ui ikonlar�yla beraber kopyalar)
-file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-
-# Assetleri build klas�r�ne kopyala
-file(COPY ${CMAKE_SOURCE_DIR}/src/scene DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-
-
-# ============================================================
-# DERLEME SONRASI - varlıkları exe'nin yanına kopyala
-# ============================================================
-<<<<<<< HEAD
+# $<TARGET_FILE_DIR:main> = exe'nin bulunduğu klasör (build/Debug/ veya build/)
+# Visual Studio gibi multi-config generator'larda file(COPY ...) veya
+# configure_file(...) komutları exe'nin yanına değil, build/ kökrüne
+# kopyalar - bu yüzden hepsini POST_BUILD + TARGET_FILE_DIR ile yapıyoruz.
 
 # WebGPU DLL'ini exe'nin yanına kopyala
 target_copy_webgpu_binaries(main)
 
-# Font'u exe'nin GERÇEK konumuna kopyala
-# $<TARGET_FILE_DIR:main> = exe'nin bulunduğu klasör (build/Debug/ veya build/)
+# Font'u kopyala
 add_custom_command(TARGET main POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:main>/fonts
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -129,14 +119,20 @@ add_custom_command(TARGET main POST_BUILD
     COMMENT "Font exe'nin yanina kopyalaniyor"
 )
 
-# Shader'ı da exe'nin yanına kopyala (SDF render'a geçince yorumdan çıkar)
-# add_custom_command(TARGET main POST_BUILD
-#     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-#         ${CMAKE_SOURCE_DIR}/src/shaders/raymarch.wgsl
-#         $<TARGET_FILE_DIR:main>/shader.wgsl
-# )
-=======
-# WebGPU DLL'ini exe'nin yan�na kopyala
-target_copy_webgpu_binaries(main)
+# assets/ klasörünü (shader'lar, ui ikonları dahil) kopyala
+add_custom_command(TARGET main POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:main>/assets
+    COMMENT "assets/ exe'nin yanina kopyalaniyor"
+)
 
->>>>>>> origin/zeynep
+# TODO: src/scene/ klasörünün build çıktısına kopyalanması gerekiyor muydu?
+# Eğer içinde varsayılan sahne/preset dosyaları varsa asagidaki gibi
+# tasinabilir; sadece kaynak kod ise (SceneManager.cpp gibi) kopyalanmamali.
+# add_custom_command(TARGET main POST_BUILD
+#     COMMAND ${CMAKE_COMMAND} -E copy_directory
+#         ${CMAKE_SOURCE_DIR}/src/scene
+#         $<TARGET_FILE_DIR:main>/scene
+#     COMMENT "scene/ exe'nin yanina kopyalaniyor"
+# )

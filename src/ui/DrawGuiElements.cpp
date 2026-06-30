@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 ﻿#include "core/Application.h"
-=======
-#include "../core/Application.h"
->>>>>>> origin/zeynep
 #include <imgui.h>
 #include "Theme.h"
 
@@ -126,7 +122,7 @@ void Application::DrawSettings() {
 
         ImGui::SameLine();
 
-        // --- Sağ İçerik ---
+        // --- Sa� ��erik ---
         if (ImGui::BeginChild("SettingsRightContent", ImVec2(0, 0), false)) {
             switch (appSettings.selectedTab) {
             case 0: ImGui::Text("General Settings");    break;
@@ -164,7 +160,7 @@ void Application::DrawWorkspace() {
 
         ImGui::SameLine();
 
-        // Sahne Özellikleri
+        // Sahne �zellikleri
         if (ImGui::BeginChild("SceneProperties", ImVec2(300, 0), true)) {
             ImGui::Text("Nesne ayarlari");
         }
