@@ -56,9 +56,14 @@ void Application::MainLoop() {
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    // Camera and scene globals
+
+    // Camera updates, view and projection matrices for Gizmo
     UpdateGlobals();
-    
+    float aspect = (sceneViewSize.y > 0.0f)
+        ? sceneViewSize.x / sceneViewSize.y
+        : 1.0f;
+    glm::mat4 view = camera.GetViewMatrix();
+    glm::mat4 proj = camera.GetProjectionMatrix(aspect);
 
 
     queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
@@ -288,7 +293,6 @@ void Application::AddObjectToScene(const SdfObjectData& object)
         sceneManager.GetObjects()
     );
 }
-
 
 void Application::UpdateGlobals() {
     if (sceneViewHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left))

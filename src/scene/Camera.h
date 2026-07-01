@@ -1,11 +1,14 @@
 #pragma once
 #include <glm/glm.hpp>  
+#include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
 #include "../core/Settings.h"
 class Camera
 {
 public:
 	glm::vec3 GetPosition();
+	glm::mat4 GetViewMatrix();
+	glm::mat4 GetProjectionMatrix(float aspect);
 	void OrbitMovement(Settings appSettings, ImVec2 delta);
 private:
 	float yaw = 0.5f;
