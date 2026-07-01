@@ -244,20 +244,24 @@ void Application::FindProjectRoot()
 void Application::InitializeRenderer() {
     namespace fs = std::filesystem;
 
+    // Current working directory (debug)
     fs::path cwd = fs::current_path();
-
     std::cout << cwd << std::endl;
 
-    // 1. Renderer'ý baþlat (Pipeline ve Shader kurulumu burada)
+    // Set project root for shader and asset loading
     renderer.SetProjectRoot(projectRoot);
     renderer.Initialize(device, surfaceFormat);
     renderer.CreateRenderTarget(device, 1000, 800);
-    // 2. Sahneyi yükle ve GPU Buffer'larýný hazýrla
-    if (ExtensionLoader::LoadMockFile("test.bdf", sceneManager)) {
+
+    std::filesystem::path bdfPath = projectRoot / "assets/test.bdf";
+
+    // Load scene from BDF file
+    if (ExtensionLoader::LoadFromBDF(bdfPath.string(), sceneManager)) {
+        // Upload scene objects to GPU
         renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
     }
     else {
-        std::cerr << "[WARNING]: Scene can not be loaded, loading an empty scene!\n";
+        std::cerr << "[WARNING]: BDF file can not be loaded "
+            << bdfPath << std::endl;
     }
-
 }
