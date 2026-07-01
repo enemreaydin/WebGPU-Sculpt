@@ -8,6 +8,7 @@
 #include "render/SdfRenderer.h"    
 #include "core/SdfDefinitions.h"
 #include "scene/Camera.h"
+#include "ui/AddObjectPanel.h"
 
 using namespace wgpu;
 
@@ -37,6 +38,7 @@ private:
     SdfRenderer renderer;      
     Settings appSettings;
     AppTheme appTheme;
+    AddObjectPanel addObjectPanel;
 
     // Scene 
     GlobalsData globals;
@@ -67,5 +69,7 @@ private:
     void DrawMainMenuBar();
     void DrawSettings();
     void DrawWorkspace();
+
+    void AddObjectToScene(const SdfObjectData& object);
 
 };

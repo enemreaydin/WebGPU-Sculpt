@@ -29,6 +29,18 @@ fn sdfBox(p : vec3f, b : vec3f) -> f32
         + min(max(q.x, max(q.y, q.z)), 0.0);
 }
 
+fn sdfCylinder(p: vec3f, radius: f32, height: f32) -> f32
+{
+    let d = abs(vec2f(length(p.xz), p.y)) - vec2f(radius, height * 0.5);
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2f(0.0)));
+}
+
+fn sdfTorus(p: vec3f, majorRadius: f32, minorRadius: f32) -> f32
+{
+    let q = vec2f(length(p.xz) - majorRadius, p.y);
+    return length(q) - minorRadius;
+}
+
 fn opUnion(d1 : f32, d2 : f32) -> f32
 {
     return min(d1, d2);
@@ -76,6 +88,16 @@ fn evaluateScene(p : vec3f) -> SceneResult
             case 1:
             {
                 dist = sdfBox(localPos, obj.size.xyz);
+            }
+
+            case 2:
+            {
+                dist = sdfCylinder(localPos, obj.size.x, obj.size.y);
+            }
+
+            case 3:
+            {
+                dist = sdfTorus(localPos, obj.size.x, obj.size.y);
             }
 
             default:

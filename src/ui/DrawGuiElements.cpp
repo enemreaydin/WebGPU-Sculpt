@@ -4,8 +4,15 @@
 
 void Application::DrawGui() {
     DrawMainMenuBar();
+    SdfObjectData newObject{};
+
+    if (addObjectPanel.Draw(newObject))
+    {
+        AddObjectToScene(newObject);
+    }
     DrawSettings();
     DrawWorkspace();
+
 }
 
 void Application::DrawMainMenuBar() {
@@ -20,10 +27,21 @@ void Application::DrawMainMenuBar() {
 
         if (ImGui::BeginMenu("Object")) {
             if (ImGui::BeginMenu("New")) {
-                if (ImGui::MenuItem("Sphere")) {}
-                if (ImGui::MenuItem("Box")) {}
-                if (ImGui::MenuItem("Cylinder")) {}
-                if (ImGui::MenuItem("Torus")) {}
+                if (ImGui::MenuItem("Sphere")) {
+                    addObjectPanel.Open(SdfObjectType::Sphere);
+                }
+
+                if (ImGui::MenuItem("Box")) {
+                    addObjectPanel.Open(SdfObjectType::Box);
+                }
+
+                if (ImGui::MenuItem("Cylinder")) {
+                    addObjectPanel.Open(SdfObjectType::Cylinder);
+                }
+
+                if (ImGui::MenuItem("Torus")) {
+                    addObjectPanel.Open(SdfObjectType::Torus);
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem("Select")) {}

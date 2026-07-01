@@ -271,6 +271,25 @@ void Application::InitializeRenderer() {
     }
 }
 
+void Application::AddObjectToScene(const SdfObjectData& object)
+{
+    SdfObjectData obj = object;
+
+    if (sceneManager.GetObjects().empty())
+    {
+        obj.op = static_cast<int32_t>(SdfOperationType::None);
+    }
+
+    sceneManager.AddObject(obj);
+
+    renderer.CreateSceneBuffer(
+        device,
+        queue,
+        sceneManager.GetObjects()
+    );
+}
+}
+
 void Application::UpdateGlobals() {
     if (sceneViewHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
     {
