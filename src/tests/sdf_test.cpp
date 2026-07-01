@@ -9,7 +9,7 @@ int main() {
     SceneManager myScene;
 
     // 2. Arayüzden kullanýcý "ucus_araci.bdf" yüklediðini farz edelim
-    ExtensionLoader::LoadMockFile("ucus_araci.bdf", myScene);
+    ExtensionLoader::LoadMockFile("ucus_araci.sdfo", myScene);
 
     // 3. Veriler gerçekten SceneManager'a ulaþtý mý? Test Edelim:
     std::cout << "\n[TEST SONUCU]:\n";

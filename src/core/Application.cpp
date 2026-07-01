@@ -253,10 +253,10 @@ void Application::InitializeRenderer() {
     renderer.Initialize(device, surfaceFormat);
     renderer.CreateRenderTarget(device, 1000, 800);
 
-    std::filesystem::path bdfPath = projectRoot / "assets/test.bdf";
+    std::filesystem::path bdfPath = projectRoot / "assets/test.sdfo";
 
     // Load scene from BDF file
-    if (ExtensionLoader::LoadFromBDF(bdfPath.string(), sceneManager)) {
+    if (ExtensionLoader::LoadFromSDFO(bdfPath.string(), sceneManager)) {
         // Upload scene objects to GPU
         renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
     }

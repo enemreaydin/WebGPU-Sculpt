@@ -54,9 +54,9 @@ int main()
     zAxis.color = { 0.0f, 0.0f, 1.0f, 0.0f };
     objects.push_back(zAxis);
 
-    const std::string outputPath = "assets/test.bdf";
+    const std::string outputPath = "assets/test.sdfo";
 
-    if (!ExtensionLoader::SaveToBDF(outputPath, objects))
+    if (!ExtensionLoader::SaveToSDFO(outputPath, objects))
     {
         std::cerr << "[ERROR] test.bdf olusturulamadi.\n";
         return 1;

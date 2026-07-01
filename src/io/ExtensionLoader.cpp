@@ -58,7 +58,7 @@ bool ExtensionLoader::LoadMockFile(const std::string& filepath, SceneManager& sc
 }
 
 // 2. SAVE TO BDF (Binary Kaydetme)
-bool ExtensionLoader::SaveToBDF(const std::string& filepath, const std::vector<SdfObjectData>& objects) {
+bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<SdfObjectData>& objects) {
     std::ofstream file(filepath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "[ExtensionLoader] HATA: Dosya yazma hatasi: " << filepath << "\n";
@@ -66,7 +66,7 @@ bool ExtensionLoader::SaveToBDF(const std::string& filepath, const std::vector<S
     }
 
     // Header
-    char magic[4] = { 'B', 'D', 'F', '!' };
+    char magic[4] = { 'S', 'D', 'F', 'O' };
     int32_t count = (int32_t)objects.size();
 
     file.write(magic, 4);
@@ -81,7 +81,7 @@ bool ExtensionLoader::SaveToBDF(const std::string& filepath, const std::vector<S
 }
 
 // 3. LOAD FROM BDF (Binary Okuma)
-bool ExtensionLoader::LoadFromBDF(const std::string& filepath, SceneManager& sceneManager) {
+bool ExtensionLoader::LoadFromSDFO(const std::string& filepath, SceneManager& sceneManager) {
     std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "[ExtensionLoader] HATA: Dosya okuma hatasi: " << filepath << "\n";
@@ -93,7 +93,7 @@ bool ExtensionLoader::LoadFromBDF(const std::string& filepath, SceneManager& sce
     file.read(magic, 4);
     file.read((char*)&count, sizeof(int32_t));
 
-    if (std::string(magic, 4) != "BDF!") {
+    if (std::string(magic, 4) != "SDFO") {
         std::cerr << "[ExtensionLoader] HATA: Gecersiz dosya formati!\n";
         return false;
     }
