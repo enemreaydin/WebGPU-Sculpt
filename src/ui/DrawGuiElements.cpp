@@ -162,13 +162,6 @@ void Application::DrawWorkspace() {
 
             if (w > 0 && h > 0) {
                 renderer.CreateRenderTarget(device, w, h);
-
-                // Globals'ı da AYNI boyutla, AYNI yerde güncelle
-                GlobalsData globals{};
-                globals.resolution[0] = (float)w;
-                globals.resolution[1] = (float)h;
-                queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
-
                 ImTextureID texId = (ImTextureID)(WGPUTextureView)renderer.GetRenderTargetView();
                 ImGui::Image(texId, avail);
             }

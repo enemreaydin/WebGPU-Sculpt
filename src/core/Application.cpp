@@ -56,13 +56,15 @@ void Application::MainLoop() {
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+    // Globals'ý da AYNI boyutla, AYNI yerde güncelle
+    GlobalsData globals{};
+    globals.resolution[0] = sceneViewSize.x;
+    globals.resolution[1] = sceneViewSize.y;
+    queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
 
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
-    GlobalsData globals{};
-    globals.resolution[0] = sceneViewSize.x;
-    globals.resolution[1] = sceneViewSize.y;
     // --- YENÝ: 1. PASS - SDF sahnesini offscreen texture'a çiz ---
     {
         RenderPassColorAttachment sceneAttachment = {};
