@@ -39,9 +39,16 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format) {
     bglEntry.visibility = wgpu::ShaderStage::Fragment;
     bglEntry.buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
 
+    wgpu::BindGroupLayoutEntry bglEntryGlobals{};
+    bglEntryGlobals.binding = 1;
+    bglEntryGlobals.visibility = wgpu::ShaderStage::Fragment;
+    bglEntryGlobals.buffer.type = wgpu::BufferBindingType::Uniform;
+
+    wgpu::BindGroupLayoutEntry entries[2] = { bglEntry, bglEntryGlobals };
+
     wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.entryCount = 1;
-    bglDesc.entries = &bglEntry;
+    bglDesc.entryCount = 2;
+    bglDesc.entries = entries;
     bindGroupLayout = device.createBindGroupLayout(bglDesc);
 
  if (!bindGroupLayout) { std::cerr << "BindGroupLayout oluþturulamadý!\n"; return; }
@@ -126,6 +133,23 @@ void SdfRenderer::CreateSceneBuffer(wgpu::Device device, wgpu::Queue queue, cons
         return;
     }
 
+    uint64_t bufferSizeGlobal = sizeof(GlobalsData);
+
+    wgpu::BufferDescriptor bufferDescGlobal{};
+    bufferDescGlobal.size = sizeof(GlobalsData);
+    bufferDescGlobal.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+
+    globalsBuffer = device.createBuffer(bufferDescGlobal);
+
+    // 3. GÜVENLÝK: Buffer oluþturulamadýysa kontrol et
+    if (!globalsBuffer) {
+        std::cerr << "[KRÝTÝK]: globalsBuffer oluþturulamadý!" << std::endl;
+        return;
+    }
+    GlobalsData initialGlobals{};
+    initialGlobals.resolution[0] = 1000.0f;
+    initialGlobals.resolution[1] = 800.0f;
+    queue.writeBuffer(globalsBuffer, 0, &initialGlobals, bufferSizeGlobal);
     queue.writeBuffer(sceneBuffer, 0, objects.data(), bufferSize);
 
     wgpu::BindGroupEntry bgEntry{};
@@ -134,10 +158,18 @@ void SdfRenderer::CreateSceneBuffer(wgpu::Device device, wgpu::Queue queue, cons
     bgEntry.offset = 0;
     bgEntry.size = bufferSize;
 
+    wgpu::BindGroupEntry bgEntryGlobals{};
+    bgEntryGlobals.binding = 1;
+    bgEntryGlobals.buffer = globalsBuffer;
+    bgEntryGlobals.offset = 0;
+    bgEntryGlobals.size = bufferSizeGlobal;
+
+    wgpu::BindGroupEntry entries[2] = { bgEntry, bgEntryGlobals };
+
     wgpu::BindGroupDescriptor bgDesc{};
-    bgDesc.layout = bindGroupLayout; // Burasý artýk güvenli çünkü yukarýda kontrol ettik
-    bgDesc.entryCount = 1;
-    bgDesc.entries = &bgEntry;
+    bgDesc.layout = bindGroupLayout;
+    bgDesc.entryCount = 2;
+    bgDesc.entries = entries;
 
     // 4. BindGroup oluþtur ve sonucu kontrol et
     bindGroup = device.createBindGroup(bgDesc);

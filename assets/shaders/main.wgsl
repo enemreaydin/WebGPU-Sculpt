@@ -1,5 +1,10 @@
 @group(0) @binding(0) var<storage, read> scene_objects: array<SdfObject>;
 
+struct Globals {
+    resolution : vec2f,
+    _pad : vec2f,
+}
+@group(0) @binding(1) var<uniform> globals : Globals;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -23,7 +28,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let ratio = 640.0 / 480.0;
+    let ratio = globals.resolution.x / globals.resolution.y ;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
 
     let ro = vec3f(4.0, 3.0, -6.0);  
