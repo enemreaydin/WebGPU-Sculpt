@@ -5,7 +5,7 @@
 
 #include "core/Settings.h"
 #include "scene/SceneManager.h"
-#include "render/SdfRenderer.h"     // Renderer modulumuzu dahil ediyoruz
+#include "render/SdfRenderer.h"    
 #include "core/SdfDefinitions.h"
 
 using namespace wgpu;
@@ -20,7 +20,25 @@ public:
     bool IsRunning();
 
 private:
-    // --- Baþlangýç zinciri (her biri Initialize içinde sýrayla çaðrýlýr) ---
+    int width;
+    int height;
+    std::filesystem::path projectRoot;
+
+    // Declarations
+    GLFWwindow* window = nullptr;
+    Instance instance = nullptr;
+    Surface surface = nullptr;
+    Adapter adapter = nullptr;
+    Device device = nullptr;
+    Queue queue = nullptr;
+    TextureFormat surfaceFormat = TextureFormat::Undefined;
+    SceneManager sceneManager;
+    SdfRenderer renderer;      
+    Settings appSettings;
+    AppTheme appTheme;
+
+
+    // Initializers
     void InitializeWindow();
     void InitializeInstance();
     void InitializeSurface();
@@ -29,40 +47,17 @@ private:
     void InitializeQueue();
     void ConfigureSurface();
     void InitializeImgui();
+    void InitializeRenderer();
 
-    // --- Proje / dosya sistemi ---
+    // Helpers
     void FindProjectRoot();
-
-    // --- Frame yardýmcýlarý ---
     TextureView GetNextSurfaceTextureView();
-    void OnResize(int width, int height); // Pencere yeniden boyutlandýðýnda surface'ý yeniden configure et
+    void OnResize(int width, int height);
 
-    // --- GUI çizimi ---
+    // GUI functions
     void DrawGui();
     void DrawMainMenuBar();
     void DrawSettings();
     void DrawWorkspace();
 
-private:
-    // Window & WGPU temel altyapýsý
-    GLFWwindow* window = nullptr;
-    Instance instance = nullptr;
-    Surface surface = nullptr;
-    Adapter adapter = nullptr;
-    Device device = nullptr;
-    Queue queue = nullptr;
-    TextureFormat surfaceFormat = TextureFormat::Undefined;
-    int width;
-    int height;
-
-    // Modüller (sorumluluklar ayrýldý)
-    SceneManager sceneManager;
-    SdfRenderer renderer;       // Tüm pipeline, buffer ve shader iþleri burada
-
-    // GUI durumu
-    Settings appSettings;
-    AppTheme appTheme;
-
-    // Proje dosya sistemi
-    std::filesystem::path projectRoot;
 };

@@ -11,56 +11,33 @@
 
 
 bool Application::Initialize() {
+    FindProjectRoot();
     InitializeWindow();
     InitializeInstance();
     InitializeSurface();
     InitializeAdapter();
     InitializeDevice();
     InitializeQueue();
-    FindProjectRoot(); 
     ConfigureSurface();
     adapter.release();
     instance.release();
     InitializeImgui();
-
-    namespace fs = std::filesystem;
-
-    fs::path cwd = fs::current_path();
-
-    std::cout << cwd << std::endl;
-
-    // 1. Renderer'ý baþlat (Pipeline ve Shader kurulumu burada)
-    renderer.SetProjectRoot(projectRoot);
-    renderer.Initialize(device, surfaceFormat);
-    renderer.CreateRenderTarget(device, 1000, 800);
-    // 2. Sahneyi yükle ve GPU Buffer'larýný hazýrla
-    if (ExtensionLoader::LoadMockFile("test.bdf", sceneManager)) {
-        renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
-    }
-    else {
-        std::cerr << "[UYARI]: Sahne yüklenemedi, boþ sahnede baþlatýlýyor.\n";
-    }
-
+    InitializeRenderer();
+    
     return true;
 }
 
 void Application::Terminate() {
-    // Renderer kaynaklarýný temizle
     renderer.Destroy();
-
-    // ImGui temizle
     ImGui_ImplWGPU_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-
-    // WGPU ve GLFW temizle
     surface.unconfigure();
     queue.release();
     surface.release();
     device.release();
     adapter.release();
     instance.release();
-
     glfwDestroyWindow(window);
     glfwTerminate();
 }
@@ -142,9 +119,8 @@ void Application::MainLoop() {
     surface.present();
     device.poll(false);
 }
-// ============================================================
-// YARDIMCI ÝLK YÜKLEME FONKSÝYONLARI
-// ============================================================
+
+// Imitializer functions
 
 void Application::InitializeWindow() {
     glfwInit();
@@ -169,8 +145,6 @@ void Application::InitializeAdapter() {
     RequestAdapterOptions adapterOpts = {};
     adapterOpts.compatibleSurface = surface;
     adapter = instance.requestAdapter(adapterOpts);
-
-    // surfaceFormat'ý adapter varken al
     surfaceFormat = surface.getPreferredFormat(adapter);
 }
 
@@ -258,12 +232,32 @@ void Application::FindProjectRoot()
         {
             projectRoot = current;
 
-            std::cout << "Project Root bulundu:\n"
+            std::cout << "Project Root found:\n"
                 << projectRoot << std::endl;
             return;
         }
         current = current.parent_path();
     }
-    throw std::runtime_error("Project Root bulunamadi!");
+    throw std::runtime_error("Project Root cannot be found!");
 }
 
+void Application::InitializeRenderer() {
+    namespace fs = std::filesystem;
+
+    fs::path cwd = fs::current_path();
+
+    std::cout << cwd << std::endl;
+
+    // 1. Renderer'ý baþlat (Pipeline ve Shader kurulumu burada)
+    renderer.SetProjectRoot(projectRoot);
+    renderer.Initialize(device, surfaceFormat);
+    renderer.CreateRenderTarget(device, 1000, 800);
+    // 2. Sahneyi yükle ve GPU Buffer'larýný hazýrla
+    if (ExtensionLoader::LoadMockFile("test.bdf", sceneManager)) {
+        renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
+    }
+    else {
+        std::cerr << "[WARNING]: Scene can not be loaded, loading an empty scene!\n";
+    }
+
+}
