@@ -288,7 +288,7 @@ void Application::AddObjectToScene(const SdfObjectData& object)
         sceneManager.GetObjects()
     );
 }
-}
+
 
 void Application::UpdateGlobals() {
     if (sceneViewHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left))

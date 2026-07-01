@@ -93,9 +93,10 @@ add_executable(main
     src/ui/Theme.h
     src/ui/AddObjectPanel.h
 
+    src/scene/Camera.h
+    src/scene/Camera.cpp
+
     ${SDF_CORE_SOURCES}
-    src/scene/Camera.h 
-    src/scene/Camera.cpp)
     ${UI_SOURCES}
 )
 
@@ -126,7 +127,7 @@ add_executable(create_test_sdfo
     src/tests/create_test_sdfo.cpp
     src/io/ExtensionLoader.cpp
     src/scene/SceneManager.cpp
- "src/scene/Camera.h" "src/scene/Camera.cpp")
+)
 
 target_include_directories(create_test_sdfo PRIVATE
     src
