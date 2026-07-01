@@ -48,7 +48,8 @@ bool Application::IsRunning() {
 
 void Application::MainLoop() {
     // GPU kaynaklarý hazýr deðilse çizim yapma
-    if (!renderer.pipeline || !renderer.bindGroup || !renderer.sceneBuffer) {
+    if (!renderer.pipeline) {
+        glfwPollEvents();
         return;
     }
 
@@ -86,9 +87,11 @@ void Application::MainLoop() {
         scenePassDesc.timestampWrites = nullptr;
 
         RenderPassEncoder scenePass = encoder.beginRenderPass(scenePassDesc);
-        scenePass.setPipeline(renderer.pipeline);
-        scenePass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
-        scenePass.draw(6, 1, 0, 0);
+        if (renderer.bindGroup && renderer.sceneBuffer) {
+            scenePass.setPipeline(renderer.pipeline);
+            scenePass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
+            scenePass.draw(6, 1, 0, 0);
+        }
         scenePass.end();
         scenePass.release();
     }
@@ -251,29 +254,14 @@ void Application::FindProjectRoot()
     throw std::runtime_error("Project Root cannot be found!");
 }
 
-void Application::InitializeRenderer() {
-    namespace fs = std::filesystem;
-
-    // Current working directory (debug)
-    fs::path cwd = fs::current_path();
-    std::cout << cwd << std::endl;
-
-    // Set project root for shader and asset loading
+void Application::InitializeRenderer()
+{
     renderer.SetProjectRoot(projectRoot);
     renderer.Initialize(device, surfaceFormat);
     renderer.CreateRenderTarget(device, 1000, 800);
 
-    std::filesystem::path bdfPath = projectRoot / "assets/test.sdfo";
-
-    // Load scene from BDF file
-    if (ExtensionLoader::LoadFromSDFO(bdfPath.string(), sceneManager)) {
-        // Upload scene objects to GPU
-        renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
-    }
-    else {
-        std::cerr << "[WARNING]: BDF file can not be loaded "
-            << bdfPath << std::endl;
-    }
+    // Create an empty scene buffer so the shader can render the grid.
+    renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
 }
 
 void Application::AddObjectToScene(const SdfObjectData& object)
@@ -309,4 +297,62 @@ void Application::UpdateGlobals() {
     globals.cameraTarget[1] = 0.0f;
     globals.cameraTarget[2] = 0.0f;
 
+}
+
+void Application::RefreshSceneBuffer()
+{
+    const auto& objects = sceneManager.GetObjects();
+
+    if (objects.empty()) {
+        renderer.ClearSceneBuffer();
+        return;
+    }
+
+    renderer.CreateSceneBuffer(device, queue, objects);
+}
+
+void Application::NewScene()
+{
+    sceneManager.ClearScene();
+
+    renderer.CreateSceneBuffer(
+        device,
+        queue,
+        sceneManager.GetObjects()
+    );
+
+    std::cout << "[INFO]: New empty scene created.\n";
+}
+void Application::OpenSceneFromSDFO()
+{
+    std::filesystem::path path = projectRoot / "assets/test.sdfo";
+
+    sceneManager.ClearScene();
+
+    if (ExtensionLoader::LoadFromSDFO(path.string(), sceneManager)) {
+        RefreshSceneBuffer();
+
+        std::cout << "[INFO]: Scene loaded from: "
+            << path << std::endl;
+    }
+    else {
+        renderer.ClearSceneBuffer();
+
+        std::cerr << "[WARNING]: SDFO file could not be loaded: "
+            << path << std::endl;
+    }
+}
+
+void Application::SaveSceneToSDFO()
+{
+    std::filesystem::path path = projectRoot / "assets/test.sdfo";
+
+    if (ExtensionLoader::SaveToSDFO(path.string(), sceneManager.GetObjects())) {
+        std::cout << "[INFO]: Scene saved to: "
+            << path << std::endl;
+    }
+    else {
+        std::cerr << "[WARNING]: SDFO file could not be saved: "
+            << path << std::endl;
+    }
 }

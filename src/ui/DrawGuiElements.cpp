@@ -18,10 +18,22 @@ void Application::DrawGui() {
 void Application::DrawMainMenuBar() {
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Open")) {}
-            if (ImGui::MenuItem("New")) {}
-            if (ImGui::MenuItem("Save")) {}
-            if (ImGui::MenuItem("Export as")) {}
+            if (ImGui::MenuItem("New")) {
+                NewScene();
+            }
+
+            if (ImGui::MenuItem("Open")) {
+                OpenSceneFromSDFO();
+            }
+
+            if (ImGui::MenuItem("Save")) {
+                SaveSceneToSDFO();
+            }
+
+            if (ImGui::MenuItem("Export as")) {
+                // Export is not implemented yet.
+            }
+
             ImGui::EndMenu();
         }
 

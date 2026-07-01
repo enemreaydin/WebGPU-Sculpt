@@ -72,4 +72,9 @@ private:
 
     void AddObjectToScene(const SdfObjectData& object);
 
+    void NewScene();
+    void OpenSceneFromSDFO();
+    void SaveSceneToSDFO();
+    void RefreshSceneBuffer();
+
 };
