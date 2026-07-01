@@ -42,6 +42,8 @@ private:
     GlobalsData globals;
     ImVec2 sceneViewSize = { 1000, 800 };
     Camera camera;
+    bool sceneViewHovered = false;
+    ImVec2 sceneCursorDelta;
     void UpdateGlobals();
 
     // Initializers

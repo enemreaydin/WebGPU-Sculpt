@@ -58,6 +58,7 @@ void Application::MainLoop() {
     ImGui::NewFrame();
     // Camera and scene globals
     UpdateGlobals();
+    
 
 
     queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
@@ -271,6 +272,10 @@ void Application::InitializeRenderer() {
 }
 
 void Application::UpdateGlobals() {
+    if (sceneViewHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+    {
+        camera.OrbitMovement(appSettings, sceneCursorDelta);
+    }
     glm::vec3 camPos = camera.GetPosition();
     globals.resolution[0] = sceneViewSize.x;
     globals.resolution[1] = sceneViewSize.y;

@@ -155,6 +155,12 @@ void Application::DrawWorkspace() {
     if (ImGui::Begin("Workspace", nullptr, flags)) {
         // SDF Render Sahnesi
         if (ImGui::BeginChild("SceneView", ImVec2(-300, 0), true)) {
+
+            // Scene movement checks
+            sceneViewHovered = ImGui::IsWindowHovered();
+            sceneCursorDelta = ImGui::GetIO().MouseDelta;
+
+
             ImVec2 avail = ImGui::GetContentRegionAvail();
             sceneViewSize = avail;
             uint32_t w = static_cast<uint32_t>(avail.x);
