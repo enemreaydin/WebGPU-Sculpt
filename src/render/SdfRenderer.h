@@ -5,11 +5,6 @@
 #include <vector>
 #include <filesystem>
 
-struct GlobalsData {
-    float resolution[2];  // x, y
-    float _pad[2];        // 16 byte'a tamamla
-};
-
 class SdfRenderer {
 public:
     void Initialize(wgpu::Device device, wgpu::TextureFormat format);

@@ -48,3 +48,9 @@ struct alignas(16) SdfObjectData
 
 static_assert(sizeof(SdfObjectData) == 64,
     "SdfObjectData must be exactly 64 bytes.");
+
+
+struct GlobalsData {
+    float resolution[2];  // x, y
+    float _pad[2];        // 16 byte'a tamamla
+};
