@@ -11,7 +11,8 @@ enum class SdfObjectType : int32_t
 {
     Sphere = 0,
     Box = 1,
-    Cylinder = 2
+    Cylinder = 2,
+    Torus = 3
 };
 
 //====================================================

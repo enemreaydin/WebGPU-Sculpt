@@ -7,6 +7,7 @@
 #include "scene/SceneManager.h"
 #include "render/SdfRenderer.h"    
 #include "core/SdfDefinitions.h"
+#include "ui/AddObjectPanel.h"
 
 using namespace wgpu;
 
@@ -37,6 +38,7 @@ private:
     SdfRenderer renderer;      
     Settings appSettings;
     AppTheme appTheme;
+    AddObjectPanel addObjectPanel;
 
 
     // Initializers
@@ -60,5 +62,7 @@ private:
     void DrawMainMenuBar();
     void DrawSettings();
     void DrawWorkspace();
+
+    void AddObjectToScene(const SdfObjectData& object);
 
 };
