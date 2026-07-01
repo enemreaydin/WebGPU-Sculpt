@@ -3,6 +3,8 @@
 struct Globals {
     resolution : vec2f,
     _pad : vec2f,
+    cameraPos : vec4f,
+    cameraTarget : vec4f,
 }
 @group(0) @binding(1) var<uniform> globals : Globals;
 
@@ -31,8 +33,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let ratio = globals.resolution.x / globals.resolution.y ;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
 
-    let ro = vec3f(4.0, 3.0, -6.0);  
-    let targetPoint = vec3f(0.0, 0.0, 0.0); 
+    let ro = globals.cameraPos.xyz;
+    let targetPoint = globals.cameraTarget.xyz;
     let worldUp = vec3f(0.0, 1.0, 0.0);
 
     let forward = normalize(targetPoint - ro);

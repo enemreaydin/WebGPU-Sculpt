@@ -78,7 +78,8 @@ add_executable(main
     src/ui/Theme.cpp
     src/ui/Theme.h
     ${SDF_CORE_SOURCES}
-)
+    src/scene/Camera.h 
+    src/scene/Camera.cpp)
 
 target_include_directories(main PRIVATE
     src
@@ -92,6 +93,7 @@ target_link_libraries(main PRIVATE
     glfw
     glfw3webgpu
     imgui
+    glm
 )
 
 if (TARGET glm::glm)
@@ -128,7 +130,7 @@ add_executable(create_test_bdf
     src/tests/create_test_bdf.cpp
     src/io/ExtensionLoader.cpp
     src/scene/SceneManager.cpp
-)
+ "src/scene/Camera.h" "src/scene/Camera.cpp")
 
 target_include_directories(create_test_bdf PRIVATE
     src

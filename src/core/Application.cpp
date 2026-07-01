@@ -56,12 +56,11 @@ void Application::MainLoop() {
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-    // Globals'ý da AYNI boyutla, AYNI yerde güncelle
-    GlobalsData globals{};
-    globals.resolution[0] = sceneViewSize.x;
-    globals.resolution[1] = sceneViewSize.y;
-    queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
+    // Camera and scene globals
+    UpdateGlobals();
 
+
+    queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
@@ -269,4 +268,17 @@ void Application::InitializeRenderer() {
         std::cerr << "[WARNING]: BDF file can not be loaded "
             << bdfPath << std::endl;
     }
+}
+
+void Application::UpdateGlobals() {
+    glm::vec3 camPos = camera.GetPosition();
+    globals.resolution[0] = sceneViewSize.x;
+    globals.resolution[1] = sceneViewSize.y;
+    globals.cameraPos[0] = camPos.x;
+    globals.cameraPos[1] = camPos.y;
+    globals.cameraPos[2] = camPos.z;
+    globals.cameraTarget[0] = 0.0f;  // þimdilik sabit hedef (orijin)
+    globals.cameraTarget[1] = 0.0f;
+    globals.cameraTarget[2] = 0.0f;
+
 }

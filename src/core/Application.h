@@ -7,6 +7,7 @@
 #include "scene/SceneManager.h"
 #include "render/SdfRenderer.h"    
 #include "core/SdfDefinitions.h"
+#include "scene/Camera.h"
 
 using namespace wgpu;
 
@@ -23,7 +24,6 @@ private:
     int width;
     int height;
     std::filesystem::path projectRoot;
-    ImVec2 sceneViewSize = { 1000, 800 };
 
     // Declarations
     GLFWwindow* window = nullptr;
@@ -38,6 +38,11 @@ private:
     Settings appSettings;
     AppTheme appTheme;
 
+    // Scene 
+    GlobalsData globals;
+    ImVec2 sceneViewSize = { 1000, 800 };
+    Camera camera;
+    void UpdateGlobals();
 
     // Initializers
     void InitializeWindow();
