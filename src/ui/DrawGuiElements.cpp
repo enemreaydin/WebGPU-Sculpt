@@ -156,6 +156,7 @@ void Application::DrawWorkspace() {
         // SDF Render Sahnesi
         if (ImGui::BeginChild("SceneView", ImVec2(-300, 0), true)) {
             ImVec2 avail = ImGui::GetContentRegionAvail();
+            sceneViewSize = avail;
             uint32_t w = static_cast<uint32_t>(avail.x);
             uint32_t h = static_cast<uint32_t>(avail.y);
 

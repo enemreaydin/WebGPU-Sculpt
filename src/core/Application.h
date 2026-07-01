@@ -23,6 +23,7 @@ private:
     int width;
     int height;
     std::filesystem::path projectRoot;
+    ImVec2 sceneViewSize = { 1000, 800 };
 
     // Declarations
     GLFWwindow* window = nullptr;

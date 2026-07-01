@@ -60,6 +60,7 @@ void Application::MainLoop() {
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
+    renderer.CreateRenderTarget(device, sceneViewSize.x, sceneViewSize.y);
     // --- YENÝ: 1. PASS - SDF sahnesini offscreen texture'a çiz ---
     {
         RenderPassColorAttachment sceneAttachment = {};

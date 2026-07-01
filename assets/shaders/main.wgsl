@@ -1,34 +1,12 @@
 @group(0) @binding(0) var<storage, read> scene_objects: array<SdfObject>;
 
+
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) uv: vec2f,
 }
 
-fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
-    let bgColor = vec3f(0.05, 0.05, 0.05);
 
-    if (abs(rd.y) < 0.0001) {
-        return bgColor;
-    }
-    let t = -ro.y / rd.y;
-    if (t < 0.0) {
-        return bgColor;
-    }
-
-    let p = ro + rd * t;
-    let gridSize = 1.0;
-    let lineWidth = 0.02;
-
-    let gx = abs(fract(p.x / gridSize) - 0.5);
-    let gz = abs(fract(p.z / gridSize) - 0.5);
-    let lineMask = 1.0 - smoothstep(0.0, lineWidth, min(gx, gz));
-
-    let fade = 1.0 / (1.0 + t * t * 0.01);
-    let gridColor = vec3f(0.3) * lineMask * fade;
-
-    return bgColor + gridColor;
-}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
@@ -78,4 +56,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         return vec4f(final_color * depth_shade, 1.0);
     }
     return vec4f(gridBackground(ro, rd), 1.0);
+}
+
+fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
+    let bgColor = vec3f(0.05, 0.05, 0.05);
+
+    if (abs(rd.y) < 0.0001) {
+        return bgColor;
+    }
+    let t = -ro.y / rd.y;
+    if (t < 0.0) {
+        return bgColor;
+    }
+
+    let p = ro + rd * t;
+    let gridSize = 1.0;
+    let lineWidth = 0.02;
+
+    let gx = abs(fract(p.x / gridSize) - 0.5);
+    let gz = abs(fract(p.z / gridSize) - 0.5);
+    let lineMask = 1.0 - smoothstep(0.0, lineWidth, min(gx, gz));
+
+    let fade = 1.0 / (1.0 + t * t * 0.01);
+    let gridColor = vec3f(0.3) * lineMask * fade;
+
+    return bgColor + gridColor;
 }
