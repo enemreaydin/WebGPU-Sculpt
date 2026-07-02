@@ -8,6 +8,7 @@ void SceneManager::ClearScene() {
     m_Objects.clear();
 }
 
+
 std::vector<SdfObjectData>& SceneManager::GetObjects() {
     return m_Objects;
 }

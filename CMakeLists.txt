@@ -53,6 +53,22 @@ target_compile_definitions(imgui PUBLIC
 )
 
 # ============================================================
+# IMGUIZMO
+# ============================================================
+
+add_library(imguizmo STATIC
+    deps/imguizmo/src/ImGuizmo.cpp
+)
+
+target_include_directories(imguizmo PUBLIC
+    deps/imguizmo/src
+)
+
+target_link_libraries(imguizmo PUBLIC
+    imgui
+)
+
+# ============================================================
 # SHARED SOURCE FILES
 # ============================================================
 
@@ -112,6 +128,7 @@ target_link_libraries(main PRIVATE
     glfw
     glfw3webgpu
     imgui
+    imguizmo
     glm
 )
 

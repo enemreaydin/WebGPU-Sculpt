@@ -12,7 +12,6 @@ public:
 
     std::vector<SdfObjectData>& GetObjects();
     const std::vector<SdfObjectData>& GetObjects() const;
-
     size_t GetObjectCount() const;
 
 private:

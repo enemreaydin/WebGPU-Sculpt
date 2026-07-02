@@ -41,7 +41,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let right = normalize(cross(forward, worldUp));
     let up = cross(right, forward);
 
-    let focalLength = 1.5; 
+    let focalLength = 2.414; 
     let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
 
     var t = 0.0;

@@ -2,7 +2,10 @@
 #include <imgui.h>
 #include "Theme.h"
 #include <string>
-
+#include <ImGuizmo.h>
+#include "scene/SdfObjectFactory.h"
+#include <glm/glm.hpp>
+#include <glm/gtc/type_ptr.hpp>
 void Application::DrawGui() {
     DrawMainMenuBar();
     SdfObjectData newObject{};
@@ -202,6 +205,34 @@ void Application::DrawWorkspace() {
                 renderer.CreateRenderTarget(device, w, h);
                 ImTextureID texId = (ImTextureID)(WGPUTextureView)renderer.GetRenderTargetView();
                 ImGui::Image(texId, avail);
+                // Gizmo connection
+                if (selectedObjectIndex >= 0 && selectedObjectIndex < sceneManager.GetObjects().size())
+                {
+                    ImGuizmo::SetOrthographic(false);
+                    ImGuizmo::SetDrawlist();
+
+                    // SceneView panelinin ekran konumu/boyutu — gizmo'nun nereye çizileceğini bilmesi için
+                    ImVec2 panelPos = ImGui::GetWindowPos();
+                    ImVec2 panelSize = ImGui::GetWindowSize();
+                    ImGuizmo::SetRect(panelPos.x, panelPos.y, panelSize.x, panelSize.y);
+
+                    SdfObjectData& obj = sceneManager.GetObjects()[selectedObjectIndex];  // mutable erişim lazım!
+                    glm::mat4 model = SdfObjectFactory::BuildModelMatrix(obj);
+
+                    bool changed = ImGuizmo::Manipulate(
+                        glm::value_ptr(view),
+                        glm::value_ptr(proj),
+                        ImGuizmo::TRANSLATE,      // sadece translate ile başla
+                        ImGuizmo::WORLD,
+                        glm::value_ptr(model)
+                    );
+
+                    if (changed)
+                    {
+                        SdfObjectFactory::ApplyModelMatrix(model, obj);
+                        RefreshSceneBuffer();
+                    }
+                }
             }
         }
         ImGui::EndChild();

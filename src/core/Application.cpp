@@ -8,6 +8,7 @@
 #include <iostream>
 #include "ui/Theme.h"
 #include <filesystem>
+#include <ImGuizmo.h>
 
 
 bool Application::Initialize() {
@@ -57,14 +58,14 @@ void Application::MainLoop() {
     ImGui_ImplWGPU_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
-
+    ImGuizmo::BeginFrame();
     // Camera updates, view and projection matrices for Gizmo
     UpdateCamera();
     float aspect = (sceneViewSize.y > 0.0f)
         ? sceneViewSize.x / sceneViewSize.y
         : 1.0f;
-    glm::mat4 view = camera.GetViewMatrix();
-    glm::mat4 proj = camera.GetProjectionMatrix(aspect);
+    view = camera.GetViewMatrix();
+    proj = camera.GetProjectionMatrix(aspect);
 
     // Keyboard IO 
     noModifiersPressed = !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt;
@@ -292,7 +293,8 @@ void Application::AddObjectToScene(const SdfObjectData& object)
 
 void Application::UpdateCamera() {
     // Scene operations
-    if (sceneViewHovered)
+    bool gizmoActive = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
+    if (sceneViewHovered && !gizmoActive)
     {
 ;       
         // Orbit movement
