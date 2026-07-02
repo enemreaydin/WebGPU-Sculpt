@@ -69,7 +69,9 @@ void Application::DrawMainMenuBar() {
 
         if (ImGui::BeginMenu("View")) {
             if (ImGui::MenuItem("Reset Camera")) {}
-            if (ImGui::MenuItem("Show/Hide Grid")) {}
+            if (ImGui::MenuItem("Show/Hide Grid", nullptr, showGrid)) {
+                showGrid = !showGrid;
+            }
             ImGui::EndMenu();
         }
 

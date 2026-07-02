@@ -36,9 +36,13 @@ static_assert(sizeof(SdfObjectData) == 64,
     "SdfObjectData must be exactly 64 bytes.");
 
 
-struct GlobalsData {
+struct alignas(16) GlobalsData
+{
     float resolution[2];  // x, y
-    float _pad[2];        // 16 byte'a tamamla
+
+    int32_t showGrid;     // 1 = show, 0 = hide
+    int32_t pad0;         // alignment padding
+
     float cameraPos[4];
     float cameraTarget[4];
 };
