@@ -319,6 +319,7 @@ void Application::UpdateCamera() {
     glm::vec3 camTargetPos = camera.GetTargetPosition();
     globals.resolution[0] = sceneViewSize.x;
     globals.resolution[1] = sceneViewSize.y;
+    globals.showGrid = showGrid ? 1 : 0;
     globals.cameraPos[0] = camPos.x;
     globals.cameraPos[1] = camPos.y;
     globals.cameraPos[2] = camPos.z;
@@ -330,14 +331,11 @@ void Application::UpdateCamera() {
 
 void Application::RefreshSceneBuffer()
 {
-    const auto& objects = sceneManager.GetObjects();
-
-    if (objects.empty()) {
-        renderer.ClearSceneBuffer();
-        return;
-    }
-
-    renderer.CreateSceneBuffer(device, queue, objects);
+    renderer.CreateSceneBuffer(
+        device,
+        queue,
+        sceneManager.GetObjects()
+    );
 }
 
 void Application::NewScene()

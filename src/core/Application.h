@@ -39,6 +39,7 @@ private:
     Settings appSettings;
     AppTheme appTheme;
     AddObjectPanel addObjectPanel;
+    bool showGrid = true;
 
     int selectedObjectIndex = -1;
 
