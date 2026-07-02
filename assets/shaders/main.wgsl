@@ -3,7 +3,7 @@
 struct Globals {
     resolution : vec2f,
     showGrid : i32,
-    pad0 : i32,
+    selectedIndex : i32,
     cameraPos : vec4f,
     cameraTarget : vec4f,
 }

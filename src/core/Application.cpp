@@ -317,6 +317,7 @@ void Application::UpdateCamera() {
 
     glm::vec3 camPos = camera.GetPosition();
     glm::vec3 camTargetPos = camera.GetTargetPosition();
+    globals.selectedIndex = selectedObjectIndex;   // -1 ise "seçim yok"
     globals.resolution[0] = sceneViewSize.x;
     globals.resolution[1] = sceneViewSize.y;
     globals.showGrid = showGrid ? 1 : 0;
