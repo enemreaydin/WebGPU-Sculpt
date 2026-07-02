@@ -66,6 +66,9 @@ void Application::MainLoop() {
     glm::mat4 view = camera.GetViewMatrix();
     glm::mat4 proj = camera.GetProjectionMatrix(aspect);
 
+    // Keyboard IO 
+    noModifiersPressed = !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt;
+
 
     queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     CommandEncoderDescriptor encoderDesc = {};
@@ -283,27 +286,38 @@ void Application::AddObjectToScene(const SdfObjectData& object)
 }
 
 void Application::UpdateCamera() {
+    // Scene operations
     if (sceneViewHovered)
     {
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)){
+;       
+        // Orbit movement
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && noModifiersPressed){
             camera.OrbitMovement(appSettings, sceneCursorDelta);
+            
         }
-        if (sceneScrollDelta != 0.0f)
+        //Zoom
+        if (sceneScrollDelta != 0.0f && noModifiersPressed)
         {
             camera.Zoom(appSettings, sceneScrollDelta);
+        }
+        // Target change(pan)
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt)
+        {
+            camera.TargetPan(appSettings, sceneCursorDelta);
         }
     }
     
 
     glm::vec3 camPos = camera.GetPosition();
+    glm::vec3 camTargetPos = camera.GetTargetPosition();
     globals.resolution[0] = sceneViewSize.x;
     globals.resolution[1] = sceneViewSize.y;
     globals.cameraPos[0] = camPos.x;
     globals.cameraPos[1] = camPos.y;
     globals.cameraPos[2] = camPos.z;
-    globals.cameraTarget[0] = 0.0f;  // þimdilik sabit hedef (orijin)
-    globals.cameraTarget[1] = 0.0f;
-    globals.cameraTarget[2] = 0.0f;
+    globals.cameraTarget[0] = camTargetPos.x;  // þimdilik sabit hedef (orijin)
+    globals.cameraTarget[1] = camTargetPos.y;
+    globals.cameraTarget[2] = camTargetPos.z;
 
 }
 

@@ -49,6 +49,9 @@ private:
     float sceneScrollDelta;
     void UpdateCamera();
 
+    // Shortcuts
+    bool noModifiersPressed;
+          
     // Initializers
     void InitializeWindow();
     void InitializeInstance();

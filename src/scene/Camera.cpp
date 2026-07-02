@@ -7,7 +7,9 @@ glm::vec3 Camera::GetPosition() {
 	float z = targetP.z + distance * cos(pitch) * cos(yaw);
 	return glm::vec3(x, y, z);
 }
-
+glm::vec3 Camera::GetTargetPosition() {
+	return targetP;
+}
 void Camera::OrbitMovement(Settings appSettings, ImVec2 delta) {
 	const float limit = 1.55f;
 	float sensitivity = appSettings.orbitSensitivity;
@@ -20,6 +22,16 @@ void Camera::OrbitMovement(Settings appSettings, ImVec2 delta) {
 void Camera::Zoom(Settings appSettings, float delta) {
 	float sensitivity = appSettings.zoomSensitivity;
 	distance -= delta * sensitivity;
+}
+
+void Camera::TargetPan(Settings appSettings, ImVec2 delta) {
+	float panSensitivity = appSettings.panSensitivity;
+
+	glm::vec3 forward = glm::normalize(targetP - GetPosition());
+	glm::vec3 right = glm::normalize(glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f)));
+	glm::vec3 up = glm::cross(right, forward);
+
+	targetP += -right * delta.x * panSensitivity + up * delta.y * panSensitivity;
 }
 
 // Helper functions to integrate Gizmo
