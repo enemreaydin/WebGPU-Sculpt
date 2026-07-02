@@ -219,7 +219,7 @@ void Application::DrawWorkspace() {
                     ImGuizmo::SetRect(panelPos.x, panelPos.y, panelSize.x, panelSize.y);
 
                     SdfObjectData& obj = sceneManager.GetObjects()[selectedObjectIndex];  // mutable erişim lazım!
-                    glm::mat4 model = SdfObjectFactory::BuildModelMatrix(obj);
+                    glm::mat4 model = SdfObjectFactory::BuildModelMatrix(obj, ImGuizmo::TRANSLATE);
 
                     bool changed = ImGuizmo::Manipulate(
                         glm::value_ptr(view),
@@ -231,7 +231,7 @@ void Application::DrawWorkspace() {
 
                     if (changed)
                     {
-                        SdfObjectFactory::ApplyModelMatrix(model, obj);
+                        SdfObjectFactory::ApplyModelMatrix(model, obj, ImGuizmo::TRANSLATE);
                         RefreshSceneBuffer();
                     }
                 }

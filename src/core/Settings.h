@@ -13,5 +13,5 @@ struct Settings
 	// Camera settings
 	float orbitSensitivity = 0.005f;
 	float zoomSensitivity = 0.15f;
-	float panSensitivity = 0.05f;
+	float panSensitivity = 0.025f;
 };
