@@ -2,10 +2,12 @@
 
 struct Globals {
     resolution : vec2f,
-    _pad : vec2f,
+    showGrid : i32,
+    pad0 : i32,
     cameraPos : vec4f,
     cameraTarget : vec4f,
 }
+
 @group(0) @binding(1) var<uniform> globals : Globals;
 
 struct VertexOutput {
@@ -13,15 +15,13 @@ struct VertexOutput {
     @location(0) uv: vec2f,
 }
 
-
-
 @vertex
 fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     var pos = array<vec2f, 6>(
         vec2f(-1.0, -1.0), vec2f( 1.0, -1.0), vec2f( 1.0,  1.0),
         vec2f(-1.0, -1.0), vec2f( 1.0,  1.0), vec2f(-1.0,  1.0)
     );
-    
+
     var out: VertexOutput;
     out.position = vec4f(pos[vertexIndex], 0.0, 1.0);
     out.uv = pos[vertexIndex];
@@ -30,7 +30,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let ratio = globals.resolution.x / globals.resolution.y ;
+    let ratio = globals.resolution.x / globals.resolution.y;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
 
     let ro = globals.cameraPos.xyz;
@@ -41,28 +41,40 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let right = normalize(cross(forward, worldUp));
     let up = cross(right, forward);
 
-    let focalLength = 1.5; 
+    let focalLength = 1.5;
     let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
 
     var t = 0.0;
     var hit = false;
     var final_color = vec3f(0.0);
+
     for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
         let result = evaluateScene(p);
+
         if (result.distance < 0.001) {
             hit = true;
             final_color = result.color;
             break;
         }
+
         t += result.distance;
-        if (t > 50.0) { break; }
+
+        if (t > 50.0) {
+            break;
+        }
     }
+
     if (hit) {
         let depth_shade = 1.0 - (t / 15.0);
         return vec4f(final_color * depth_shade, 1.0);
     }
-    return vec4f(gridBackground(ro, rd), 1.0);
+
+    if (globals.showGrid == 1) {
+        return vec4f(gridBackground(ro, rd), 1.0);
+    }
+
+    return vec4f(0.02, 0.02, 0.02, 1.0);
 }
 
 fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
@@ -71,7 +83,9 @@ fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
     if (abs(rd.y) < 0.0001) {
         return bgColor;
     }
+
     let t = -ro.y / rd.y;
+
     if (t < 0.0) {
         return bgColor;
     }
