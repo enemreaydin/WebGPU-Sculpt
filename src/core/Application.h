@@ -46,7 +46,8 @@ private:
     Camera camera;
     bool sceneViewHovered = false;
     ImVec2 sceneCursorDelta;
-    void UpdateGlobals();
+    float sceneScrollDelta;
+    void UpdateCamera();
 
     // Initializers
     void InitializeWindow();

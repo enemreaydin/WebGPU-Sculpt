@@ -10,6 +10,7 @@ public:
 	glm::mat4 GetViewMatrix();
 	glm::mat4 GetProjectionMatrix(float aspect);
 	void OrbitMovement(Settings appSettings, ImVec2 delta);
+	void Zoom(Settings appSettings, float delta);
 private:
 	float yaw = 0.5f;
 	float pitch = 0.5f;

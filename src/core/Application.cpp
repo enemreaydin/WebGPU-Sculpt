@@ -59,7 +59,7 @@ void Application::MainLoop() {
     ImGui::NewFrame();
 
     // Camera updates, view and projection matrices for Gizmo
-    UpdateGlobals();
+    UpdateCamera();
     float aspect = (sceneViewSize.y > 0.0f)
         ? sceneViewSize.x / sceneViewSize.y
         : 1.0f;
@@ -282,11 +282,19 @@ void Application::AddObjectToScene(const SdfObjectData& object)
     );
 }
 
-void Application::UpdateGlobals() {
-    if (sceneViewHovered && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+void Application::UpdateCamera() {
+    if (sceneViewHovered)
     {
-        camera.OrbitMovement(appSettings, sceneCursorDelta);
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)){
+            camera.OrbitMovement(appSettings, sceneCursorDelta);
+        }
+        if (sceneScrollDelta != 0.0f)
+        {
+            camera.Zoom(appSettings, sceneScrollDelta);
+        }
     }
+    
+
     glm::vec3 camPos = camera.GetPosition();
     globals.resolution[0] = sceneViewSize.x;
     globals.resolution[1] = sceneViewSize.y;

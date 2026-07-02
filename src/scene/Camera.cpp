@@ -17,6 +17,10 @@ void Camera::OrbitMovement(Settings appSettings, ImVec2 delta) {
 	if (pitch < -limit) pitch = -limit;
 }
 
+void Camera::Zoom(Settings appSettings, float delta) {
+	float sensitivity = appSettings.zoomSensitivity;
+	distance -= delta * sensitivity;
+}
 
 // Helper functions to integrate Gizmo
 glm::mat4 Camera::GetViewMatrix() {
