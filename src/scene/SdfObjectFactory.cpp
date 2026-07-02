@@ -98,3 +98,20 @@ void SdfObjectFactory::ApplyModelMatrix(const glm::mat4& matrix, SdfObjectData& 
     }
     // ROTATE not yet
 }
+
+float SdfObjectFactory::EstimateObjectRadius(const SdfObjectData& obj)
+{
+    switch (obj.type)
+    {
+    case 0: // Sphere
+        return obj.size[0];
+    case 1: // Box
+        return glm::length(glm::vec3(obj.size[0], obj.size[1], obj.size[2]));
+    case 2: // Cylinder
+        return std::max(obj.size[0], obj.size[1]);
+    case 3: // Torus
+        return obj.size[0] + obj.size[1];
+    default:
+        return 1.0f;
+    }
+}

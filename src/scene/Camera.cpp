@@ -48,3 +48,13 @@ glm::mat4 Camera::GetProjectionMatrix(float aspect) {
 		100.0f                 // far: en uzak kýrpma düzlemi
 	);
 }
+
+// Camera.cpp
+void Camera::TargetObject(const glm::vec3& objPosition, float objRadius)
+{
+	targetP = objPosition;
+
+	// Mesafeyi nesnenin boyutuna göre ayarla — çok yakýn/uzak olmasýn
+	float minDistance = 2.0f;
+	distance = std::max(objRadius * 8.0f, minDistance);
+}

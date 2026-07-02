@@ -63,7 +63,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     }
 
     if (hit) {
-        let depth_shade = 1.0 - (t / 15.0);
+        let depth_shade = max(0.05, 1.0 - (t / 30.0));
         return vec4f(final_color * depth_shade, 1.0);
     }
 
