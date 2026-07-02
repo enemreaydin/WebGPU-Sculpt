@@ -66,8 +66,16 @@ void Application::MainLoop() {
     glm::mat4 view = camera.GetViewMatrix();
     glm::mat4 proj = camera.GetProjectionMatrix(aspect);
 
+    if (renderer.globalsBuffer)
+    {
+        queue.writeBuffer(
+            renderer.globalsBuffer,
+            0,
+            &globals,
+            sizeof(GlobalsData)
+        );
+    }
 
-    queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
@@ -275,11 +283,9 @@ void Application::AddObjectToScene(const SdfObjectData& object)
 
     sceneManager.AddObject(obj);
 
-    renderer.CreateSceneBuffer(
-        device,
-        queue,
-        sceneManager.GetObjects()
-    );
+    selectedObjectIndex = static_cast<int>(sceneManager.GetObjects().size()) - 1;
+
+    RefreshSceneBuffer();
 }
 
 void Application::UpdateGlobals() {
@@ -299,18 +305,6 @@ void Application::UpdateGlobals() {
 
 }
 
-void Application::RefreshSceneBuffer()
-{
-    const auto& objects = sceneManager.GetObjects();
-
-    if (objects.empty()) {
-        renderer.ClearSceneBuffer();
-        return;
-    }
-
-    renderer.CreateSceneBuffer(device, queue, objects);
-}
-
 void Application::NewScene()
 {
     sceneManager.ClearScene();
@@ -323,6 +317,7 @@ void Application::NewScene()
 
     std::cout << "[INFO]: New empty scene created.\n";
 }
+
 void Application::OpenSceneFromSDFO()
 {
     std::filesystem::path path = projectRoot / "assets/test.sdfo";
@@ -336,7 +331,7 @@ void Application::OpenSceneFromSDFO()
             << path << std::endl;
     }
     else {
-        renderer.ClearSceneBuffer();
+        RefreshSceneBuffer();
 
         std::cerr << "[WARNING]: SDFO file could not be loaded: "
             << path << std::endl;
@@ -355,4 +350,13 @@ void Application::SaveSceneToSDFO()
         std::cerr << "[WARNING]: SDFO file could not be saved: "
             << path << std::endl;
     }
+}
+
+void Application::RefreshSceneBuffer()
+{
+    renderer.CreateSceneBuffer(
+        device,
+        queue,
+        sceneManager.GetObjects()
+    );
 }

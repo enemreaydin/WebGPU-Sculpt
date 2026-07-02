@@ -40,6 +40,8 @@ private:
     AppTheme appTheme;
     AddObjectPanel addObjectPanel;
 
+    int selectedObjectIndex = -1;
+
     // Scene 
     GlobalsData globals;
     ImVec2 sceneViewSize = { 1000, 800 };
@@ -69,6 +71,7 @@ private:
     void DrawMainMenuBar();
     void DrawSettings();
     void DrawWorkspace();
+
 
     void AddObjectToScene(const SdfObjectData& object);
 
