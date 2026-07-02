@@ -190,6 +190,7 @@ void Application::DrawWorkspace() {
             // Scene movement checks
             sceneViewHovered = ImGui::IsWindowHovered();
             sceneCursorDelta = ImGui::GetIO().MouseDelta;
+            sceneScrollDelta = ImGui::GetIO().MouseWheel;
 
 
             ImVec2 avail = ImGui::GetContentRegionAvail();
