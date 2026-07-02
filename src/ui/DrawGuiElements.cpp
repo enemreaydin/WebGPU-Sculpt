@@ -1,6 +1,7 @@
 ﻿#include "core/Application.h"
 #include <imgui.h>
 #include "Theme.h"
+#include <string>
 
 void Application::DrawGui() {
     DrawMainMenuBar();
@@ -207,10 +208,87 @@ void Application::DrawWorkspace() {
 
         ImGui::SameLine();
 
-        if (ImGui::BeginChild("SceneProperties", ImVec2(300, 0), true)) {
-            ImGui::Text("Nesne ayarlari");
+        if (ImGui::BeginChild("SceneProperties", ImVec2(300, 0), true))
+        {
+            ImGui::Text("Scene Objects");
+            ImGui::Separator();
+
+            auto& objects = sceneManager.GetObjects();
+
+            for (int i = 0; i < static_cast<int>(objects.size()); i++)
+            {
+                std::string label = "Object " + std::to_string(i);
+
+                if (objects[i].type == static_cast<int32_t>(SdfObjectType::Sphere))
+                    label = "Sphere " + std::to_string(i);
+                else if (objects[i].type == static_cast<int32_t>(SdfObjectType::Box))
+                    label = "Box " + std::to_string(i);
+                else if (objects[i].type == static_cast<int32_t>(SdfObjectType::Cylinder))
+                    label = "Cylinder " + std::to_string(i);
+                else if (objects[i].type == static_cast<int32_t>(SdfObjectType::Torus))
+                    label = "Torus " + std::to_string(i);
+
+                if (ImGui::Selectable(label.c_str(), selectedObjectIndex == i))
+                {
+                    selectedObjectIndex = i;
+                }
+            }
+
+            ImGui::Separator();
+
+            if (selectedObjectIndex >= 0 && selectedObjectIndex < static_cast<int>(objects.size()))
+            {
+                SdfObjectData& obj = objects[selectedObjectIndex];
+
+                ImGui::Text("Selected Object");
+                ImGui::Separator();
+
+                bool changed = false;
+
+                changed |= ImGui::InputFloat3("Position", obj.position.data());
+                changed |= ImGui::InputFloat3("Size", obj.size.data());
+                changed |= ImGui::ColorEdit3("Color", obj.color.data());
+
+                ImGui::Separator();
+
+                const char* operations[] = {
+                    "None",
+                    "Union",
+                    "Subtract",
+                    "Intersection"
+                };
+
+                int currentOp = obj.op;
+
+                if (ImGui::Combo("Operation", &currentOp, operations, IM_ARRAYSIZE(operations)))
+                {
+                    obj.op = currentOp;
+                    changed = true;
+                }
+
+                if (changed)
+                {
+                    RefreshSceneBuffer();
+                }
+
+                if (ImGui::Button("Delete Object"))
+                {
+                    objects.erase(objects.begin() + selectedObjectIndex);
+
+                    if (objects.empty())
+                        selectedObjectIndex = -1;
+                    else if (selectedObjectIndex >= static_cast<int>(objects.size()))
+                        selectedObjectIndex = static_cast<int>(objects.size()) - 1;
+
+                    RefreshSceneBuffer();
+                }
+            }
+            else
+            {
+                ImGui::Text("No object selected.");
+            }
         }
-        ImGui::EndChild(); 
+        ImGui::EndChild();
     }
     ImGui::PopStyleVar(2);
     ImGui::End();

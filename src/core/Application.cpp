@@ -68,9 +68,16 @@ void Application::MainLoop() {
 
     // Keyboard IO 
     noModifiersPressed = !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt;
+    if (renderer.globalsBuffer)
+    {
+        queue.writeBuffer(
+            renderer.globalsBuffer,
+            0,
+            &globals,
+            sizeof(GlobalsData)
+        );
+    }
 
-
-    queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
 
@@ -278,11 +285,9 @@ void Application::AddObjectToScene(const SdfObjectData& object)
 
     sceneManager.AddObject(obj);
 
-    renderer.CreateSceneBuffer(
-        device,
-        queue,
-        sceneManager.GetObjects()
-    );
+    selectedObjectIndex = static_cast<int>(sceneManager.GetObjects().size()) - 1;
+
+    RefreshSceneBuffer();
 }
 
 void Application::UpdateCamera() {
@@ -345,6 +350,7 @@ void Application::NewScene()
 
     std::cout << "[INFO]: New empty scene created.\n";
 }
+
 void Application::OpenSceneFromSDFO()
 {
     std::filesystem::path path = projectRoot / "assets/test.sdfo";
@@ -358,7 +364,7 @@ void Application::OpenSceneFromSDFO()
             << path << std::endl;
     }
     else {
-        renderer.ClearSceneBuffer();
+        RefreshSceneBuffer();
 
         std::cerr << "[WARNING]: SDFO file could not be loaded: "
             << path << std::endl;
