@@ -13,7 +13,6 @@ public:
 	void OrbitMovement(Settings appSettings, ImVec2 delta);
 	void Zoom(Settings appSettings, float delta);
 	void TargetPan(Settings appSettings, ImVec2 delta);
-	void TargetObject(const glm::vec3& objPosition, float objRadius);
 private:
 	float yaw = 0.5f;
 	float pitch = 0.5f;

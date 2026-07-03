@@ -234,10 +234,8 @@ void Application::DrawWorkspace() {
                         SdfObjectFactory::ApplyModelMatrix(model, obj, ImGuizmo::TRANSLATE);
                         RefreshSceneBuffer();
                     }
-
                 }
             }
-
         }
         ImGui::EndChild();
 

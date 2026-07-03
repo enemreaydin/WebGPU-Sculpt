@@ -13,5 +13,4 @@ public:
     static SdfObjectData CreateTorus(float majorRadius, float minorRadius);
     static glm::mat4 BuildModelMatrix(const SdfObjectData& obj, ImGuizmo::OPERATION mode);
     static void ApplyModelMatrix(const glm::mat4& matrix, SdfObjectData& obj, ImGuizmo::OPERATION mode);
-    static float EstimateObjectRadius(const SdfObjectData& obj);
 };

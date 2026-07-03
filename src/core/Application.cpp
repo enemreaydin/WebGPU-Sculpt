@@ -9,7 +9,6 @@
 #include "ui/Theme.h"
 #include <filesystem>
 #include <ImGuizmo.h>
-#include "scene/SdfObjectFactory.h"
 
 
 bool Application::Initialize() {
@@ -295,36 +294,23 @@ void Application::AddObjectToScene(const SdfObjectData& object)
 void Application::UpdateCamera() {
     // Scene operations
     bool gizmoActive = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
-    if (sceneViewHovered)
+    if (sceneViewHovered && !gizmoActive)
     {
-        if (!gizmoActive)
-        {
-            // Orbit movement
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && noModifiersPressed) {
-                camera.OrbitMovement(appSettings, sceneCursorDelta);
-
-            }
-            //Zoom
-            if (sceneScrollDelta != 0.0f && noModifiersPressed)
-            {
-                camera.Zoom(appSettings, sceneScrollDelta);
-            }
-            // Target change(pan)
-            if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt)
-            {
-                camera.TargetPan(appSettings, sceneCursorDelta);
-            }
+;       
+        // Orbit movement
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && noModifiersPressed){
+            camera.OrbitMovement(appSettings, sceneCursorDelta);
+            
         }
-        
-        if (ImGui::IsKeyPressed(ImGuiKey_F)
-            && selectedObjectIndex >= 0
-            && selectedObjectIndex < static_cast<int>(sceneManager.GetObjects().size()))
+        //Zoom
+        if (sceneScrollDelta != 0.0f && noModifiersPressed)
         {
-            const SdfObjectData& obj = sceneManager.GetObjects()[selectedObjectIndex];
-            glm::vec3 pos(obj.position[0], obj.position[1], obj.position[2]);
-            float radius = SdfObjectFactory::EstimateObjectRadius(obj);
-            camera.TargetObject(pos, radius);
-
+            camera.Zoom(appSettings, sceneScrollDelta);
+        }
+        // Target change(pan)
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt)
+        {
+            camera.TargetPan(appSettings, sceneCursorDelta);
         }
     }
     
