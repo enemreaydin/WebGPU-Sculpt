@@ -69,22 +69,69 @@ target_link_libraries(imguizmo PUBLIC
 )
 
 # ============================================================
-# SHARED SOURCE FILES
+# PROJECT SOURCES
 # ============================================================
 
-set(SDF_CORE_SOURCES
-    src/core/WebGPUImpl.cpp
-    src/render/SdfRenderer.cpp
-    src/utils/FileHelper.cpp
-    src/scene/SceneManager.cpp
-    src/scene/SdfObjectFactory.cpp
-    src/io/ExtensionLoader.cpp
+# Editor layer: application, main loop, GUI panels
+set(EDITOR_SOURCES
+    src/editor/Application.cpp
+    src/editor/Gui.cpp
+    src/editor/MainMenuBar.cpp
+    src/editor/SettingsPanel.cpp
+    src/editor/Workspace.cpp
 )
 
+# Platform layer: window, graphics context, WebGPU wrapper implementation
+set(PLATFORM_SOURCES
+    src/platform/Window.cpp
+    src/platform/GraphicsContext.cpp
+    src/platform/WebGPUImpl.cpp
+)
+
+# SDF engine: rendering, scene, camera, serialization, utilities
+set(ENGINE_SOURCES
+    src/renderer/SdfRenderer.cpp
+    src/camera/Camera.cpp
+    src/camera/CameraController.cpp
+    src/scene/SceneManager.cpp
+    src/scene/SdfObjectFactory.cpp
+    src/serialization/ExtensionLoader.cpp
+    src/serialization/SceneSerializer.cpp
+    src/utils/FileHelper.cpp
+)
+
+# Interaction: gizmo and selection controllers
+set(INTERACTION_SOURCES
+    src/interaction/GizmoController.cpp
+)
+
+# Reusable UI widgets
 set(UI_SOURCES
     src/ui/Theme.cpp
-    src/ui/DrawGuiElements.cpp
     src/ui/AddObjectPanel.cpp
+)
+
+# Listed so headers show up in IDE project views
+set(PROJECT_HEADERS
+    src/platform/Window.h
+    src/platform/GraphicsContext.h
+    src/editor/Application.h
+    src/editor/Settings.h
+    src/scene/data/SdfEnums.h
+    src/scene/data/SdfObjectData.h
+    src/scene/data/GlobalsData.h
+    src/renderer/SdfRenderer.h
+    src/camera/Camera.h
+    src/camera/CameraController.h
+    src/scene/SceneManager.h
+    src/scene/SdfObjectFactory.h
+    src/interaction/GizmoController.h
+    src/interaction/SelectionState.h
+    src/serialization/ExtensionLoader.h
+    src/serialization/SceneSerializer.h
+    src/utils/FileHelper.h
+    src/ui/Theme.h
+    src/ui/AddObjectPanel.h
 )
 
 # ============================================================
@@ -93,27 +140,12 @@ set(UI_SOURCES
 
 add_executable(main
     src/main.cpp
-    src/core/Application.cpp
-    src/core/Application.h
-    src/core/Settings.h
-
-    src/render/SdfRenderer.h
-
-    src/scene/SceneManager.h
-    src/scene/SdfObjectFactory.h
-
-    src/io/ExtensionLoader.h
-
-    src/utils/FileHelper.h
-
-    src/ui/Theme.h
-    src/ui/AddObjectPanel.h
-
-    src/scene/Camera.h
-    src/scene/Camera.cpp
-
-    ${SDF_CORE_SOURCES}
+    ${EDITOR_SOURCES}
+    ${PLATFORM_SOURCES}
+    ${ENGINE_SOURCES}
+    ${INTERACTION_SOURCES}
     ${UI_SOURCES}
+    ${PROJECT_HEADERS}
 )
 
 target_include_directories(main PRIVATE
@@ -141,8 +173,8 @@ endif()
 # ============================================================
 
 add_executable(create_test_sdfo
-    src/tests/create_test_sdfo.cpp
-    src/io/ExtensionLoader.cpp
+    src/tools/create_test_sdfo.cpp
+    src/serialization/ExtensionLoader.cpp
     src/scene/SceneManager.cpp
 )
 

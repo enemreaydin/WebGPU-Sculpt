@@ -1,5 +1,5 @@
 #include <webgpu/webgpu.hpp>
-#include "core/Application.h"
+#include "editor/Application.h"
 
 int main() {
     Application app;

@@ -1,5 +1,5 @@
 #include "AddObjectPanel.h"
-#include "../scene/SdfObjectFactory.h"
+#include "scene/SdfObjectFactory.h"
 
 #include <imgui.h>
 

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../core/SdfDefinitions.h"
+#include "scene/data/SdfObjectData.h"
+#include "scene/data/SdfEnums.h"
 
 class AddObjectPanel
 {

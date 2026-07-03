@@ -5,9 +5,6 @@
 
 namespace Utils
 {
-    // Proje kökünü (assets ve src klasörlerini içeren dizini) bulur.
-    std::filesystem::path FindProjectRoot();
-
-    // Dosyayý verilen tam yoldan okur.
+    // Reads a file at the given path and returns its contents.
     std::string ReadFile(const std::filesystem::path& path);
 }

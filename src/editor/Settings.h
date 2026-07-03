@@ -1,5 +1,5 @@
 #pragma once
-#include "../ui/Theme.h"
+#include "ui/Theme.h"
 
 struct Settings
 {

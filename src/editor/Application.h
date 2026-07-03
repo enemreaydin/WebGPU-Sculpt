@@ -3,23 +3,34 @@
 #include <GLFW/glfw3.h>
 #include <filesystem>
 
-#include "core/Settings.h"
+#include "platform/Window.h"
+#include "platform/GraphicsContext.h"
+#include "editor/Settings.h"
 #include "scene/SceneManager.h"
-#include "render/SdfRenderer.h"    
-#include "core/SdfDefinitions.h"
-#include "scene/Camera.h"
+#include "renderer/SdfRenderer.h"
+#include "scene/data/SdfEnums.h"
+#include "scene/data/SdfObjectData.h"
+#include "scene/data/GlobalsData.h"
+#include "camera/Camera.h"
+#include "camera/CameraController.h"
+#include "interaction/SelectionState.h"
+#include "serialization/SceneSerializer.h"
 #include "ui/AddObjectPanel.h"
 
 using namespace wgpu;
 
 class Application {
 public:
-    Application(int width = 1280, int height = 720) : width(width), height(height) {}
+    Application(int width = 1280, int height = 720)
+        : width(width), height(height),
+          sceneSerializer(sceneManager, renderer, graphics, projectRoot) {}
 
     bool Initialize();
     void Terminate();
     void MainLoop();
     bool IsRunning();
+
+    void OnResize(int width, int height);
 
 private:
     int width;
@@ -27,26 +38,23 @@ private:
     std::filesystem::path projectRoot;
 
     // Declarations
-    GLFWwindow* window = nullptr;
-    Instance instance = nullptr;
-    Surface surface = nullptr;
-    Adapter adapter = nullptr;
-    Device device = nullptr;
-    Queue queue = nullptr;
-    TextureFormat surfaceFormat = TextureFormat::Undefined;
+    Platform::Window window;
+    Platform::GraphicsContext graphics;
     SceneManager sceneManager;
-    SdfRenderer renderer;      
+    SdfRenderer renderer;
+    SceneSerializer sceneSerializer;
     Settings appSettings;
     AppTheme appTheme;
     AddObjectPanel addObjectPanel;
     bool showGrid = true;
 
-    int selectedObjectIndex = -1;
+    SelectionState selectionState;
 
-    // Scene 
+    // Scene
     GlobalsData globals;
     ImVec2 sceneViewSize = { 1000, 800 };
     Camera camera;
+    CameraController cameraController;
     bool sceneViewHovered = false;
     ImVec2 sceneCursorDelta;
     float sceneScrollDelta;
@@ -58,20 +66,12 @@ private:
     bool noModifiersPressed;
           
     // Initializers
-    void InitializeWindow();
-    void InitializeInstance();
-    void InitializeSurface();
-    void InitializeAdapter();
-    void InitializeDevice();
-    void InitializeQueue();
-    void ConfigureSurface();
     void InitializeImgui();
     void InitializeRenderer();
 
     // Helpers
     void FindProjectRoot();
     TextureView GetNextSurfaceTextureView();
-    void OnResize(int width, int height);
 
     // GUI functions
     void DrawGui();
@@ -81,10 +81,5 @@ private:
 
 
     void AddObjectToScene(const SdfObjectData& object);
-
-    void NewScene();
-    void OpenSceneFromSDFO();
-    void SaveSceneToSDFO();
-    void RefreshSceneBuffer();
 
 };

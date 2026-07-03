@@ -1,7 +1,5 @@
 #include "Application.h"
 #include "utils/FileHelper.h"
-#include "io/ExtensionLoader.h"
-#include <glfw3webgpu.h>
 #include <imgui.h>
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_wgpu.h>
@@ -13,15 +11,15 @@
 
 bool Application::Initialize() {
     FindProjectRoot();
-    InitializeWindow();
-    InitializeInstance();
-    InitializeSurface();
-    InitializeAdapter();
-    InitializeDevice();
-    InitializeQueue();
-    ConfigureSurface();
-    adapter.release();
-    instance.release();
+    window.InitializeWindow(width, height, this);
+    graphics.InitializeInstance();
+    graphics.InitializeSurface(window.GetHandle());
+    graphics.InitializeAdapter();
+    graphics.InitializeDevice();
+    graphics.InitializeQueue();
+    graphics.ConfigureSurface(width, height);
+    graphics.adapter.release();
+    graphics.instance.release();
     InitializeImgui();
     InitializeRenderer();
     
@@ -33,22 +31,22 @@ void Application::Terminate() {
     ImGui_ImplWGPU_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
-    surface.unconfigure();
-    queue.release();
-    surface.release();
-    device.release();
-    adapter.release();
-    instance.release();
-    glfwDestroyWindow(window);
+    graphics.surface.unconfigure();
+    graphics.queue.release();
+    graphics.surface.release();
+    graphics.device.release();
+    graphics.adapter.release();
+    graphics.instance.release();
+    glfwDestroyWindow(window.GetHandle());
     glfwTerminate();
 }
 
 bool Application::IsRunning() {
-    return !glfwWindowShouldClose(window);
+    return !glfwWindowShouldClose(window.GetHandle());
 }
 
 void Application::MainLoop() {
-    // GPU kaynaklarý hazýr deðilse çizim yapma
+    // Skip drawing until the GPU resources are ready.
     if (!renderer.pipeline) {
         glfwPollEvents();
         return;
@@ -71,7 +69,7 @@ void Application::MainLoop() {
     noModifiersPressed = !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt;
     if (renderer.globalsBuffer)
     {
-        queue.writeBuffer(
+        graphics.queue.writeBuffer(
             renderer.globalsBuffer,
             0,
             &globals,
@@ -80,9 +78,9 @@ void Application::MainLoop() {
     }
 
     CommandEncoderDescriptor encoderDesc = {};
-    CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+    CommandEncoder encoder = graphics.device.createCommandEncoder(encoderDesc);
 
-    // --- YENÝ: 1. PASS - SDF sahnesini offscreen texture'a çiz ---
+    // Pass 1: render the SDF scene into an offscreen texture.
     {
         RenderPassColorAttachment sceneAttachment = {};
         sceneAttachment.view = renderer.GetRenderTargetView();
@@ -107,7 +105,7 @@ void Application::MainLoop() {
         scenePass.release();
     }
 
-    // --- 2. PASS - ImGui'yi swapchain'e çiz (SDF çizimi artýk burada YOK) ---
+    // Pass 2: draw ImGui to the swapchain (the SDF scene is not drawn here).
     TextureView targetView = GetNextSurfaceTextureView();
     if (!targetView) return;
 
@@ -126,7 +124,7 @@ void Application::MainLoop() {
 
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
 
-    // Imgui çizimleri
+    // ImGui draw calls
     DrawGui();
     ImGui::Render();
     ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
@@ -137,95 +135,38 @@ void Application::MainLoop() {
     CommandBufferDescriptor cmdBufDesc = {};
     CommandBuffer cmdBuf = encoder.finish(cmdBufDesc);
     encoder.release();
-    queue.submit(1, &cmdBuf);
+    graphics.queue.submit(1, &cmdBuf);
     cmdBuf.release();
     targetView.release();
-    surface.present();
-    device.poll(false);
+    graphics.surface.present();
+    graphics.device.poll(false);
 }
 
-// Imitializer functions
-
-void Application::InitializeWindow() {
-    glfwInit();
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-    window = glfwCreateWindow(width, height, "SDF Editor", nullptr, nullptr);
-    glfwSetWindowSizeLimits(window, 1000, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
-    // Resizable property
-    glfwSetWindowUserPointer(window, this);
-    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int nw, int nh) {
-        auto app = static_cast<Application*>(glfwGetWindowUserPointer(w));
-        app->OnResize(nw, nh);
-        });
-}
-
-void Application::InitializeInstance() { instance = createInstance({}); }
-
-void Application::InitializeSurface() { surface = glfwGetWGPUSurface(instance, window); }
-
-void Application::InitializeAdapter() {
-    RequestAdapterOptions adapterOpts = {};
-    adapterOpts.compatibleSurface = surface;
-    adapter = instance.requestAdapter(adapterOpts);
-    surfaceFormat = surface.getPreferredFormat(adapter);
-}
-
-void Application::InitializeDevice() {
-    DeviceDescriptor deviceDesc = {};
-    deviceDesc.label = "Device";
-    deviceDesc.requiredLimits = nullptr;
-    deviceDesc.defaultQueue.label = "Queue";
-    deviceDesc.deviceLostCallback = [](WGPUDeviceLostReason reason, char const* message, void*) {
-        std::cout << "Device lost: " << reason;
-        if (message) std::cout << " (" << message << ")";
-        std::cout << std::endl;
-        };
-    device = adapter.requestDevice(deviceDesc);
-}
-
-void Application::InitializeQueue() {
-    queue = device.getQueue();
-}
-
-void Application::ConfigureSurface() {
-    SurfaceConfiguration config = {};
-    config.width = width;
-    config.height = height;
-    config.usage = TextureUsage::RenderAttachment;
-    config.format = surfaceFormat;
-    config.viewFormatCount = 0;
-    config.viewFormats = nullptr;
-    config.device = device;
-    config.presentMode = PresentMode::Fifo;
-    config.alphaMode = CompositeAlphaMode::Auto;
-    surface.configure(config);
-}
+// Initializer functions
 
 void Application::OnResize(int newWidth, int newHeight) {
     if (newWidth <= 0 || newHeight <= 0) return;
     width = newWidth; height = newHeight;
-    ConfigureSurface();
+    graphics.ConfigureSurface(width, height);
 }
 
 void Application::InitializeImgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ApplyTheme(appTheme); // Theme customization
-    ImGui_ImplGlfw_InitForOther(window, true); // Glfw initialization
+    ImGui_ImplGlfw_InitForOther(window.GetHandle(), true); // Glfw initialization
 
     ImGui_ImplWGPU_InitInfo initInfo;
-    initInfo.Device = device;
+    initInfo.Device = graphics.device;
     initInfo.NumFramesInFlight = 3;
-    initInfo.RenderTargetFormat = (WGPUTextureFormat)surfaceFormat;
+    initInfo.RenderTargetFormat = (WGPUTextureFormat)graphics.surfaceFormat;
     initInfo.DepthStencilFormat = WGPUTextureFormat_Undefined;
     ImGui_ImplWGPU_Init(&initInfo); // wgpu initialization
 }
 
 TextureView Application::GetNextSurfaceTextureView() {
     SurfaceTexture surfaceTexture;
-    surface.getCurrentTexture(&surfaceTexture);
+    graphics.surface.getCurrentTexture(&surfaceTexture);
     if (surfaceTexture.status != SurfaceGetCurrentTextureStatus::Success)
         return nullptr;
 
@@ -268,11 +209,11 @@ void Application::FindProjectRoot()
 void Application::InitializeRenderer()
 {
     renderer.SetProjectRoot(projectRoot);
-    renderer.Initialize(device, surfaceFormat);
-    renderer.CreateRenderTarget(device, 1000, 800);
+    renderer.Initialize(graphics.device, graphics.surfaceFormat);
+    renderer.CreateRenderTarget(graphics.device, 1000, 800);
 
     // Create an empty scene buffer so the shader can render the grid.
-    renderer.CreateSceneBuffer(device, queue, sceneManager.GetObjects());
+    renderer.CreateSceneBuffer(graphics.device, graphics.queue, sceneManager.GetObjects());
 }
 
 void Application::AddObjectToScene(const SdfObjectData& object)
@@ -286,102 +227,27 @@ void Application::AddObjectToScene(const SdfObjectData& object)
 
     sceneManager.AddObject(obj);
 
-    selectedObjectIndex = static_cast<int>(sceneManager.GetObjects().size()) - 1;
+    selectionState.selectedObjectIndex = static_cast<int>(sceneManager.GetObjects().size()) - 1;
 
-    RefreshSceneBuffer();
+    sceneSerializer.RefreshSceneBuffer();
 }
 
 void Application::UpdateCamera() {
-    // Scene operations
-    bool gizmoActive = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
-    if (sceneViewHovered && !gizmoActive)
-    {
-;       
-        // Orbit movement
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && noModifiersPressed){
-            camera.OrbitMovement(appSettings, sceneCursorDelta);
-            
-        }
-        //Zoom
-        if (sceneScrollDelta != 0.0f && noModifiersPressed)
-        {
-            camera.Zoom(appSettings, sceneScrollDelta);
-        }
-        // Target change(pan)
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt)
-        {
-            camera.TargetPan(appSettings, sceneCursorDelta);
-        }
-    }
-    
+    cameraController.Update(camera, appSettings, sceneViewHovered, noModifiersPressed, sceneCursorDelta, sceneScrollDelta);
+
 
     glm::vec3 camPos = camera.GetPosition();
     glm::vec3 camTargetPos = camera.GetTargetPosition();
-    globals.selectedIndex = selectedObjectIndex;   // -1 ise "seçim yok"
+    globals.selectedIndex = selectionState.selectedObjectIndex;   // -1 means "nothing selected"
     globals.resolution[0] = sceneViewSize.x;
     globals.resolution[1] = sceneViewSize.y;
     globals.showGrid = showGrid ? 1 : 0;
     globals.cameraPos[0] = camPos.x;
     globals.cameraPos[1] = camPos.y;
     globals.cameraPos[2] = camPos.z;
-    globals.cameraTarget[0] = camTargetPos.x;  // þimdilik sabit hedef (orijin)
+    globals.cameraTarget[0] = camTargetPos.x;
     globals.cameraTarget[1] = camTargetPos.y;
     globals.cameraTarget[2] = camTargetPos.z;
 
 }
 
-void Application::RefreshSceneBuffer()
-{
-    renderer.CreateSceneBuffer(
-        device,
-        queue,
-        sceneManager.GetObjects()
-    );
-}
-
-void Application::NewScene()
-{
-    sceneManager.ClearScene();
-
-    renderer.CreateSceneBuffer(
-        device,
-        queue,
-        sceneManager.GetObjects()
-    );
-
-    std::cout << "[INFO]: New empty scene created.\n";
-}
-
-void Application::OpenSceneFromSDFO()
-{
-    std::filesystem::path path = projectRoot / "assets/test.sdfo";
-
-    sceneManager.ClearScene();
-
-    if (ExtensionLoader::LoadFromSDFO(path.string(), sceneManager)) {
-        RefreshSceneBuffer();
-
-        std::cout << "[INFO]: Scene loaded from: "
-            << path << std::endl;
-    }
-    else {
-        RefreshSceneBuffer();
-
-        std::cerr << "[WARNING]: SDFO file could not be loaded: "
-            << path << std::endl;
-    }
-}
-
-void Application::SaveSceneToSDFO()
-{
-    std::filesystem::path path = projectRoot / "assets/test.sdfo";
-
-    if (ExtensionLoader::SaveToSDFO(path.string(), sceneManager.GetObjects())) {
-        std::cout << "[INFO]: Scene saved to: "
-            << path << std::endl;
-    }
-    else {
-        std::cerr << "[WARNING]: SDFO file could not be saved: "
-            << path << std::endl;
-    }
-}

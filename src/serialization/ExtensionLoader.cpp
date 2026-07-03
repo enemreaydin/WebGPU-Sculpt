@@ -3,7 +3,7 @@
 #include <iostream>
 #include <vector>
 
-// 2. SAVE TO BDF (Binary Kaydetme)
+// Write the scene to a binary .sdfo file.
 bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<SdfObjectData>& objects) {
     std::ofstream file(filepath, std::ios::binary);
     if (!file.is_open()) {
@@ -11,14 +11,14 @@ bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<
         return false;
     }
 
-    // Header
+    // Header: magic tag + object count
     char magic[4] = { 'S', 'D', 'F', 'O' };
     int32_t count = (int32_t)objects.size();
 
     file.write(magic, 4);
     file.write((char*)&count, sizeof(int32_t));
 
-    // Veri
+    // Payload
     file.write((char*)objects.data(), objects.size() * sizeof(SdfObjectData));
 
     file.close();
@@ -26,7 +26,7 @@ bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<
     return true;
 }
 
-// 3. LOAD FROM BDF (Binary Okuma)
+// Read a binary .sdfo file back into the scene.
 bool ExtensionLoader::LoadFromSDFO(const std::string& filepath, SceneManager& sceneManager) {
     std::ifstream file(filepath, std::ios::binary);
     if (!file.is_open()) {

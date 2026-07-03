@@ -2,7 +2,7 @@
 #include <glm/glm.hpp>  
 #include <glm/gtc/matrix_transform.hpp>
 #include <imgui.h>
-#include "../core/Settings.h"
+#include "editor/Settings.h"
 class Camera
 {
 public:

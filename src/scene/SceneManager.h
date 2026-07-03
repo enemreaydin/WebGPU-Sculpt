@@ -1,5 +1,5 @@
 #pragma once
-#include "../core/SdfDefinitions.h"
+#include "scene/data/SdfObjectData.h"
 #include <vector>
 
 class SceneManager {

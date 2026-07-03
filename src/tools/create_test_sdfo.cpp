@@ -1,4 +1,5 @@
-#include "../io/ExtensionLoader.h"
+#include "serialization/ExtensionLoader.h"
+#include "scene/data/SdfEnums.h"
 #include <filesystem>
 #include <iostream>
 #include <vector>

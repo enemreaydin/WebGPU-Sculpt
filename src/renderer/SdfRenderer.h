@@ -1,7 +1,8 @@
 #pragma once
 
 #include <webgpu/webgpu.hpp>
-#include "../core/SdfDefinitions.h"
+#include "scene/data/SdfObjectData.h"
+#include "scene/data/GlobalsData.h"
 
 #include <cstdint>
 #include <filesystem>

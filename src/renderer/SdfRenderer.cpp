@@ -1,5 +1,5 @@
 #include "SdfRenderer.h"
-#include "../utils/FileHelper.h"
+#include "utils/FileHelper.h"
 #include <iostream>
 
 void SdfRenderer::SetProjectRoot(const std::filesystem::path& root)
@@ -11,7 +11,7 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
 {
     renderTargetFormat = format;
 
-    std::string coreShader = Utils::ReadFile(projectRoot / "src/scene/sdf_core.wgsl");
+    std::string coreShader = Utils::ReadFile(projectRoot / "assets/shaders/sdf_core.wgsl");
     std::string mainShader = Utils::ReadFile(projectRoot / "assets/shaders/main.wgsl");
 
     if (coreShader.empty() || mainShader.empty())

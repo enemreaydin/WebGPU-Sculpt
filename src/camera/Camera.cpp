@@ -42,9 +42,9 @@ glm::mat4 Camera::GetViewMatrix() {
 
 glm::mat4 Camera::GetProjectionMatrix(float aspect) {
 	return glm::perspective(
-		glm::radians(45.0f),   // fov: dikey görüþ açýsý (radyan)
-		aspect,                // en/boy oraný (dýþarýdan gelir)
-		0.1f,                  // near: en yakýn kýrpma düzlemi
-		100.0f                 // far: en uzak kýrpma düzlemi
+		glm::radians(45.0f),   // vertical field of view
+		aspect,                // aspect ratio (passed in)
+		0.1f,                  // near plane
+		100.0f                 // far plane
 	);
 }

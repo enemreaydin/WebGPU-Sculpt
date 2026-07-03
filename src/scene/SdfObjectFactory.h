@@ -1,9 +1,7 @@
 #pragma once
 
-#include "../core/SdfDefinitions.h"
-#include <glm/glm.hpp>
-#include <imgui.h>
-#include <ImGuizmo.h>
+#include "scene/data/SdfObjectData.h"
+#include "scene/data/SdfEnums.h"
 class SdfObjectFactory
 {
 public:
@@ -11,6 +9,4 @@ public:
     static SdfObjectData CreateBox(float x, float y, float z);
     static SdfObjectData CreateCylinder(float radius, float height);
     static SdfObjectData CreateTorus(float majorRadius, float minorRadius);
-    static glm::mat4 BuildModelMatrix(const SdfObjectData& obj, ImGuizmo::OPERATION mode);
-    static void ApplyModelMatrix(const glm::mat4& matrix, SdfObjectData& obj, ImGuizmo::OPERATION mode);
 };
