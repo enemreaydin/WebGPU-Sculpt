@@ -1,5 +1,5 @@
 #pragma once
-#include <GLFW/glfw3.h>
+#include <SDL.h>
 
 namespace Platform
 {
@@ -8,9 +8,9 @@ namespace Platform
     {
     public:
         void InitializeWindow(int width, int height, void* userPointer);
-        GLFWwindow* GetHandle() const { return window; }
+        SDL_Window* GetHandle() const { return window; }
 
     private:
-        GLFWwindow* window = nullptr;
+        SDL_Window* window = nullptr;
     };
 }

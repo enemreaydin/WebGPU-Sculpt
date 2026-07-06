@@ -1,6 +1,6 @@
 #pragma once
 #include <webgpu/webgpu.hpp>
-#include <GLFW/glfw3.h>
+#include <SDL.h>
 #include <filesystem>
 
 #include "platform/Window.h"
@@ -33,6 +33,7 @@ public:
     void OnResize(int width, int height);
 
 private:
+    bool running = true;
     int width;
     int height;
     std::filesystem::path projectRoot;

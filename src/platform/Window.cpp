@@ -4,17 +4,21 @@
 namespace Platform
 {
     void Window::InitializeWindow(int width, int height, void* userPointer) {
-        glfwInit();
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+    SDL_Init(SDL_INIT_VIDEO);
 
-        window = glfwCreateWindow(width, height, "SDF Editor", nullptr, nullptr);
-        glfwSetWindowSizeLimits(window, 1000, 600, GLFW_DONT_CARE, GLFW_DONT_CARE);
-        // Route framebuffer resize events back to this instance.
-        glfwSetWindowUserPointer(window, userPointer);
-        glfwSetFramebufferSizeCallback(window, [](GLFWwindow* w, int nw, int nh) {
-            auto app = static_cast<Application*>(glfwGetWindowUserPointer(w));
-            app->OnResize(nw, nh);
-            });
-    }
+    window = SDL_CreateWindow(
+        "SDF Editor",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        width, height,
+        SDL_WINDOW_RESIZABLE
+    );
+
+    SDL_SetWindowMinimumSize(window, 1000, 600);
+    // GLFW_DONT_CARE karşılığı: maksimum boyut sınırlaması koymuyoruz,
+    // bu yüzden SDL_SetWindowMaximumSize hiç çağrılmıyor.
+
+    // GLFW'nin glfwSetWindowUserPointer karşılığı: SDL_SetWindowData
+    // ile window'a bir "isim -> pointer" kaydı yapıyoruz.
+    SDL_SetWindowData(window, "app", userPointer);
+}
 }

@@ -12,13 +12,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 include(deps/webgpu/webgpu.cmake)
 
 if (NOT EMSCRIPTEN)
-    add_subdirectory(deps/glfw)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
+    set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+    set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
+    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+    add_subdirectory(deps/SDL)
 else()
-    add_library(glfw INTERFACE)
-    target_link_options(glfw INTERFACE -sUSE_GLFW=3)
+    add_library(SDL2-static INTERFACE)
+    target_link_options(SDL2-static INTERFACE -sUSE_SDL=2)
 endif()
-
-add_subdirectory(deps/glfw3webgpu)
 
 if (EXISTS "${CMAKE_SOURCE_DIR}/deps/glm/CMakeLists.txt")
     add_subdirectory(deps/glm)
@@ -34,18 +38,19 @@ add_library(imgui STATIC
     deps/imgui/imgui_tables.cpp
     deps/imgui/imgui_widgets.cpp
     deps/imgui/imgui_demo.cpp
-    deps/imgui/backends/imgui_impl_glfw.cpp
+    deps/imgui/backends/imgui_impl_sdl2.cpp
     deps/imgui/backends/imgui_impl_wgpu.cpp
 )
 
 target_include_directories(imgui PUBLIC
     deps/imgui
     deps/imgui/backends
+    deps/SDL/include
 )
 
 target_link_libraries(imgui PUBLIC
     webgpu
-    glfw
+    SDL2-static
 )
 
 target_compile_definitions(imgui PUBLIC
@@ -157,12 +162,12 @@ target_include_directories(main PRIVATE
     deps/imgui
     deps/imgui/backends
     deps/glm
+    deps/SDL/include
 )
 
 target_link_libraries(main PRIVATE
     webgpu
-    glfw
-    glfw3webgpu
+    SDL2-static
     imgui
     imguizmo
     glm

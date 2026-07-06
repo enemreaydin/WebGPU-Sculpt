@@ -1,4 +1,6 @@
 #include <webgpu/webgpu.hpp>
+#define SDL_MAIN_HANDLED
+#include <SDL.h>
 #include "editor/Application.h"
 
 int main() {

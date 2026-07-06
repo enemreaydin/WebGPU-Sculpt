@@ -1,6 +1,6 @@
 #include "platform/GraphicsContext.h"
-#include <glfw3webgpu.h>
-#include <GLFW/glfw3.h>
+#include <SDL.h>
+#include <SDL_syswm.h>
 #include <iostream>
 
 using namespace wgpu;
@@ -9,8 +9,25 @@ namespace Platform
 {
     void GraphicsContext::InitializeInstance() { instance = createInstance({}); }
 
-    void GraphicsContext::InitializeSurface(GLFWwindow* window) { surface = glfwGetWGPUSurface(instance, window); }
+    void GraphicsContext::InitializeSurface(SDL_Window* window) {
+            SDL_SysWMinfo wmInfo;
+            SDL_VERSION(&wmInfo.version);
+            SDL_GetWindowWMInfo(window, &wmInfo);
 
+            HWND hwnd = wmInfo.info.win.window;
+            HINSTANCE hinstance = GetModuleHandle(nullptr);
+
+            SurfaceDescriptorFromWindowsHWND fromWindowsHWND = {};
+            fromWindowsHWND.chain.next = nullptr;
+            fromWindowsHWND.chain.sType = SType::SurfaceDescriptorFromWindowsHWND;
+            fromWindowsHWND.hwnd = hwnd;
+            fromWindowsHWND.hinstance = hinstance;
+
+            SurfaceDescriptor surfaceDesc = {};
+            surfaceDesc.nextInChain = &fromWindowsHWND.chain;
+
+            surface = instance.createSurface(surfaceDesc);
+        }
     void GraphicsContext::InitializeAdapter() {
         RequestAdapterOptions adapterOpts = {};
         adapterOpts.compatibleSurface = surface;

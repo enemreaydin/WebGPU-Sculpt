@@ -1,7 +1,7 @@
 #pragma once
 #include <webgpu/webgpu.hpp>
 
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace Platform
 {
@@ -10,7 +10,7 @@ namespace Platform
     {
     public:
         void InitializeInstance();
-        void InitializeSurface(GLFWwindow* window);
+        void InitializeSurface(SDL_Window* window);
         void InitializeAdapter();
         void InitializeDevice();
         void InitializeQueue();

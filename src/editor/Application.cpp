@@ -1,7 +1,7 @@
 #include "Application.h"
 #include "utils/FileHelper.h"
 #include <imgui.h>
-#include <backends/imgui_impl_glfw.h>
+#include <backends/imgui_impl_sdl2.h>
 #include <backends/imgui_impl_wgpu.h>
 #include <iostream>
 #include "ui/Theme.h"
@@ -29,7 +29,7 @@ bool Application::Initialize() {
 void Application::Terminate() {
     renderer.Destroy();
     ImGui_ImplWGPU_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();
     graphics.surface.unconfigure();
     graphics.queue.release();
@@ -37,24 +37,38 @@ void Application::Terminate() {
     graphics.device.release();
     graphics.adapter.release();
     graphics.instance.release();
-    glfwDestroyWindow(window.GetHandle());
-    glfwTerminate();
+    SDL_DestroyWindow(window.GetHandle());
+    SDL_Quit();
 }
 
 bool Application::IsRunning() {
-    return !glfwWindowShouldClose(window.GetHandle());
+    return running;
 }
 
-void Application::MainLoop() {
+void Application::MainLoop() {    
+    SDL_Event event;
+    while (SDL_PollEvent(&event)) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+
+        if (event.type == SDL_QUIT) {
+            running = false;
+        }
+        if (event.type == SDL_WINDOWEVENT) {
+            if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
+                running = false;
+            }
+            if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
+                OnResize(event.window.data1, event.window.data2);
+            }
+        }
+    }        
     // Skip drawing until the GPU resources are ready.
     if (!renderer.pipeline) {
-        glfwPollEvents();
         return;
     }
 
-    glfwPollEvents();
     ImGui_ImplWGPU_NewFrame();
-    ImGui_ImplGlfw_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     ImGuizmo::BeginFrame();
     // Camera updates, view and projection matrices for Gizmo
@@ -154,7 +168,7 @@ void Application::InitializeImgui() {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ApplyTheme(appTheme); // Theme customization
-    ImGui_ImplGlfw_InitForOther(window.GetHandle(), true); // Glfw initialization
+    ImGui_ImplSDL2_InitForOther(window.GetHandle()); // Glfw initialization
 
     ImGui_ImplWGPU_InitInfo initInfo;
     initInfo.Device = graphics.device;
@@ -212,7 +226,7 @@ void Application::InitializeRenderer()
     renderer.Initialize(graphics.device, graphics.surfaceFormat);
     renderer.CreateRenderTarget(graphics.device, 1000, 800);
 
-    // Create an empty scene buffer (and empty CSG program) so the shader can render the grid.
+    // Create an empty scene buffer so the shader can render the grid.
     sceneSerializer.RefreshSceneBuffer();
 }
 
