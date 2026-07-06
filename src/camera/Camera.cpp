@@ -10,7 +10,7 @@ glm::vec3 Camera::GetPosition() {
 glm::vec3 Camera::GetTargetPosition() {
 	return targetP;
 }
-void Camera::OrbitMovement(Settings appSettings, ImVec2 delta) {
+void Camera::OrbitMovement(Settings appSettings, Vec2 delta) {
 	const float limit = 1.55f;
 	float sensitivity = appSettings.orbitSensitivity;
 	yaw = yaw - delta.x * sensitivity;
@@ -24,7 +24,7 @@ void Camera::Zoom(Settings appSettings, float delta) {
 	distance -= delta * sensitivity;
 }
 
-void Camera::TargetPan(Settings appSettings, ImVec2 delta) {
+void Camera::TargetPan(Settings appSettings, Vec2 delta) {
 	float panSensitivity = appSettings.panSensitivity;
 
 	glm::vec3 forward = glm::normalize(targetP - GetPosition());

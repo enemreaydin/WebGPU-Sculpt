@@ -63,7 +63,7 @@ if (NOT TARGET webgpu)
 		FetchContent_DeclareShallowGit(
 			webgpu-backend-wgpu
 			GIT_REPOSITORY https://github.com/eliemichel/WebGPU-distribution
-			GIT_TAG        ac055bef9d8c37f28e7706e4bd32153cbc0c210f # wgpu-v0.19.4.1 + fix
+			GIT_TAG        v0.3.0-beta # wgpu-v24.0.3.1
 		)
 		FetchContent_MakeAvailable(webgpu-backend-wgpu)
 

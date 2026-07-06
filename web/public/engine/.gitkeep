@@ -1,0 +1,2 @@
+# The Emscripten build emits sdf-engine.js / .wasm / .data into this directory.
+# Keep the folder in git so a fresh clone has somewhere to place them.

@@ -1,0 +1,1 @@
+- [Web build toolchain](web-build-toolchain.md) — how to compile the Emscripten/WASM engine (needs emscripten 3.1.61 + VS2022 ninja/cmake)

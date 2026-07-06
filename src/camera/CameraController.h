@@ -1,9 +1,12 @@
 #pragma once
 #include "camera/Camera.h"
+#include "core/ViewportInput.h"
 
-// Reads mouse input each frame and drives the Camera (orbit / zoom / pan).
+// Drives the Camera (orbit / zoom / pan) from a per-frame ViewportInput. Input
+// is supplied by the caller (web bindings or a native event pump) rather than
+// polled from any UI toolkit.
 class CameraController
 {
 public:
-    void Update(Camera& camera, Settings appSettings, bool sceneViewHovered, bool noModifiersPressed, ImVec2 sceneCursorDelta, float sceneScrollDelta);
+    void Update(Camera& camera, const Settings& appSettings, const ViewportInput& input);
 };

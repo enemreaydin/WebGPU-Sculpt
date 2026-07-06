@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(webgpu_project)
+project(sdf_editor)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,91 +9,51 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # DEPENDENCIES
 # ============================================================
 
+# The engine code targets the older WebGPU API (const char* labels,
+# ShaderModuleWGSLDescriptor, SurfaceGetCurrentTextureStatus::Success, etc.),
+# which is what the pinned Emscripten distribution provides. For the native
+# build, select the matching older wgpu-native (v0.19.x, WGPU_STATIC) instead of
+# the default v24 distribution whose API was rewritten and would not compile.
+if (NOT EMSCRIPTEN)
+    set(WEBGPU_BACKEND "WGPU_STATIC" CACHE STRING "WebGPU backend" FORCE)
+endif()
+
 include(deps/webgpu/webgpu.cmake)
 
-if (NOT EMSCRIPTEN)
-    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
-    set(SDL_STATIC ON CACHE BOOL "" FORCE)
-    set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
-    set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
-    set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
-    set(SDL2_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
-    add_subdirectory(deps/SDL)
-else()
-    add_library(SDL2-static INTERFACE)
-    target_link_options(SDL2-static INTERFACE -sUSE_SDL=2)
-endif()
+# SDL3 is built from source for both native and Emscripten. On the web it
+# creates the HTML <canvas> the WebGPU surface binds to.
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_AUDIO OFF CACHE BOOL "" FORCE)
+set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
+set(SDL3_DISABLE_INSTALL ON CACHE BOOL "" FORCE)
+add_subdirectory(deps/SDL)
 
 if (EXISTS "${CMAKE_SOURCE_DIR}/deps/glm/CMakeLists.txt")
     add_subdirectory(deps/glm)
 endif()
 
-# ============================================================
-# IMGUI
-# ============================================================
-
-add_library(imgui STATIC
-    deps/imgui/imgui.cpp
-    deps/imgui/imgui_draw.cpp
-    deps/imgui/imgui_tables.cpp
-    deps/imgui/imgui_widgets.cpp
-    deps/imgui/imgui_demo.cpp
-    deps/imgui/backends/imgui_impl_sdl2.cpp
-    deps/imgui/backends/imgui_impl_wgpu.cpp
-)
-
-target_include_directories(imgui PUBLIC
-    deps/imgui
-    deps/imgui/backends
-    deps/SDL/include
-)
-
-target_link_libraries(imgui PUBLIC
-    webgpu
-    SDL2-static
-)
-
-target_compile_definitions(imgui PUBLIC
-    IMGUI_IMPL_WEBGPU_BACKEND_WGPU
-)
-
-# ============================================================
-# IMGUIZMO
-# ============================================================
-
-add_library(imguizmo STATIC
-    deps/imguizmo/src/ImGuizmo.cpp
-)
-
-target_include_directories(imguizmo PUBLIC
-    deps/imguizmo/src
-)
-
-target_link_libraries(imguizmo PUBLIC
-    imgui
-)
+# NOTE: ImGui / ImGuizmo have been removed. The editor UI now lives in the web
+# front-end (see web/), which drives the engine through src/bindings.
 
 # ============================================================
 # PROJECT SOURCES
 # ============================================================
 
-# Editor layer: application, main loop, GUI panels
+# Editor layer: application + main render loop.
 set(EDITOR_SOURCES
     src/editor/Application.cpp
-    src/editor/Gui.cpp
-    src/editor/MainMenuBar.cpp
-    src/editor/SettingsPanel.cpp
-    src/editor/Workspace.cpp
 )
 
-# Platform layer: window, graphics context, WebGPU wrapper implementation
+# Platform layer: window, graphics context, WebGPU wrapper implementation.
 set(PLATFORM_SOURCES
     src/platform/Window.cpp
     src/platform/GraphicsContext.cpp
     src/platform/WebGPUImpl.cpp
 )
 
-# SDF engine: rendering, scene, camera, serialization, utilities
+# SDF engine: rendering, scene, camera, serialization, utilities.
 set(ENGINE_SOURCES
     src/renderer/SdfRenderer.cpp
     src/camera/Camera.cpp
@@ -106,19 +66,15 @@ set(ENGINE_SOURCES
     src/utils/FileHelper.cpp
 )
 
-# Interaction: gizmo and selection controllers
-set(INTERACTION_SOURCES
-    src/interaction/GizmoController.cpp
+# Web bindings: compiled into the WASM module only (guarded by __EMSCRIPTEN__).
+set(BINDING_SOURCES
+    src/bindings/WebBindings.cpp
 )
 
-# Reusable UI widgets
-set(UI_SOURCES
-    src/ui/Theme.cpp
-    src/ui/AddObjectPanel.cpp
-)
-
-# Listed so headers show up in IDE project views
+# Listed so headers show up in IDE project views.
 set(PROJECT_HEADERS
+    src/core/Vec2.h
+    src/core/ViewportInput.h
     src/platform/Window.h
     src/platform/GraphicsContext.h
     src/editor/Application.h
@@ -134,13 +90,10 @@ set(PROJECT_HEADERS
     src/camera/CameraController.h
     src/scene/SceneManager.h
     src/scene/SdfObjectFactory.h
-    src/interaction/GizmoController.h
     src/interaction/SelectionState.h
     src/serialization/ExtensionLoader.h
     src/serialization/SceneSerializer.h
     src/utils/FileHelper.h
-    src/ui/Theme.h
-    src/ui/AddObjectPanel.h
 )
 
 # ============================================================
@@ -152,24 +105,19 @@ add_executable(main
     ${EDITOR_SOURCES}
     ${PLATFORM_SOURCES}
     ${ENGINE_SOURCES}
-    ${INTERACTION_SOURCES}
-    ${UI_SOURCES}
+    ${BINDING_SOURCES}
     ${PROJECT_HEADERS}
 )
 
 target_include_directories(main PRIVATE
     src
-    deps/imgui
-    deps/imgui/backends
     deps/glm
     deps/SDL/include
 )
 
 target_link_libraries(main PRIVATE
     webgpu
-    SDL2-static
-    imgui
-    imguizmo
+    SDL3-static
     glm
 )
 
@@ -177,49 +125,73 @@ if (TARGET glm::glm)
     target_link_libraries(main PRIVATE glm::glm)
 endif()
 
-# ============================================================
-# SDFO TEST FILE GENERATOR
-# ============================================================
+# The static wgpu-native library (Rust) pulls in Windows system libraries for
+# sockets, NT syscalls, crypto RNG and the WGL/OpenGL fallback path. These must
+# be linked explicitly by the consumer.
+if (NOT EMSCRIPTEN AND WIN32)
+    target_link_libraries(main PRIVATE
+        ws2_32 userenv bcrypt ntdll opengl32 d3dcompiler propsys runtimeobject oleaut32
+    )
+endif()
 
-add_executable(create_test_sdfo
-    src/tools/create_test_sdfo.cpp
-    src/serialization/ExtensionLoader.cpp
-    src/scene/SceneManager.cpp
-    src/scene/csg/CsgTree.cpp
-)
+# ------------------------------------------------------------
+# Emscripten (web) build
+# ------------------------------------------------------------
+if (EMSCRIPTEN)
+    # Emit an ES/UMD module + .wasm + preloaded .data into web/public/engine so
+    # the React app (web/) can load it.
+    set_target_properties(main PROPERTIES
+        OUTPUT_NAME "sdf-engine"
+        SUFFIX ".js"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/web/public/engine"
+    )
 
-target_include_directories(create_test_sdfo PRIVATE
-    src
-)
-
-if (TARGET glm::glm)
-    target_link_libraries(create_test_sdfo PRIVATE glm::glm)
+    target_link_options(main PRIVATE
+        -sALLOW_MEMORY_GROWTH=1
+        -sASYNCIFY                # lets the Promise-based requestAdapter/requestDevice
+                                  # be written as synchronous calls during init
+        -sMODULARIZE=1
+        -sEXPORT_NAME=createSdfModule
+        -sENVIRONMENT=web
+        -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString
+        # Bundle the shaders/assets into the virtual filesystem at /assets.
+        "--preload-file" "${CMAKE_SOURCE_DIR}/assets@/assets"
+    )
 endif()
 
 # ============================================================
-# POST BUILD COPY
+# SDFO TEST FILE GENERATOR (native CLI tool only)
 # ============================================================
 
-target_copy_webgpu_binaries(main)
+if (NOT EMSCRIPTEN)
+    add_executable(create_test_sdfo
+        src/tools/create_test_sdfo.cpp
+        src/serialization/ExtensionLoader.cpp
+        src/scene/SceneManager.cpp
+        src/scene/csg/CsgTree.cpp
+    )
 
-add_custom_command(TARGET main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:main>/fonts
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/fonts/Inter_18pt-Regular.ttf
-        $<TARGET_FILE_DIR:main>/fonts/Inter_18pt-Regular.ttf
-    COMMENT "Copying font next to executable"
-)
+    target_include_directories(create_test_sdfo PRIVATE
+        src
+    )
 
-add_custom_command(TARGET main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:main>/assets
-    COMMENT "Copying assets next to executable"
-)
+    if (TARGET glm::glm)
+        target_link_libraries(create_test_sdfo PRIVATE glm::glm)
+    endif()
+endif()
 
-add_custom_command(TARGET main POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/src
-        $<TARGET_FILE_DIR:main>/src
-    COMMENT "Copying src next to executable"
-)
+# ============================================================
+# POST BUILD COPY (native only)
+# ============================================================
+
+if (NOT EMSCRIPTEN)
+    # wgpu-native DLL lives next to the executable.
+    target_copy_webgpu_binaries(main)
+
+    add_custom_command(TARGET main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/assets
+            $<TARGET_FILE_DIR:main>/assets
+        COMMENT "Copying assets next to executable"
+    )
+endif()

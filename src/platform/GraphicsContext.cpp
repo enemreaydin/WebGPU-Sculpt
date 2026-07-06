@@ -1,32 +1,62 @@
 #include "platform/GraphicsContext.h"
-#include <SDL.h>
-#include <SDL_syswm.h>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_properties.h>
 #include <iostream>
 
 using namespace wgpu;
 
 namespace Platform
 {
-    void GraphicsContext::InitializeInstance() { instance = createInstance({}); }
+    void GraphicsContext::InitializeInstance() {
+#ifdef __EMSCRIPTEN__
+        // Emscripten's wgpuCreateInstance asserts the descriptor is null and
+        // ignores it entirely — passing a (non-null) default descriptor aborts.
+        instance = wgpuCreateInstance(nullptr);
+#else
+        instance = createInstance({});
+#endif
+    }
 
     void GraphicsContext::InitializeSurface(SDL_Window* window) {
-            SDL_SysWMinfo wmInfo;
-            SDL_VERSION(&wmInfo.version);
-            SDL_GetWindowWMInfo(window, &wmInfo);
+        SDL_PumpEvents();
 
-            HWND hwnd = wmInfo.info.win.window;
-            HINSTANCE hinstance = GetModuleHandle(nullptr);
+#ifdef __EMSCRIPTEN__
+        // In the browser the WebGPU surface is bound to the HTML canvas that SDL
+        // created. SDL's emscripten backend uses the canvas selector "#canvas".
+        (void)window;
+        SurfaceDescriptorFromCanvasHTMLSelector fromCanvas = {};
+        fromCanvas.chain.next = nullptr;
+        fromCanvas.chain.sType = SType::SurfaceDescriptorFromCanvasHTMLSelector;
+        fromCanvas.selector = "#canvas";
 
-            SurfaceDescriptorFromWindowsHWND fromWindowsHWND = {};
-            fromWindowsHWND.chain.next = nullptr;
-            fromWindowsHWND.chain.sType = SType::SurfaceDescriptorFromWindowsHWND;
-            fromWindowsHWND.hwnd = hwnd;
-            fromWindowsHWND.hinstance = hinstance;
+        SurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = &fromCanvas.chain;
 
-            SurfaceDescriptor surfaceDesc = {};
-            surfaceDesc.nextInChain = &fromWindowsHWND.chain;
+        surface = instance.createSurface(surfaceDesc);
+#elif defined(_WIN32)
+        HWND hwnd = (HWND)SDL_GetPointerProperty(
+            SDL_GetWindowProperties(window),
+            SDL_PROP_WINDOW_WIN32_HWND_POINTER,
+            nullptr
+        );
+        HINSTANCE hinstance = GetModuleHandle(nullptr);
 
-            surface = instance.createSurface(surfaceDesc);
+        SurfaceDescriptorFromWindowsHWND fromWindowsHWND = {};
+        fromWindowsHWND.chain.next = nullptr;
+        fromWindowsHWND.chain.sType = SType::SurfaceDescriptorFromWindowsHWND;
+        fromWindowsHWND.hwnd = hwnd;
+        fromWindowsHWND.hinstance = hinstance;
+
+        SurfaceDescriptor surfaceDesc = {};
+        surfaceDesc.nextInChain = &fromWindowsHWND.chain;
+
+        surface = instance.createSurface(surfaceDesc);
+#else
+#error "Unsupported platform for GraphicsContext::InitializeSurface"
+#endif
         }
     void GraphicsContext::InitializeAdapter() {
         RequestAdapterOptions adapterOpts = {};

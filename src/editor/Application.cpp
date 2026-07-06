@@ -1,13 +1,13 @@
 #include "Application.h"
 #include "utils/FileHelper.h"
-#include <imgui.h>
-#include <backends/imgui_impl_sdl2.h>
-#include <backends/imgui_impl_wgpu.h>
+#include "scene/SdfObjectFactory.h"
 #include <iostream>
-#include "ui/Theme.h"
+#include <sstream>
 #include <filesystem>
-#include <ImGuizmo.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 bool Application::Initialize() {
     FindProjectRoot();
@@ -20,23 +20,17 @@ bool Application::Initialize() {
     graphics.ConfigureSurface(width, height);
     graphics.adapter.release();
     graphics.instance.release();
-    InitializeImgui();
     InitializeRenderer();
-    
+
     return true;
 }
 
 void Application::Terminate() {
     renderer.Destroy();
-    ImGui_ImplWGPU_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
-    ImGui::DestroyContext();
     graphics.surface.unconfigure();
     graphics.queue.release();
     graphics.surface.release();
     graphics.device.release();
-    graphics.adapter.release();
-    graphics.instance.release();
     SDL_DestroyWindow(window.GetHandle());
     SDL_Quit();
 }
@@ -45,87 +39,39 @@ bool Application::IsRunning() {
     return running;
 }
 
-void Application::MainLoop() {    
-    SDL_Event event;
-    while (SDL_PollEvent(&event)) {
-        ImGui_ImplSDL2_ProcessEvent(&event);
-
-        if (event.type == SDL_QUIT) {
-            running = false;
-        }
-        if (event.type == SDL_WINDOWEVENT) {
-            if (event.window.event == SDL_WINDOWEVENT_CLOSE) {
-                running = false;
-            }
-            if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
-                OnResize(event.window.data1, event.window.data2);
-            }
-        }
-    }        
-    // Skip drawing until the GPU resources are ready.
+void Application::MainLoop() {
+    // Skip drawing until the GPU pipeline is ready.
     if (!renderer.pipeline) {
         return;
     }
 
-    ImGui_ImplWGPU_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-    ImGuizmo::BeginFrame();
-    // Camera updates, view and projection matrices for Gizmo
     UpdateCamera();
-    float aspect = (sceneViewSize.y > 0.0f)
-        ? sceneViewSize.x / sceneViewSize.y
+
+    float aspect = (renderHeight > 0)
+        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight)
         : 1.0f;
     view = camera.GetViewMatrix();
     proj = camera.GetProjectionMatrix(aspect);
 
-    // Keyboard IO 
-    noModifiersPressed = !ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt;
-    if (renderer.globalsBuffer)
-    {
-        graphics.queue.writeBuffer(
-            renderer.globalsBuffer,
-            0,
-            &globals,
-            sizeof(GlobalsData)
-        );
+    if (renderer.globalsBuffer) {
+        graphics.queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     }
+
+    TextureView targetView = GetNextSurfaceTextureView();
+    if (!targetView) return;
 
     CommandEncoderDescriptor encoderDesc = {};
     CommandEncoder encoder = graphics.device.createCommandEncoder(encoderDesc);
 
-    // Pass 1: render the SDF scene into an offscreen texture.
-    {
-        RenderPassColorAttachment sceneAttachment = {};
-        sceneAttachment.view = renderer.GetRenderTargetView();
-        sceneAttachment.resolveTarget = nullptr;
-        sceneAttachment.loadOp = LoadOp::Clear;
-        sceneAttachment.storeOp = StoreOp::Store;
-        sceneAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.12, 1.0 };
-
-        RenderPassDescriptor scenePassDesc = {};
-        scenePassDesc.colorAttachmentCount = 1;
-        scenePassDesc.colorAttachments = &sceneAttachment;
-        scenePassDesc.depthStencilAttachment = nullptr;
-        scenePassDesc.timestampWrites = nullptr;
-
-        RenderPassEncoder scenePass = encoder.beginRenderPass(scenePassDesc);
-        if (renderer.bindGroup && renderer.sceneBuffer) {
-            scenePass.setPipeline(renderer.pipeline);
-            scenePass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
-            scenePass.draw(6, 1, 0, 0);
-        }
-        scenePass.end();
-        scenePass.release();
-    }
-
-    // Pass 2: draw ImGui to the swapchain (the SDF scene is not drawn here).
-    TextureView targetView = GetNextSurfaceTextureView();
-    if (!targetView) return;
-
     RenderPassColorAttachment colorAttachment = {};
     colorAttachment.view = targetView;
     colorAttachment.resolveTarget = nullptr;
+#ifdef __EMSCRIPTEN__
+    // Browser WebGPU (Dawn) requires depthSlice to be "undefined" for a 2D
+    // color attachment; the zero-initialized default (0) is rejected. This
+    // field only exists in the newer emscripten header, not the pinned native one.
+    colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
     colorAttachment.loadOp = LoadOp::Clear;
     colorAttachment.storeOp = StoreOp::Store;
     colorAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.12, 1.0 };
@@ -136,13 +82,15 @@ void Application::MainLoop() {
     renderPassDesc.depthStencilAttachment = nullptr;
     renderPassDesc.timestampWrites = nullptr;
 
+    // The SDF is drawn as a full-screen quad straight onto the swap-chain
+    // (canvas) surface. The React UI is composited over it by the browser, so
+    // there is no longer an intermediate offscreen texture.
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
-
-    // ImGui draw calls
-    DrawGui();
-    ImGui::Render();
-    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), renderPass);
-
+    if (renderer.bindGroup && renderer.sceneBuffer) {
+        renderPass.setPipeline(renderer.pipeline);
+        renderPass.setBindGroup(0, renderer.bindGroup, 0, nullptr);
+        renderPass.draw(6, 1, 0, 0);
+    }
     renderPass.end();
     renderPass.release();
 
@@ -152,30 +100,20 @@ void Application::MainLoop() {
     graphics.queue.submit(1, &cmdBuf);
     cmdBuf.release();
     targetView.release();
+
+#ifndef __EMSCRIPTEN__
+    // On the web the browser presents the canvas automatically; present/poll
+    // are native-only.
     graphics.surface.present();
     graphics.device.poll(false);
+#endif
 }
-
-// Initializer functions
 
 void Application::OnResize(int newWidth, int newHeight) {
     if (newWidth <= 0 || newHeight <= 0) return;
     width = newWidth; height = newHeight;
+    renderWidth = newWidth; renderHeight = newHeight;
     graphics.ConfigureSurface(width, height);
-}
-
-void Application::InitializeImgui() {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ApplyTheme(appTheme); // Theme customization
-    ImGui_ImplSDL2_InitForOther(window.GetHandle()); // Glfw initialization
-
-    ImGui_ImplWGPU_InitInfo initInfo;
-    initInfo.Device = graphics.device;
-    initInfo.NumFramesInFlight = 3;
-    initInfo.RenderTargetFormat = (WGPUTextureFormat)graphics.surfaceFormat;
-    initInfo.DepthStencilFormat = WGPUTextureFormat_Undefined;
-    ImGui_ImplWGPU_Init(&initInfo); // wgpu initialization
 }
 
 TextureView Application::GetNextSurfaceTextureView() {
@@ -199,57 +137,49 @@ TextureView Application::GetNextSurfaceTextureView() {
     return texture.createView(viewDesc);
 }
 
-void Application::FindProjectRoot()
-    {
+void Application::FindProjectRoot() {
     namespace fs = std::filesystem;
-    fs::path current = fs::current_path();
-    
-    while (!current.empty())
-    {
-        if (fs::exists(current / "assets") &&
-            fs::exists(current / "src"))
-        {
-            projectRoot = current;
 
-            std::cout << "Project Root found:\n"
-                << projectRoot << std::endl;
+#ifdef __EMSCRIPTEN__
+    // In the browser the assets are preloaded into the virtual filesystem at
+    // "/assets" (see the --preload-file link flag). Use the absolute mount root
+    // so shader paths don't depend on the WASM FS current directory.
+    projectRoot = "/";
+    return;
+#else
+    fs::path current = fs::current_path();
+
+    while (!current.empty()) {
+        if (fs::exists(current / "assets") && fs::exists(current / "src")) {
+            projectRoot = current;
+            std::cout << "Project Root found:\n" << projectRoot << std::endl;
             return;
         }
         current = current.parent_path();
     }
     throw std::runtime_error("Project Root cannot be found!");
+#endif
 }
 
-void Application::InitializeRenderer()
-{
+void Application::InitializeRenderer() {
     renderer.SetProjectRoot(projectRoot);
     renderer.Initialize(graphics.device, graphics.surfaceFormat);
-    renderer.CreateRenderTarget(graphics.device, 1000, 800);
 
     // Create an empty scene buffer so the shader can render the grid.
     sceneSerializer.RefreshSceneBuffer();
 }
 
-void Application::AddObjectToScene(const SdfObjectData& object)
-{
-    // SceneManager assigns the permanent objectId and attaches the primitive to the
-    // CSG tree's root Union node.
-    sceneManager.AddObject(object);
-
-    selectionState.selectedObjectIndex = static_cast<int>(sceneManager.GetObjects().size()) - 1;
-
-    sceneSerializer.RefreshSceneBuffer();
-}
-
 void Application::UpdateCamera() {
-    cameraController.Update(camera, appSettings, sceneViewHovered, noModifiersPressed, sceneCursorDelta, sceneScrollDelta);
-
+    cameraController.Update(camera, appSettings, viewportInput);
+    // Input is per-frame; consume it so a gesture doesn't repeat.
+    viewportInput = ViewportInput{};
 
     glm::vec3 camPos = camera.GetPosition();
     glm::vec3 camTargetPos = camera.GetTargetPosition();
-    globals.selectedIndex = selectionState.selectedObjectIndex;   // -1 means "nothing selected"
-    globals.resolution[0] = sceneViewSize.x;
-    globals.resolution[1] = sceneViewSize.y;
+
+    globals.selectedIndex = selectionState.selectedObjectIndex;
+    globals.resolution[0] = static_cast<float>(renderWidth);
+    globals.resolution[1] = static_cast<float>(renderHeight);
     globals.showGrid = showGrid ? 1 : 0;
     globals.cameraPos[0] = camPos.x;
     globals.cameraPos[1] = camPos.y;
@@ -257,6 +187,120 @@ void Application::UpdateCamera() {
     globals.cameraTarget[0] = camTargetPos.x;
     globals.cameraTarget[1] = camTargetPos.y;
     globals.cameraTarget[2] = camTargetPos.z;
-
 }
 
+// ---------------------------------------------------------------------------
+// Control API
+// ---------------------------------------------------------------------------
+
+int Application::AddPrimitive(SdfObjectType type) {
+    SdfObjectData object{};
+    switch (type) {
+    case SdfObjectType::Sphere:   object = SdfObjectFactory::CreateSphere(1.0f); break;
+    case SdfObjectType::Box:      object = SdfObjectFactory::CreateBox(1.0f, 1.0f, 1.0f); break;
+    case SdfObjectType::Cylinder: object = SdfObjectFactory::CreateCylinder(0.7f, 1.5f); break;
+    case SdfObjectType::Torus:    object = SdfObjectFactory::CreateTorus(1.0f, 0.25f); break;
+    default: return -1;
+    }
+
+    sceneManager.AddObject(object);
+    int index = static_cast<int>(sceneManager.GetObjects().size()) - 1;
+    selectionState.selectedObjectIndex = index;
+    sceneSerializer.RefreshSceneBuffer();
+    return index;
+}
+
+void Application::RemoveObject(int index) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+
+    sceneManager.RemoveObjectAt(index);
+
+    if (objects.empty())
+        selectionState.selectedObjectIndex = -1;
+    else if (selectionState.selectedObjectIndex >= static_cast<int>(objects.size()))
+        selectionState.selectedObjectIndex = static_cast<int>(objects.size()) - 1;
+
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+void Application::SelectObject(int index) {
+    if (index < -1 || index >= static_cast<int>(sceneManager.GetObjects().size())) return;
+    selectionState.selectedObjectIndex = index;
+}
+
+void Application::SetObjectPosition(int index, float x, float y, float z) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    objects[index].position = { x, y, z, 0.0f };
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+void Application::SetObjectSize(int index, float x, float y, float z) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    objects[index].size = { x, y, z, 0.0f };
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+void Application::SetObjectColor(int index, float r, float g, float b) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    objects[index].color = { r, g, b, 1.0f };
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+const char* Application::TypeName(int32_t type) {
+    switch (static_cast<SdfObjectType>(type)) {
+    case SdfObjectType::Sphere:   return "Sphere";
+    case SdfObjectType::Box:      return "Box";
+    case SdfObjectType::Cylinder: return "Cylinder";
+    case SdfObjectType::Torus:    return "Torus";
+    default:                      return "Object";
+    }
+}
+
+std::string Application::GetSceneJson() const {
+    const auto& objects = sceneManager.GetObjects();
+
+    std::ostringstream out;
+    out << "{\"selectedIndex\":" << selectionState.selectedObjectIndex
+        << ",\"showGrid\":" << (showGrid ? "true" : "false")
+        << ",\"objects\":[";
+
+    for (size_t i = 0; i < objects.size(); ++i) {
+        const SdfObjectData& o = objects[i];
+        if (i > 0) out << ",";
+        out << "{\"index\":" << i
+            << ",\"id\":" << o.objectId
+            << ",\"type\":" << o.type
+            << ",\"typeName\":\"" << TypeName(o.type) << "\""
+            << ",\"position\":[" << o.position[0] << "," << o.position[1] << "," << o.position[2] << "]"
+            << ",\"size\":[" << o.size[0] << "," << o.size[1] << "," << o.size[2] << "]"
+            << ",\"color\":[" << o.color[0] << "," << o.color[1] << "," << o.color[2] << "]"
+            << "}";
+    }
+
+    out << "]}";
+    return out.str();
+}
+
+void Application::NewScene()  { sceneSerializer.NewScene();  selectionState.selectedObjectIndex = -1; }
+void Application::OpenScene() { sceneSerializer.OpenSceneFromSDFO(); selectionState.selectedObjectIndex = -1; }
+void Application::SaveScene() { sceneSerializer.SaveSceneToSDFO(); }
+
+void Application::CameraOrbit(float dx, float dy) {
+    viewportInput.orbiting = true;
+    viewportInput.mouseDelta.x += dx;
+    viewportInput.mouseDelta.y += dy;
+}
+
+void Application::CameraPan(float dx, float dy) {
+    viewportInput.panning = true;
+    viewportInput.mouseDelta.x += dx;
+    viewportInput.mouseDelta.y += dy;
+}
+
+void Application::CameraZoom(float delta) {
+    viewportInput.scrollDelta += delta;
+}

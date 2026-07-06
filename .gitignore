@@ -72,3 +72,14 @@ Testing/
 # VS Files
 .vs/
 .vscode/
+
+#compiler
+emsdk/
+
+# ---- Web front-end (web/) ----
+web/node_modules/
+web/dist/
+# Compiled WASM engine artifacts emitted by the Emscripten build
+web/public/engine/sdf-engine.js
+web/public/engine/sdf-engine.wasm
+web/public/engine/sdf-engine.data

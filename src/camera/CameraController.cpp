@@ -1,25 +1,22 @@
 #include "camera/CameraController.h"
-#include <ImGuizmo.h>
 
-void CameraController::Update(Camera& camera, Settings appSettings, bool sceneViewHovered, bool noModifiersPressed, ImVec2 sceneCursorDelta, float sceneScrollDelta) {
-    // Scene operations
-    bool gizmoActive = ImGuizmo::IsOver() || ImGuizmo::IsUsing();
-    if (sceneViewHovered && !gizmoActive)
+void CameraController::Update(Camera& camera, const Settings& appSettings, const ViewportInput& input)
+{
+    // Orbit: left-drag with no modifiers.
+    if (input.orbiting)
     {
-        // Orbit movement
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && noModifiersPressed){
-            camera.OrbitMovement(appSettings, sceneCursorDelta);
+        camera.OrbitMovement(appSettings, input.mouseDelta);
+    }
 
-        }
-        //Zoom
-        if (sceneScrollDelta != 0.0f && noModifiersPressed)
-        {
-            camera.Zoom(appSettings, sceneScrollDelta);
-        }
-        // Target change(pan)
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left) && ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyAlt)
-        {
-            camera.TargetPan(appSettings, sceneCursorDelta);
-        }
+    // Pan: left-drag with the pan modifier held.
+    if (input.panning)
+    {
+        camera.TargetPan(appSettings, input.mouseDelta);
+    }
+
+    // Zoom: mouse wheel.
+    if (input.scrollDelta != 0.0f)
+    {
+        camera.Zoom(appSettings, input.scrollDelta);
     }
 }
