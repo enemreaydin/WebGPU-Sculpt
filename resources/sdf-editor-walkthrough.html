@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SDF Editor — Program Lifecycle Walkthrough</title>
+<style>
+  :root{
+    --bg:#0e1017; --bg2:#151824; --panel:#181c2b; --panel2:#1f2436;
+    --ink:#e7ebf5; --muted:#98a2bd; --line:#2a3048; --line2:#39415f;
+    --accent:#7c9cff;
+    --boot:#8b7cff; --frame:#33c9b7; --add:#f2b04a; --io:#c07bf0; --shut:#f26b8a;
+    --code:#0b0d14; --codink:#cfe0ff;
+    --glow: 0 0 0 1px var(--line2), 0 0 22px -6px var(--accent);
+    --shadow: 0 10px 30px -12px rgba(0,0,0,.6);
+    --radius:14px;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6fc; --bg2:#eef1f9; --panel:#ffffff; --panel2:#f6f8ff;
+    --ink:#141a2b; --muted:#5a6484; --line:#dce2f2; --line2:#c3cbe6;
+    --accent:#3f61e0;
+    --boot:#6a53ff; --frame:#0c9e8c; --add:#c9871a; --io:#9a49d6; --shut:#e04a6d;
+    --code:#0f1424; --codink:#dbe6ff;
+    --glow: 0 0 0 1px var(--line2), 0 0 22px -8px var(--accent);
+    --shadow: 0 12px 32px -16px rgba(30,50,120,.32);
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme]){ color-scheme: light; }
+  }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  a{ color:var(--accent); }
+  code, .mono{ font-family:"SF Mono",ui-monospace,Menlo,Consolas,"Cascadia Code",monospace; }
+
+  header.top{
+    position:sticky; top:0; z-index:40;
+    display:flex; align-items:center; gap:16px;
+    padding:14px 22px; background:color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line);
+  }
+  header.top .brand{ display:flex; flex-direction:column; line-height:1.15; }
+  header.top .brand b{ font-size:16px; letter-spacing:.2px; }
+  header.top .brand span{ font-size:11.5px; color:var(--muted); }
+  .spacer{ flex:1; }
+  .btn{
+    border:1px solid var(--line2); background:var(--panel2); color:var(--ink);
+    padding:8px 14px; border-radius:10px; font-size:13px; cursor:pointer;
+    display:inline-flex; align-items:center; gap:7px; transition:.15s; user-select:none;
+  }
+  .btn:hover{ border-color:var(--accent); }
+  .btn.primary{ background:var(--accent); color:#fff; border-color:transparent; }
+  .btn.ghost{ background:transparent; }
+  .btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .theme-toggle{ width:38px; height:38px; justify-content:center; padding:0; }
+
+  .layout{
+    display:grid; grid-template-columns: 268px minmax(0,1fr) 340px;
+    gap:16px; padding:16px 18px 40px; max-width:1680px; margin:0 auto;
+  }
+  @media (max-width:1200px){ .layout{ grid-template-columns:1fr; } }
+
+  .card{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius);
+    box-shadow:var(--shadow); }
+  .card .hd{ padding:12px 15px; border-bottom:1px solid var(--line); font-size:12px;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+
+  /* ---- Chapters / stepper ---- */
+  .rail{ position:sticky; top:78px; align-self:start; max-height:calc(100vh - 96px); overflow:auto; }
+  .phase{ padding:10px 10px 12px; }
+  .phase h4{ margin:6px 8px 8px; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    display:flex; align-items:center; gap:8px; color:var(--muted); }
+  .dot{ width:9px; height:9px; border-radius:50%; box-shadow:0 0 10px -1px currentColor; }
+  .p-boot{ color:var(--boot);} .p-frame{ color:var(--frame);} .p-add{ color:var(--add);}
+  .p-io{ color:var(--io);} .p-shut{ color:var(--shut);}
+  .step-item{ display:flex; gap:10px; padding:7px 10px; border-radius:9px; cursor:pointer;
+    font-size:12.5px; color:var(--muted); align-items:baseline; }
+  .step-item:hover{ background:var(--panel2); color:var(--ink); }
+  .step-item .n{ font-size:10.5px; opacity:.7; min-width:22px; font-variant-numeric:tabular-nums; }
+  .step-item.active{ background:var(--panel2); color:var(--ink); font-weight:600;
+    box-shadow: inset 3px 0 0 var(--accent); }
+  .st-txt{ display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .st-file{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:9.5px; color:var(--muted);
+    opacity:.75; font-weight:500; overflow:hidden; text-overflow:ellipsis; }
+  .step-item.active .st-file{ color:var(--accent); opacity:1; }
+
+  /* prominent "open this file" banner */
+  .filebanner{ display:flex; align-items:center; gap:11px; margin:12px 0 8px;
+    padding:10px 13px; border-radius:11px; border:1px solid var(--line2);
+    background:var(--panel2); }
+  .filebanner .ic{ font-size:16px; line-height:1; }
+  .filebanner .lbl{ font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted); margin-bottom:2px; }
+  .filebanner .fp{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px;
+    font-weight:700; color:var(--accent); word-break:break-all; user-select:all; }
+
+  /* ---- Stage / diagram ---- */
+  .stagewrap{ overflow:auto; padding:14px; }
+  .stage{ position:relative; width:1080px; height:700px; margin:0 auto; }
+  svg.edges{ position:absolute; inset:0; width:1080px; height:700px; pointer-events:none; overflow:visible; z-index:1;}
+  .labels{ position:absolute; inset:0; pointer-events:none; z-index:6; }
+  .elabel{ position:absolute; transform:translate(-50%,-50%); white-space:nowrap;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10.5px; font-weight:600;
+    color:var(--ink); background:color-mix(in srgb,var(--panel) 94%, transparent);
+    border:1px solid var(--line2); border-radius:7px; padding:2px 7px;
+    box-shadow:0 4px 12px -4px rgba(0,0,0,.55); }
+  .node{
+    position:absolute; z-index:3; border:1px solid var(--line2); background:var(--panel2);
+    border-radius:11px; padding:8px 11px; display:flex; flex-direction:column; justify-content:center;
+    transition: box-shadow .3s, border-color .3s, opacity .3s, transform .3s, background .3s;
+    opacity:.42; overflow:hidden;
+  }
+  .node .t{ font-size:12.5px; font-weight:650; line-height:1.15; }
+  .node .s{ font-size:10px; color:var(--muted); margin-top:2px; line-height:1.15; }
+  .node .badge{ position:absolute; top:0; left:0; width:4px; height:100%; background:var(--g,var(--line2)); }
+  .node.g-boot{ --g:var(--boot);} .node.g-frame{ --g:var(--frame);} .node.g-add{ --g:var(--add);}
+  .node.g-io{ --g:var(--io);} .node.g-gpu{ --g:#4aa8f2;} .node.g-core{ --g:var(--accent);}
+  .node.active{ opacity:1; border-color:var(--g,var(--accent));
+    box-shadow: 0 0 0 1px var(--g,var(--accent)), 0 0 26px -6px var(--g,var(--accent)); background:var(--panel); }
+  .node.primary{ transform:translateY(-1px) scale(1.02);
+    box-shadow: 0 0 0 2px var(--g,var(--accent)), 0 0 34px -4px var(--g,var(--accent)); }
+  .node.primary::after{ content:""; position:absolute; inset:0; border-radius:11px;
+    animation:pulse 1.6s ease-out infinite; border:1.5px solid var(--g,var(--accent)); opacity:0; }
+  @keyframes pulse{ 0%{ opacity:.55; transform:scale(1);} 100%{ opacity:0; transform:scale(1.06);} }
+
+  path.edge{ fill:none; stroke:var(--accent); stroke-width:2.1;
+    stroke-dasharray:7 6; animation:flow 1s linear infinite; filter:drop-shadow(0 0 5px color-mix(in srgb,var(--accent) 60%, transparent)); }
+  @keyframes flow{ to{ stroke-dashoffset:-26; } }
+  .edgelabel{ font-size:10.5px; fill:var(--ink); font-weight:600;
+    paint-order:stroke; stroke:var(--bg); stroke-width:4px; stroke-linejoin:round; }
+  .edgelabel.mono{ font-family:ui-monospace,Menlo,Consolas,monospace; font-size:10px; }
+
+  /* ---- Detail panel ---- */
+  .detail{ position:sticky; top:78px; align-self:start; max-height:calc(100vh - 96px); overflow:auto; }
+  .detail .body{ padding:15px 16px 18px; }
+  .kick{ display:inline-flex; align-items:center; gap:7px; font-size:11px; text-transform:uppercase;
+    letter-spacing:.1em; font-weight:700; padding:4px 9px; border-radius:20px; }
+  .kick.p-boot{ background:color-mix(in srgb,var(--boot) 18%,transparent);}
+  .kick.p-frame{ background:color-mix(in srgb,var(--frame) 18%,transparent);}
+  .kick.p-add{ background:color-mix(in srgb,var(--add) 20%,transparent);}
+  .kick.p-io{ background:color-mix(in srgb,var(--io) 18%,transparent);}
+  .kick.p-shut{ background:color-mix(in srgb,var(--shut) 18%,transparent);}
+  .detail h2{ margin:12px 0 4px; font-size:19px; line-height:1.25; }
+  .fileref{ font-size:11.5px; color:var(--muted); margin-bottom:12px; }
+  .fileref code{ color:var(--accent); }
+  .detail p{ font-size:13.5px; line-height:1.6; color:var(--ink); margin:10px 0; }
+  .detail p .hl{ color:var(--accent); font-weight:600; }
+  .calls{ margin:12px 0; }
+  .calls .lbl{ font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin-bottom:6px; }
+  .call{ display:block; font-size:12px; padding:6px 9px; border-radius:8px; background:var(--code);
+    color:var(--codink); border:1px solid var(--line); margin:5px 0; overflow-x:auto; white-space:pre; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .chip{ font-size:11px; padding:4px 9px; border-radius:20px; border:1px solid var(--line2);
+    background:var(--panel2); color:var(--muted); }
+  .chip.write{ color:#9be7c4; border-color:#2f6b4f; background:color-mix(in srgb,#1c3d2c 60%, var(--panel2)); }
+  .chip.gpu{ color:#a9d4ff; border-color:#2d5680; background:color-mix(in srgb,#173049 60%, var(--panel2)); }
+
+  /* ---- State panel ---- */
+  .state{ margin-top:16px; }
+  .state .row{ display:flex; justify-content:space-between; align-items:center; padding:9px 15px;
+    border-bottom:1px solid var(--line); font-size:12.5px; }
+  .state .row:last-child{ border-bottom:0; }
+  .state .k{ color:var(--muted); }
+  .state .v{ font-weight:650; font-variant-numeric:tabular-nums; }
+  .state .v.mono{ font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--accent); max-width:190px; text-align:right; overflow-x:auto; white-space:nowrap; }
+
+  /* ---- footer controls ---- */
+  .controls{ position:sticky; bottom:0; z-index:30; display:flex; align-items:center; gap:12px;
+    padding:12px 18px; background:color-mix(in srgb,var(--bg) 88%, transparent);
+    backdrop-filter:blur(10px); border-top:1px solid var(--line); }
+  .progress{ flex:1; height:6px; background:var(--line); border-radius:99px; overflow:hidden; }
+  .progress > i{ display:block; height:100%; width:0; background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 40%,#fff));
+     transition:width .3s; }
+  .count{ font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; min-width:64px; text-align:center;}
+  .intro{ font-size:12.5px; color:var(--muted); line-height:1.55; padding:6px 12px 14px; }
+  .legend{ display:flex; flex-wrap:wrap; gap:10px; padding:2px 12px 12px; }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
+  kbd{ font-family:inherit; font-size:10.5px; background:var(--panel2); border:1px solid var(--line2);
+    border-bottom-width:2px; border-radius:5px; padding:1px 5px; }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <b>SDF Editor · Program Lifecycle</b>
+    <span>Interactive walkthrough of the C++/WebGPU ray-marching editor & the n-ary CSG pipeline</span>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn ghost" id="autoBtn">▶ Play</button>
+  <button class="btn theme-toggle" id="themeBtn" title="Toggle theme">◐</button>
+</header>
+
+<div class="layout">
+
+  <!-- LEFT: chapters -->
+  <aside class="card rail">
+    <div class="hd">Chapters</div>
+    <div class="intro">Step through the program from launch to shutdown. Click any step, use
+      <kbd>←</kbd><kbd>→</kbd>, or press Play. The diagram lights up the active components and the
+      arrows show <b>function calls</b> and <b>data flow</b> for that step.</div>
+    <div class="legend">
+      <span><i class="dot p-boot"></i>Boot / Init</span>
+      <span><i class="dot p-frame"></i>Frame loop</span>
+      <span><i class="dot p-add"></i>Add object (CSG)</span>
+      <span><i class="dot p-io"></i>Edit / Save / Load</span>
+      <span><i class="dot p-shut"></i>Shutdown</span>
+    </div>
+    <div id="railList"></div>
+  </aside>
+
+  <!-- CENTER: diagram -->
+  <main class="card">
+    <div class="hd">Architecture — who calls who, what gets written</div>
+    <div class="stagewrap">
+      <div class="stage" id="stage">
+        <svg class="edges" id="edges" viewBox="0 0 1080 700">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"></path>
+            </marker>
+          </defs>
+        </svg>
+        <!-- nodes injected -->
+      </div>
+    </div>
+    <div class="controls">
+      <button class="btn" id="prevBtn">← Prev</button>
+      <span class="count" id="counter">1 / 1</span>
+      <div class="progress"><i id="progbar"></i></div>
+      <button class="btn primary" id="nextBtn">Next →</button>
+    </div>
+  </main>
+
+  <!-- RIGHT: detail + state -->
+  <aside class="detail">
+    <div class="card">
+      <div class="body" id="detail"></div>
+    </div>
+    <div class="card state">
+      <div class="hd">Live state</div>
+      <div id="stateBox"></div>
+    </div>
+  </aside>
+
+</div>
+
+<script>
+/* ============================================================
+   NODE MAP  (design coordinates in a 1080 x 700 stage)
+   group: boot|frame|add|io|gpu|core  -> colored accent
+   ============================================================ */
+const NODES = {
+  main:      {x:40,  y:26,  w:160,h:50, t:"main()",           s:"src/main.cpp",                 g:"boot"},
+  app:       {x:262, y:26,  w:210,h:50, t:"Application",       s:"editor/Application",           g:"boot"},
+  imgui:     {x:700, y:26,  w:180,h:50, t:"ImGui + ImGuizmo",  s:"immediate-mode UI",            g:"frame"},
+  window:    {x:40,  y:118, w:160,h:50, t:"Window · GLFW",     s:"platform/Window",              g:"boot"},
+  graphics:  {x:262, y:118, w:210,h:50, t:"GraphicsContext",   s:"platform/GraphicsContext",     g:"boot"},
+  addpanel:  {x:700, y:118, w:180,h:50, t:"AddObjectPanel",    s:"ui/AddObjectPanel (modal)",    g:"add"},
+  device:    {x:262, y:204, w:410,h:50, t:"Instance · Surface · Adapter · Device · Queue", s:"WebGPU objects", g:"gpu"},
+  factory:   {x:700, y:204, w:180,h:50, t:"SdfObjectFactory",  s:"builds SdfObjectData",         g:"add"},
+  scenemgr:  {x:262, y:298, w:210,h:60, t:"SceneManager",      s:"objects + objectId counter",   g:"core"},
+  csgtree:   {x:498, y:298, w:184,h:60, t:"CsgTree",           s:"n-ary nodes → RPN",            g:"core"},
+  serializer:{x:700, y:300, w:180,h:56, t:"SceneSerializer",   s:"refresh / new / open / save",  g:"io"},
+  pipeline:  {x:40,  y:406, w:180,h:50, t:"RenderPipeline",    s:"+ BindGroupLayout",            g:"gpu"},
+  renderer:  {x:262, y:402, w:210,h:60, t:"SdfRenderer",       s:"owns GPU buffers",             g:"core"},
+  extloader: {x:700, y:400, w:180,h:50, t:"ExtensionLoader",   s:".sdfo read / write",           g:"io"},
+  sdfo:      {x:902, y:400, w:150,h:50, t:".sdfo file",        s:"binary scene format",          g:"io"},
+  scenebuf:  {x:262, y:504, w:150,h:56, t:"sceneBuffer",       s:"N × SdfObjectData (80B)",      g:"gpu"},
+  csgbuf:    {x:430, y:504, w:162,h:56, t:"csgProgramBuffer",  s:"M × CsgCommand (16B)",         g:"gpu"},
+  globalsbuf:{x:610, y:504, w:150,h:56, t:"globalsBuffer",     s:"GlobalsData (uniform)",        g:"gpu"},
+  shader:    {x:780, y:498, w:190,h:74, t:"WGSL Shader",       s:"evaluateScene() — RPN stack",  g:"frame"},
+  bindgroup: {x:262, y:602, w:210,h:50, t:"BindGroup",         s:"bindings 0 · 1 · 2",           g:"gpu"},
+  rendertgt: {x:498, y:602, w:180,h:50, t:"RenderTarget",      s:"offscreen texture → ImGui",    g:"gpu"},
+};
+
+/* ============================================================
+   STEPS
+   nodes: which boxes are active (first = primary/pulsing)
+   edges: [from, to, label]  animated call / data-flow arrows
+   writes/gpu: chips.  state: patch merged into running state.
+   ============================================================ */
+const S = (o)=>o;
+const STEPS = [
+/* ---------------- PHASE 1 : BOOT ---------------- */
+S({ph:"boot", t:"Entry point — main()",
+  file:"src/main.cpp",
+  desc:`The whole program is three lines. <span class="hl">main()</span> constructs one
+    <span class="hl">Application</span> on the stack, calls <b>Initialize()</b>, then spins the
+    <b>while (IsRunning()) MainLoop()</b> loop until the window closes, and finally <b>Terminate()</b>.`,
+  calls:["Application app;","app.Initialize();","while (app.IsRunning()) app.MainLoop();","app.Terminate();"],
+  nodes:["main","app"], edges:[["main","app","new + Initialize()"]],
+  state:{phase:"Booting"}}),
+
+S({ph:"boot", t:"Find the project root",
+  file:"Application::Initialize → FindProjectRoot()  ·  Application.cpp:188",
+  desc:`Walks parent directories from the current working dir until it finds a folder that contains
+    both <code>assets/</code> and <code>src/</code>. That path becomes <span class="hl">projectRoot</span>,
+    later used to locate the WGSL shader files. Throws if it never finds one.`,
+  calls:["fs::exists(current / \"assets\") && fs::exists(current / \"src\")","projectRoot = current;"],
+  nodes:["app"], edges:[]}),
+
+S({ph:"boot", t:"Create the OS window (GLFW)",
+  file:"window.InitializeWindow()  ·  platform/Window.cpp",
+  desc:`<span class="hl">glfwInit()</span> then a window created with <code>GLFW_NO_API</code>
+    (no OpenGL — WebGPU renders instead). A <b>framebuffer-size callback</b> is registered that routes
+    resize events back to <b>Application::OnResize</b> via the window user-pointer.`,
+  calls:["glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);","glfwCreateWindow(width, height, \"SDF Editor\", …);","glfwSetFramebufferSizeCallback(…) → app->OnResize(nw, nh)"],
+  nodes:["app","window"], edges:[["app","window","InitializeWindow()"]]}),
+
+S({ph:"boot", t:"WebGPU instance + surface",
+  file:"graphics.InitializeInstance / InitializeSurface  ·  GraphicsContext.cpp:10",
+  desc:`<span class="hl">createInstance()</span> boots the WebGPU runtime (wgpu-native backend).
+    <b>glfwGetWGPUSurface()</b> bridges the GLFW window into a WebGPU <span class="hl">Surface</span>
+    we can present frames to.`,
+  calls:["instance = createInstance({});","surface = glfwGetWGPUSurface(instance, window);"],
+  nodes:["app","graphics","device","window"], edges:[["app","graphics","InitializeInstance / Surface"],["graphics","device","instance, surface"],["window","graphics","HWND → surface"]],
+  state:{gpu:"instance, surface"}}),
+
+S({ph:"boot", t:"Adapter + preferred format",
+  file:"graphics.InitializeAdapter()  ·  GraphicsContext.cpp:14",
+  desc:`Requests a GPU <span class="hl">Adapter</span> compatible with the surface, then queries
+    <b>surface.getPreferredFormat(adapter)</b> and stores it in
+    <span class="hl">surfaceFormat</span> — every pipeline & render target must use this format.`,
+  calls:["adapter = instance.requestAdapter({ compatibleSurface = surface });","surfaceFormat = surface.getPreferredFormat(adapter);"],
+  nodes:["graphics","device"], edges:[["graphics","device","requestAdapter()"]],
+  state:{gpu:"+ adapter, surfaceFormat"}}),
+
+S({ph:"boot", t:"Logical device + queue",
+  file:"InitializeDevice / InitializeQueue  ·  GraphicsContext.cpp:21",
+  desc:`<span class="hl">adapter.requestDevice()</span> yields the logical <b>Device</b> (with a
+    device-lost callback), and <b>device.getQueue()</b> gives the <span class="hl">Queue</span> —
+    the single channel through which all buffer writes and command submissions flow.`,
+  calls:["device = adapter.requestDevice(deviceDesc);","queue  = device.getQueue();"],
+  nodes:["graphics","device"], edges:[["graphics","device","requestDevice / getQueue"]],
+  state:{gpu:"+ device, queue"}}),
+
+S({ph:"boot", t:"Configure the surface",
+  file:"graphics.ConfigureSurface(w, h)  ·  GraphicsContext.cpp:38",
+  desc:`Configures the swapchain: size, <code>RenderAttachment</code> usage, the preferred format,
+    the device, and <span class="hl">PresentMode::Fifo</span> (v-sync). After this the surface can
+    hand out textures to draw into. The adapter & instance handles are then released.`,
+  calls:["surface.configure({ width, height, format=surfaceFormat, presentMode=Fifo });","graphics.adapter.release(); graphics.instance.release();"],
+  nodes:["graphics","device"], edges:[["graphics","device","configure(Fifo)"]]}),
+
+S({ph:"boot", t:"Initialize ImGui + ImGuizmo",
+  file:"Application::InitializeImgui()  ·  Application.cpp:153",
+  desc:`Creates the ImGui context, applies the custom theme, and wires the two backends:
+    <b>ImGui_ImplGlfw_InitForOther</b> (input) and <b>ImGui_ImplWGPU_Init</b> (rendering onto the
+    swapchain format). ImGui draws the entire editor UI every frame.`,
+  calls:["ImGui::CreateContext(); ApplyTheme(appTheme);","ImGui_ImplGlfw_InitForOther(window, true);","ImGui_ImplWGPU_Init(&initInfo);"],
+  nodes:["app","imgui"], edges:[["app","imgui","InitializeImgui()"]]}),
+
+S({ph:"boot", t:"Renderer init — compile the shader",
+  file:"renderer.Initialize()  ·  SdfRenderer.cpp:10",
+  desc:`Reads <code>sdf_core.wgsl</code> + <code>main.wgsl</code>, <b>concatenates</b> them, and calls
+    <span class="hl">createShaderModule</span>. <code>sdf_core</code> holds the structs, SDF primitive
+    functions and <b>evaluateScene()</b>; <code>main</code> holds the bindings, vertex & fragment
+    entry points.`,
+  calls:["ReadFile(projectRoot/\"assets/shaders/sdf_core.wgsl\")","ReadFile(.../main.wgsl)","combined = core + \"\\n\" + main;","shaderModule = device.createShaderModule(combined);"],
+  nodes:["renderer","shader"], edges:[["renderer","shader","createShaderModule()"]],
+  state:{gpu:"+ shaderModule"}}),
+
+S({ph:"boot", t:"Bind-group layout (3 bindings) + pipeline",
+  file:"renderer.Initialize()  ·  SdfRenderer.cpp:35",
+  desc:`Declares the layout the shader expects: <b>binding 0</b> = <code>scene_objects</code> (read-only
+    storage), <b>binding 1</b> = <code>globals</code> (uniform), <b>binding 2</b> = <code>csg_program</code>
+    (read-only storage). Then builds the <span class="hl">globalsBuffer</span>, the pipeline layout, and the
+    full-screen <span class="hl">RenderPipeline</span> (vs_main / fs_main).`,
+  calls:["entries[3] = { scene(0, Storage), globals(1, Uniform), csg(2, Storage) };","bindGroupLayout = device.createBindGroupLayout(...)","globalsBuffer   = device.createBuffer(Uniform|CopyDst)","pipeline        = device.createRenderPipeline(...)"],
+  nodes:["renderer","pipeline","globalsbuf"], edges:[["renderer","pipeline","createRenderPipeline()"],["renderer","globalsbuf","createBuffer()"]],
+  gpu:["bindGroupLayout","RenderPipeline","globalsBuffer"], state:{gpu:"+ pipeline, layout, globalsBuffer"}}),
+
+S({ph:"boot", t:"Create the offscreen render target",
+  file:"renderer.CreateRenderTarget(1000, 800)  ·  SdfRenderer.cpp:214",
+  desc:`The SDF scene is NOT drawn straight to the window — it renders into an offscreen
+    <span class="hl">texture</span> (RenderAttachment | TextureBinding). Its <b>TextureView</b> is later
+    handed to ImGui as an image inside the "SceneView" panel.`,
+  calls:["renderTargetTexture = device.createTexture(...)","renderTargetView = renderTargetTexture.createView(...)"],
+  nodes:["renderer","rendertgt"], edges:[["renderer","rendertgt","createTexture / view"]],
+  gpu:["RenderTarget texture"], state:{gpu:"+ renderTarget"}}),
+
+S({ph:"boot", t:"First (empty) scene upload",
+  file:"sceneSerializer.RefreshSceneBuffer()  ·  Application.cpp:216 → SceneSerializer.cpp:5",
+  desc:`Even with zero objects the shader needs valid buffers to bind. RefreshSceneBuffer builds an
+    empty <b>objectId map</b>, compiles an empty tree (→ empty RPN), and calls
+    <b>CreateSceneBuffer</b>, which substitutes a <span class="hl">dummy object</span> and a
+    <span class="hl">no-op command</span> so the buffers are never zero-sized. Result: the grid renders.`,
+  calls:["auto map = SceneManager::BuildObjectIdMap(objects);   // empty","auto program = csgTree.CompileToRPN(map);            // empty","renderer.CreateSceneBuffer(device, queue, objects, program);"],
+  nodes:["serializer","scenemgr","csgtree","renderer","scenebuf","csgbuf","bindgroup"],
+  edges:[["serializer","scenemgr","BuildObjectIdMap()"],["serializer","csgtree","CompileToRPN()"],["serializer","renderer","CreateSceneBuffer()"],["renderer","scenebuf","write dummy"],["renderer","csgbuf","write no-op"],["renderer","bindgroup","createBindGroup(0,1,2)"]],
+  gpu:["sceneBuffer (1 dummy)","csgProgramBuffer (1 no-op)","BindGroup"],
+  state:{gpu:"all buffers live", objects:0, nodes:0, rpn:"— (empty)", phase:"Initialized ✓"}}),
+
+/* ---------------- PHASE 2 : FRAME LOOP ---------------- */
+S({ph:"frame", t:"The loop condition",
+  file:"while (app.IsRunning())  ·  main.cpp:7 → Application.cpp:44",
+  desc:`<span class="hl">IsRunning()</span> simply returns <b>!glfwWindowShouldClose(window)</b>.
+    As long as the user hasn't closed the window, <b>MainLoop()</b> runs once per frame.`,
+  calls:["return !glfwWindowShouldClose(window.GetHandle());"],
+  nodes:["main","app","window"], edges:[["main","app","MainLoop()"],["window","app","shouldClose?"]],
+  state:{phase:"Running (per-frame)"}}),
+
+S({ph:"frame", t:"Poll events + new ImGui frame",
+  file:"Application::MainLoop()  ·  Application.cpp:48",
+  desc:`If the pipeline isn't ready yet it just polls and returns. Otherwise:
+    <b>glfwPollEvents()</b>, then start a new frame for all three layers —
+    <b>ImGui_ImplWGPU_NewFrame</b>, <b>ImGui_ImplGlfw_NewFrame</b>, <b>ImGui::NewFrame</b>,
+    and <b>ImGuizmo::BeginFrame</b>.`,
+  calls:["glfwPollEvents();","ImGui_ImplWGPU_NewFrame(); ImGui_ImplGlfw_NewFrame();","ImGui::NewFrame(); ImGuizmo::BeginFrame();"],
+  nodes:["app","imgui","window"], edges:[["window","app","glfwPollEvents()"],["app","imgui","NewFrame()"]]}),
+
+S({ph:"frame", t:"Update camera + fill globals",
+  file:"Application::UpdateCamera()  ·  Application.cpp:235",
+  desc:`<b>CameraController::Update</b> reads mouse state and applies <b>orbit / zoom / pan</b> to the
+    Camera (only when the scene view is hovered and no gizmo is active). Then the
+    <span class="hl">GlobalsData</span> struct is filled: resolution, showGrid, selectedIndex,
+    cameraPos and cameraTarget.`,
+  calls:["cameraController.Update(camera, …, cursorDelta, scrollDelta);","globals.selectedIndex = selectionState.selectedObjectIndex;","globals.cameraPos / cameraTarget / resolution / showGrid = …"],
+  nodes:["app"], edges:[]}),
+
+S({ph:"frame", t:"Upload globals to the GPU",
+  file:"queue.writeBuffer(globalsBuffer, …)  ·  Application.cpp:70",
+  desc:`Every frame the CPU-side <span class="hl">globals</span> struct is copied into the
+    <b>globalsBuffer</b> via the queue. This is how camera movement reaches the shader — binding 1
+    is re-read by every pixel next draw.`,
+  calls:["queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));"],
+  nodes:["app","globalsbuf"], edges:[["app","globalsbuf","writeBuffer(globals)"]],
+  gpu:["globalsBuffer ← camera/UI"]}),
+
+S({ph:"frame", t:"Pass 1 — ray-march the SDF scene",
+  file:"MainLoop pass 1  ·  Application.cpp:84",
+  desc:`A command encoder begins a render pass targeting the <span class="hl">offscreen render target</span>.
+    It binds the pipeline and <b>bindGroup</b> (slots 0/1/2) and draws <b>6 vertices</b> — a full-screen
+    triangle pair. Every pixel becomes one ray.`,
+  calls:["encoder = device.createCommandEncoder();","pass = encoder.beginRenderPass(renderTargetView);","pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup);","pass.draw(6, 1, 0, 0);"],
+  nodes:["app","pipeline","bindgroup","scenebuf","csgbuf","globalsbuf","rendertgt","shader"],
+  edges:[["app","pipeline","setPipeline()"],["app","bindgroup","setBindGroup(0)"],["bindgroup","scenebuf","binding 0"],["bindgroup","csgbuf","binding 2"],["bindgroup","globalsbuf","binding 1"],["pipeline","shader","draw(6) → fs_main"],["shader","rendertgt","pixels"]]}),
+
+S({ph:"frame", t:"Fragment shader — raymarch loop",
+  file:"fs_main()  ·  assets/shaders/main.wgsl:32",
+  desc:`For each pixel it builds a ray from <code>cameraPos</code> toward the pixel direction, then
+    marches up to <b>100 steps</b>. At each point it calls <span class="hl">evaluateScene(p)</span>;
+    when the returned distance &lt; 0.001 it's a hit and takes that color (with depth shading).
+    Misses fall back to the grid / background.`,
+  calls:["let rd = normalize(right*uv.x + up*uv.y + forward*focal);","for (i in 0..100) {","  let result = evaluateScene(ro + rd*t);","  if (result.distance < 0.001) { hit; }  t += result.distance; }"],
+  nodes:["shader"], edges:[]}),
+
+S({ph:"frame", t:"evaluateScene — the RPN stack machine",
+  file:"evaluateScene()  ·  assets/shaders/sdf_core.wgsl",
+  desc:`WGSL has no recursion, so the CSG tree is evaluated as a <b>flat postfix program</b>.
+    It walks <code>csg_program</code> with a fixed 16-deep stack: <span class="hl">PUSH_OBJECT</span>
+    evaluates one primitive (sdfSphere/Box/Cylinder/Torus) and pushes its distance+color;
+    <span class="hl">OP_UNION/SUBTRACT/INTERSECTION</span> pop two, combine with min/max, and push one back.
+    The final stack top is the scene result.`,
+  calls:["for i in csg_program:","  cmd_type 0  → push sdf<Type>(p), color","  cmd_type 1/2/3 → pop B,pop A → opUnion/Subtract/Intersection → push","result = stack[sp-1]"],
+  nodes:["shader","csgbuf","scenebuf"], edges:[["csgbuf","shader","RPN commands"],["scenebuf","shader","primitive data"]]}),
+
+S({ph:"frame", t:"Pass 2 — draw the UI, present",
+  file:"MainLoop pass 2  ·  Application.cpp:108",
+  desc:`A second pass targets the real <span class="hl">surface texture</span>. <b>DrawGui()</b> emits
+    the menu bar, the add-object popup, settings, and the Workspace (the rendered SDF texture shown as an
+    <b>ImGui::Image</b>, plus the gizmo and the object property panel). Then the encoder is finished,
+    submitted, and <b>surface.present()</b> shows the frame.`,
+  calls:["DrawGui();  ImGui::Render();","ImGui_ImplWGPU_RenderDrawData(drawData, renderPass);","queue.submit(1, &cmdBuf);  surface.present();  device.poll(false);"],
+  nodes:["app","imgui","rendertgt"], edges:[["rendertgt","imgui","SceneView image"],["app","imgui","DrawGui()"],["imgui","app","submit + present"]]}),
+
+/* ---------------- PHASE 3 : ADD OBJECT ---------------- */
+S({ph:"add", t:"User: Object ▸ New ▸ Sphere",
+  file:"Application::DrawMainMenuBar()  ·  MainMenuBar.cpp:28",
+  desc:`Clicking a shape in the menu calls <span class="hl">addObjectPanel.Open(SdfObjectType::Sphere)</span>,
+    which just sets flags (<code>requestOpen</code>, <code>selectedType</code>). Nothing is created yet —
+    the popup opens on the next DrawGui.`,
+  calls:["addObjectPanel.Open(SdfObjectType::Sphere);","// sets selectedType + requestOpen = true"],
+  nodes:["imgui","addpanel"], edges:[["imgui","addpanel","Open(Sphere)"]],
+  state:{phase:"Adding an object…"}}),
+
+S({ph:"add", t:"The modal — pick parameters, Create",
+  file:"addObjectPanel.Draw(newObject)  ·  Gui.cpp:7 → AddObjectPanel.cpp",
+  desc:`DrawGui calls <b>Draw()</b>, which shows the modal (radius / size / etc.). On <b>Create</b> it
+    asks the <span class="hl">SdfObjectFactory</span> to build an <b>SdfObjectData</b> — type, identity
+    rotation, size, default color — and returns <code>true</code>. Note: <b>objectId is not set here.</b>`,
+  calls:["outObject = SdfObjectFactory::CreateSphere(radius);","created = true;  // Draw() returns true"],
+  nodes:["addpanel","factory"], edges:[["addpanel","factory","CreateSphere(r)"]]}),
+
+S({ph:"add", t:"AddObjectToScene",
+  file:"Application::AddObjectToScene(object)  ·  Application.cpp:219",
+  desc:`Draw returned true, so Gui hands the new primitive to <span class="hl">AddObjectToScene</span>.
+    It forwards to <b>SceneManager::AddObject</b>, sets the selection to the new object, and triggers a
+    buffer refresh. This is the single funnel where a new shape enters the scene.`,
+  calls:["sceneManager.AddObject(object);","selectionState.selectedObjectIndex = objects.size() - 1;","sceneSerializer.RefreshSceneBuffer();"],
+  nodes:["app","scenemgr","serializer"], edges:[["app","scenemgr","AddObject()"],["app","serializer","RefreshSceneBuffer()"]]}),
+
+S({ph:"add", t:"SceneManager assigns a permanent objectId",
+  file:"SceneManager::AddObject()  ·  SceneManager.cpp",
+  desc:`The object is copied and stamped with <span class="hl">objectId = m_NextObjectId++</span> — a
+    monotonically increasing id that is <b>never reused</b> and <b>never equal to the array index</b>.
+    That stable identity is what lets CSG tree nodes keep pointing at the right primitive even after
+    reordering or deletion.`,
+  calls:["SdfObjectData copy = obj;","copy.objectId = m_NextObjectId++;","m_Objects.push_back(copy);"],
+  nodes:["scenemgr"], edges:[],
+  state:{objects:"+1"}}),
+
+S({ph:"add", t:"Ensure the root Union node",
+  file:"SceneManager::EnsureRootUnion()  ·  SceneManager.cpp",
+  desc:`The CSG tree's root is always a <span class="hl">Union</span> operation node. On the very first
+    object it's lazily created via <b>CsgTree::AddOperationNode(Union)</b>; afterwards the existing root
+    index is reused. This is the "auto root-union" default: everything unions together unless the tree
+    is edited.`,
+  calls:["if (m_RootNodeIndex == -1)","  m_RootNodeIndex = m_CsgTree.AddOperationNode(CsgNodeType::Union, -1);"],
+  nodes:["scenemgr","csgtree"], edges:[["scenemgr","csgtree","AddOperationNode(Union)"]]}),
+
+S({ph:"add", t:"Attach a Primitive node to the tree",
+  file:"CsgTree::AddPrimitiveNode()  ·  CsgTree.cpp",
+  desc:`A new <b>Primitive</b> node is pushed with <span class="hl">nodeId = m_NextNodeId++</span> and the
+    object's <code>objectId</code>. <b>AttachChild</b> links it at the end of the root's child chain using
+    the <b>first-child / next-sibling</b> representation (O(1) append via <code>lastChild</code>).
+    SceneManager records <code>objectId → node index</code> for fast deletes.`,
+  calls:["idx = AddPrimitiveNode(copy.objectId, root);","// node.nodeId = m_NextNodeId++;  AttachChild(root, idx)","m_ObjectNodeIndex[copy.objectId] = idx;"],
+  nodes:["scenemgr","csgtree"], edges:[["scenemgr","csgtree","AddPrimitiveNode(objectId)"]],
+  state:{nodes:"+1"}}),
+
+S({ph:"add", t:"Refresh — build the objectId map",
+  file:"SceneSerializer::RefreshSceneBuffer()  ·  SceneSerializer.cpp:5",
+  desc:`Now the scene changed, so we recompile. First <span class="hl">BuildObjectIdMap</span> produces a
+    fresh <code>objectId → current array index</code> map from the object vector. (Indices can shift on
+    delete; objectIds never do — that's why the tree stores ids, and we translate to indices only here.)`,
+  calls:["auto map = SceneManager::BuildObjectIdMap(sceneManager.GetObjects());","// { objectId : vectorIndex }"],
+  nodes:["serializer","scenemgr"], edges:[["serializer","scenemgr","BuildObjectIdMap()"]]}),
+
+S({ph:"add", t:"Compile the tree → RPN program",
+  file:"CsgTree::CompileToRPN()  ·  CsgTree.cpp",
+  desc:`A <b>postorder</b> walk turns the n-ary tree into a flat <span class="hl">CsgCommand</span> list.
+    Each primitive emits <code>PUSH_OBJECT(arrayIndex)</code>; an operation node with N children emits
+    <b>N-1</b> op commands (n-ary → binary folding). Example for a 3-sphere union:
+    <code>PUSH PUSH UNION PUSH UNION</code>.`,
+  calls:["program = csgTree.CompileToRPN(map);","// Primitive → PUSH_OBJECT(map.at(objectId))","// Union(N kids) → PUSH … PUSH UNION … (N-1 ops)"],
+  nodes:["serializer","csgtree"], edges:[["serializer","csgtree","CompileToRPN(map)"]],
+  state:{rpn:"PUSH … UNION"}}),
+
+S({ph:"add", t:"Upload both buffers, rebuild bind group",
+  file:"SdfRenderer::CreateSceneBuffer()  ·  SdfRenderer.cpp:128",
+  desc:`Releases the old buffers, then creates & writes the <span class="hl">sceneBuffer</span>
+    (N × 80-byte SdfObjectData) and the <span class="hl">csgProgramBuffer</span> (M × 16-byte CsgCommand),
+    and rebuilds the <b>BindGroup</b> with all three bindings. The globals buffer is reused. Next frame the
+    shader sees the new object.`,
+  calls:["queue.writeBuffer(sceneBuffer,     0, objects.data(),  N*80);","queue.writeBuffer(csgProgramBuffer, 0, program.data(), M*16);","bindGroup = device.createBindGroup({ 0:scene, 1:globals, 2:csg });"],
+  nodes:["serializer","renderer","scenebuf","csgbuf","bindgroup"],
+  edges:[["serializer","renderer","CreateSceneBuffer(obj, program)"],["renderer","scenebuf","writeBuffer(N×80B)"],["renderer","csgbuf","writeBuffer(M×16B)"],["renderer","bindgroup","createBindGroup()"]],
+  gpu:["sceneBuffer ← objects","csgProgramBuffer ← RPN","BindGroup rebuilt"],
+  state:{gpu:"buffers re-uploaded"}}),
+
+S({ph:"add", t:"Next frame → the object appears",
+  file:"back to MainLoop pass 1",
+  desc:`No special signal is needed — the very next frame's ray-march reads the updated
+    <code>csg_program</code> and <code>scene_objects</code>, and <b>evaluateScene</b> now produces the new
+    shape. Add-object is fully <b>data-driven</b>: change CPU state → re-upload → the shader does the rest.`,
+  calls:["// nothing extra — MainLoop already re-binds every frame"],
+  nodes:["shader","csgbuf","scenebuf","rendertgt"],
+  edges:[["csgbuf","shader","new RPN"],["scenebuf","shader","new object"],["shader","rendertgt","object visible"]],
+  state:{phase:"Object visible ✓"}}),
+
+/* ---------------- PHASE 4 : EDIT / DELETE / SAVE / LOAD ---------------- */
+S({ph:"io", t:"Edit properties / drag the gizmo",
+  file:"Application::DrawWorkspace()  ·  Workspace.cpp",
+  desc:`The property panel edits <code>position / size / color</code> directly on the selected
+    <b>SdfObjectData</b>; the ImGuizmo drag calls <b>GizmoController::ApplyModelMatrix</b> to write the new
+    translation back. Any change calls <span class="hl">RefreshSceneBuffer()</span> — recompiling and
+    re-uploading, exactly like adding.`,
+  calls:["ImGui::InputFloat3(\"Position\", obj.position.data());","GizmoController::ApplyModelMatrix(model, obj, TRANSLATE);","if (changed) sceneSerializer.RefreshSceneBuffer();"],
+  nodes:["imgui","app","serializer","renderer"], edges:[["imgui","app","edit / gizmo"],["app","serializer","RefreshSceneBuffer()"],["serializer","renderer","re-upload"]]}),
+
+S({ph:"io", t:"Delete — tombstone the CSG node",
+  file:"SceneManager::RemoveObjectAt()  ·  SceneManager.cpp",
+  desc:`Delete looks up the object's node via the id→index map and calls
+    <span class="hl">CsgTree::RemoveNode</span>, which <b>detaches</b> it from its parent's sibling chain
+    and <b>tombstones</b> the whole subtree (<code>alive=false</code>) — nodes are never physically erased,
+    so other indices stay valid. Then the object is removed from the vector and the map, and the scene
+    refreshes.`,
+  calls:["m_CsgTree.RemoveNode(objectNodeIndex);   // detach + tombstone subtree","m_ObjectNodeIndex.erase(objectId);","m_Objects.erase(begin()+index);"],
+  nodes:["app","scenemgr","csgtree","serializer"], edges:[["app","scenemgr","RemoveObjectAt()"],["scenemgr","csgtree","RemoveNode()"],["scenemgr","serializer","refresh"]],
+  state:{objects:"-1", nodes:"tombstoned"}}),
+
+S({ph:"io", t:"Save — write the .sdfo file",
+  file:"ExtensionLoader::SaveToSDFO()  ·  ExtensionLoader.cpp",
+  desc:`Writes the magic tag <code>'SDFO'</code>, the object count, the raw object payload
+    (N × 80 bytes), and then the CSG tree section via <span class="hl">CsgTree::WriteToStream</span>
+    (node count + raw nodes + <code>m_Root</code> + <code>m_NextNodeId</code>). The tree section is appended
+    last so older files without it still load.`,
+  calls:["file.write(\"SDFO\", 4);  file.write(&count, 4);","file.write(objects.data(), N*sizeof(SdfObjectData));","csgTree.WriteToStream(file);   // nodes + root + nextNodeId"],
+  nodes:["serializer","extloader","sdfo","scenemgr","csgtree"],
+  edges:[["serializer","extloader","SaveToSDFO(objects, tree)"],["scenemgr","extloader","objects"],["csgtree","extloader","tree bytes"],["extloader","sdfo","write"]],
+  state:{phase:"Saved to disk"}}),
+
+S({ph:"io", t:"Open — load + rebuild bookkeeping",
+  file:"ExtensionLoader::LoadFromSDFO()  ·  ExtensionLoader.cpp",
+  desc:`Reads the header, restores each object raw (<b>no id reassignment</b>), reads the tree via
+    <span class="hl">CsgTree::ReadFromStream</span> (EOF-tolerant — legacy files leave it empty), then
+    <b>SceneManager::RebuildAfterLoad</b> restores the objectId counter (max+1), rebuilds the
+    id→node map, and if a legacy file had no tree it regenerates a default root-union. Finally
+    RefreshSceneBuffer uploads it.`,
+  calls:["sceneManager.RestoreObjectRaw(obj);   // per object","sceneManager.GetCsgTree().ReadFromStream(file);","sceneManager.RebuildAfterLoad();","RefreshSceneBuffer();"],
+  nodes:["serializer","extloader","sdfo","scenemgr","csgtree","renderer"],
+  edges:[["serializer","extloader","LoadFromSDFO()"],["sdfo","extloader","read"],["extloader","scenemgr","RestoreObjectRaw()"],["extloader","csgtree","ReadFromStream()"],["scenemgr","renderer","refresh"]],
+  state:{phase:"Loaded from disk"}}),
+
+/* ---------------- PHASE 5 : SHUTDOWN ---------------- */
+S({ph:"shut", t:"Loop ends — window closed",
+  file:"while (app.IsRunning())  ·  main.cpp:7",
+  desc:`When the user closes the window, <b>glfwWindowShouldClose</b> becomes true, <b>IsRunning()</b>
+    returns false, the loop exits and control drops to <span class="hl">app.Terminate()</span>.`,
+  calls:["// IsRunning() == false → leave the while loop","app.Terminate();"],
+  nodes:["main","app","window"], edges:[["window","main","shouldClose = true"],["main","app","Terminate()"]],
+  state:{phase:"Shutting down"}}),
+
+S({ph:"shut", t:"Renderer::Destroy — release GPU objects",
+  file:"Application::Terminate → renderer.Destroy()  ·  SdfRenderer.cpp:287",
+  desc:`Releases everything the renderer owns, in order: render-target view & texture, the scene /
+    csg-program / globals buffers, the pipeline, pipeline layout, bind-group layout and shader module.
+    Every <code>createX</code> has a matching <code>release()</code>.`,
+  calls:["renderTargetView.release(); renderTargetTexture.release();","ClearSceneBuffer();  // bindGroup, sceneBuffer, csgProgramBuffer","globalsBuffer / pipeline / pipelineLayout / bindGroupLayout / shaderModule .release()"],
+  nodes:["app","renderer","scenebuf","csgbuf","globalsbuf","pipeline","bindgroup","rendertgt","shader"],
+  edges:[["app","renderer","Destroy()"],["renderer","scenebuf","release"],["renderer","csgbuf","release"],["renderer","globalsbuf","release"],["renderer","pipeline","release"],["renderer","shader","release"]],
+  state:{gpu:"released"}}),
+
+S({ph:"shut", t:"Tear down ImGui, surface, device",
+  file:"Application::Terminate()  ·  Application.cpp:29",
+  desc:`Shuts down the ImGui backends and context, unconfigures the surface, and releases the WebGPU
+    queue / surface / device / adapter / instance. Finally <b>glfwDestroyWindow</b> and
+    <b>glfwTerminate</b> close the OS window. The process returns 0 — clean exit.`,
+  calls:["ImGui_ImplWGPU_Shutdown(); ImGui_ImplGlfw_Shutdown(); ImGui::DestroyContext();","surface.unconfigure(); queue/surface/device.release();","glfwDestroyWindow(window); glfwTerminate();"],
+  nodes:["app","imgui","graphics","device","window"],
+  edges:[["app","imgui","Shutdown()"],["app","graphics","unconfigure / release"],["graphics","device","release()"],["app","window","destroy"]],
+  state:{phase:"Exited (return 0)"}}),
+];
+
+/* ============================================================
+   RUNTIME
+   ============================================================ */
+const PHASE = {
+  boot:{name:"Boot / Initialize", cls:"p-boot"},
+  frame:{name:"Frame loop (render)", cls:"p-frame"},
+  add:{name:"Add object — the CSG core", cls:"p-add"},
+  io:{name:"Edit · Save · Load", cls:"p-io"},
+  shut:{name:"Shutdown", cls:"p-shut"},
+};
+
+// pre-compute running "live state" per step
+(function computeState(){
+  let cur = {phase:"—", gpu:"none", objects:0, nodes:0, rpn:"—"};
+  for(const st of STEPS){
+    const patch = st.state||{};
+    const next = Object.assign({}, cur);
+    for(const k in patch){
+      let v = patch[k];
+      if(typeof v==="string" && (v[0]==="+"||v[0]==="-") && typeof cur[k]==="number"){
+        next[k] = cur[k] + parseInt(v,10);
+      } else { next[k]=v; }
+    }
+    st._state = next; cur = next;
+  }
+})();
+
+// map a bare filename -> its real repo-relative path, so each step shows a path you can open
+const FILE_PATHS = {
+  "main.cpp":"src/main.cpp",
+  "Application.cpp":"src/editor/Application.cpp", "Application.h":"src/editor/Application.h",
+  "Gui.cpp":"src/editor/Gui.cpp", "MainMenuBar.cpp":"src/editor/MainMenuBar.cpp", "Workspace.cpp":"src/editor/Workspace.cpp",
+  "Window.cpp":"src/platform/Window.cpp", "GraphicsContext.cpp":"src/platform/GraphicsContext.cpp",
+  "SceneManager.cpp":"src/scene/SceneManager.cpp", "SceneManager.h":"src/scene/SceneManager.h",
+  "SdfObjectFactory.cpp":"src/scene/SdfObjectFactory.cpp", "SdfObjectData.h":"src/scene/data/SdfObjectData.h",
+  "CsgTree.cpp":"src/scene/csg/CsgTree.cpp", "CsgTree.h":"src/scene/csg/CsgTree.h",
+  "CsgNode.h":"src/scene/csg/CsgNode.h", "CsgCommand.h":"src/scene/csg/CsgCommand.h",
+  "SceneSerializer.cpp":"src/serialization/SceneSerializer.cpp", "ExtensionLoader.cpp":"src/serialization/ExtensionLoader.cpp",
+  "SdfRenderer.cpp":"src/renderer/SdfRenderer.cpp",
+  "AddObjectPanel.cpp":"src/ui/AddObjectPanel.cpp",
+  "CameraController.cpp":"src/camera/CameraController.cpp", "GizmoController.cpp":"src/interaction/GizmoController.cpp",
+  "main.wgsl":"assets/shaders/main.wgsl", "sdf_core.wgsl":"assets/shaders/sdf_core.wgsl",
+};
+// pull the primary source file (last file mentioned = the one the step's code actually lives in)
+function primaryFile(fileStr){
+  const re=/([A-Za-z_]+\.(?:cpp|h|wgsl))(:\d+)?/g;
+  let m, last=null;
+  while((m=re.exec(fileStr))){ last=m; }
+  if(!last) return fileStr;
+  const full = FILE_PATHS[last[1]] || last[1];
+  return full + (last[2]||'');
+}
+
+const stage = document.getElementById('stage');
+const svg = document.getElementById('edges');
+const nodeEls = {};
+
+// build nodes
+for(const id in NODES){
+  const n = NODES[id];
+  const el = document.createElement('div');
+  el.className = 'node g-'+n.g;
+  el.style.left=n.x+'px'; el.style.top=n.y+'px'; el.style.width=n.w+'px'; el.style.height=n.h+'px';
+  el.innerHTML = `<span class="badge"></span><span class="t">${n.t}</span><span class="s">${n.s}</span>`;
+  stage.appendChild(el); nodeEls[id]=el;
+}
+
+// label layer sits ABOVE the nodes so edge labels are never hidden behind a box
+const labels = document.createElement('div');
+labels.className = 'labels';
+stage.appendChild(labels);
+
+// build rail
+const rail = document.getElementById('railList');
+let lastPhase=null;
+STEPS.forEach((st,i)=>{
+  if(st.ph!==lastPhase){
+    lastPhase=st.ph;
+    const ph = document.createElement('div'); ph.className='phase';
+    ph.innerHTML=`<h4><i class="dot ${PHASE[st.ph].cls}"></i>${PHASE[st.ph].name}</h4>`;
+    rail.appendChild(ph);
+  }
+  const item = document.createElement('div');
+  item.className='step-item'; item.dataset.i=i;
+  item.innerHTML=`<span class="n">${String(i+1).padStart(2,'0')}</span>`+
+    `<span class="st-txt"><span class="st-title">${st.t}</span>`+
+    `<span class="st-file">${primaryFile(st.file)}</span></span>`;
+  item.onclick=()=>go(i);
+  rail.lastElementChild.appendChild(item);
+});
+const railItems = [...document.querySelectorAll('.step-item')];
+
+// anchor helpers
+function anchors(n){ return {
+  top:{x:n.x+n.w/2,y:n.y}, bottom:{x:n.x+n.w/2,y:n.y+n.h},
+  left:{x:n.x,y:n.y+n.h/2}, right:{x:n.x+n.w,y:n.y+n.h/2} }; }
+function bestPair(a,b){
+  const A=anchors(a),B=anchors(b); let best=null,bd=1e9;
+  for(const ka in A) for(const kb in B){
+    const dx=A[ka].x-B[kb].x, dy=A[ka].y-B[kb].y, d=dx*dx+dy*dy;
+    if(d<bd){bd=d; best={p:A[ka],q:B[kb],ka,kb};}
+  }
+  return best;
+}
+const NS="http://www.w3.org/2000/svg";
+function drawEdge(fromId,toId,label,idx){
+  const a=NODES[fromId], b=NODES[toId]; if(!a||!b) return;
+  const {p,q,ka,kb}=bestPair(a,b);
+  // control points bow out along the exit normal
+  const off=42;
+  const norm=(k)=>k==="top"?{x:0,y:-1}:k==="bottom"?{x:0,y:1}:k==="left"?{x:-1,y:0}:{x:1,y:0};
+  const n1=norm(ka), n2=norm(kb);
+  const c1={x:p.x+n1.x*off, y:p.y+n1.y*off};
+  const c2={x:q.x+n2.x*off, y:q.y+n2.y*off};
+  const path=document.createElementNS(NS,'path');
+  path.setAttribute('d',`M ${p.x} ${p.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${q.x} ${q.y}`);
+  path.setAttribute('class','edge');
+  path.setAttribute('marker-end','url(#arrow)');
+  path.style.animationDelay=(idx*0.12)+'s';
+  svg.appendChild(path);
+  if(label){
+    // place an HTML chip at the cubic-Bezier midpoint (t=0.5) — rendered above the nodes
+    const mx=0.125*p.x + 0.375*c1.x + 0.375*c2.x + 0.125*q.x;
+    const my=0.125*p.y + 0.375*c1.y + 0.375*c2.y + 0.125*q.y;
+    const el=document.createElement('div');
+    el.className='elabel';
+    el.style.left=mx+'px'; el.style.top=my+'px';
+    el.textContent=label;
+    labels.appendChild(el);
+  }
+}
+
+let cur=0, timer=null;
+const detail=document.getElementById('detail');
+const stateBox=document.getElementById('stateBox');
+
+function render(){
+  const st=STEPS[cur];
+  // nodes
+  for(const id in nodeEls){
+    nodeEls[id].classList.remove('active','primary');
+  }
+  (st.nodes||[]).forEach((id,k)=>{
+    if(nodeEls[id]){ nodeEls[id].classList.add('active'); if(k===0) nodeEls[id].classList.add('primary'); }
+  });
+  // edges + labels
+  [...svg.querySelectorAll('path.edge')].forEach(e=>e.remove());
+  labels.innerHTML='';
+  (st.edges||[]).forEach((e,i)=>drawEdge(e[0],e[1],e[2],i));
+
+  // detail
+  const ph=PHASE[st.ph];
+  let calls = (st.calls||[]).map(c=>`<span class="call">${escapeHtml(c)}</span>`).join('');
+  const w=(st.gpu||[]);
+  let chips = w.length ? `<div class="chips">${w.map(x=>`<span class="chip gpu">${escapeHtml(x)}</span>`).join('')}</div>` : '';
+  detail.innerHTML = `
+    <span class="kick ${ph.cls}"><i class="dot ${ph.cls}"></i>${ph.name}</span>
+    <h2>${st.t}</h2>
+    <div class="filebanner">
+      <span class="ic">📄</span>
+      <div><div class="lbl">Open this file</div><div class="fp">${primaryFile(st.file)}</div></div>
+    </div>
+    <div class="fileref">${st.file.replace(/`([^`]+)`/g,'<code>$1</code>')}</div>
+    <p>${st.desc}</p>
+    ${calls?`<div class="calls"><div class="lbl">Calls / code</div>${calls}</div>`:''}
+    ${chips}
+  `;
+
+  // state panel
+  const s=st._state;
+  const buffers = s.gpu;
+  stateBox.innerHTML = `
+    <div class="row"><span class="k">Lifecycle</span><span class="v">${s.phase}</span></div>
+    <div class="row"><span class="k">Scene objects</span><span class="v">${s.objects}</span></div>
+    <div class="row"><span class="k">CSG nodes</span><span class="v">${s.nodes}</span></div>
+    <div class="row"><span class="k">RPN program</span><span class="v mono">${escapeHtml(String(s.rpn))}</span></div>
+    <div class="row"><span class="k">GPU</span><span class="v mono">${escapeHtml(String(buffers))}</span></div>
+  `;
+
+  // rail + counter
+  railItems.forEach(it=>it.classList.toggle('active', +it.dataset.i===cur));
+  railItems[cur].scrollIntoView({block:'nearest'});
+  document.getElementById('counter').textContent=`${cur+1} / ${STEPS.length}`;
+  document.getElementById('progbar').style.width=((cur+1)/STEPS.length*100)+'%';
+  document.getElementById('prevBtn').disabled=cur===0;
+  document.getElementById('nextBtn').disabled=cur===STEPS.length-1;
+}
+function escapeHtml(s){ return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function go(i){ cur=Math.max(0,Math.min(STEPS.length-1,i)); render(); }
+function next(){ if(cur<STEPS.length-1) go(cur+1); else stopAuto(); }
+function prev(){ go(cur-1); }
+
+document.getElementById('nextBtn').onclick=next;
+document.getElementById('prevBtn').onclick=prev;
+window.addEventListener('keydown',e=>{
+  if(e.key==='ArrowRight'){ next(); } else if(e.key==='ArrowLeft'){ prev(); }
+});
+
+// autoplay
+const autoBtn=document.getElementById('autoBtn');
+function startAuto(){ timer=setInterval(()=>{ if(cur>=STEPS.length-1){ stopAuto(); } else next(); },2600);
+  autoBtn.textContent='⏸ Pause'; autoBtn.classList.add('primary'); }
+function stopAuto(){ clearInterval(timer); timer=null; autoBtn.textContent='▶ Play'; autoBtn.classList.remove('primary'); }
+autoBtn.onclick=()=>{ timer?stopAuto():startAuto(); };
+
+// theme
+const themeBtn=document.getElementById('themeBtn');
+themeBtn.onclick=()=>{
+  const root=document.documentElement;
+  const nowDark = root.getAttribute('data-theme')!=='light';
+  root.setAttribute('data-theme', nowDark?'light':'dark');
+  render(); // redraw edges (colors)
+};
+
+render();
+</script>
+</body>
+</html>
