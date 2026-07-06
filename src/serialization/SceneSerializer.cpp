@@ -4,10 +4,16 @@
 
 void SceneSerializer::RefreshSceneBuffer()
 {
+    // Rebuild the objectId map and recompile the CSG tree into an RPN program, then
+    // upload both the scene objects and the program to the GPU.
+    auto objectIdMap = SceneManager::BuildObjectIdMap(sceneManager.GetObjects());
+    std::vector<CsgCommand> program = sceneManager.GetCsgTree().CompileToRPN(objectIdMap);
+
     renderer.CreateSceneBuffer(
         graphics.device,
         graphics.queue,
-        sceneManager.GetObjects()
+        sceneManager.GetObjects(),
+        program
     );
 }
 
@@ -15,11 +21,7 @@ void SceneSerializer::NewScene()
 {
     sceneManager.ClearScene();
 
-    renderer.CreateSceneBuffer(
-        graphics.device,
-        graphics.queue,
-        sceneManager.GetObjects()
-    );
+    RefreshSceneBuffer();
 
     std::cout << "[INFO]: New empty scene created.\n";
 }
@@ -48,7 +50,7 @@ void SceneSerializer::SaveSceneToSDFO()
 {
     std::filesystem::path path = projectRoot / "assets/test.sdfo";
 
-    if (ExtensionLoader::SaveToSDFO(path.string(), sceneManager.GetObjects())) {
+    if (ExtensionLoader::SaveToSDFO(path.string(), sceneManager.GetObjects(), sceneManager.GetCsgTree())) {
         std::cout << "[INFO]: Scene saved to: "
             << path << std::endl;
     }

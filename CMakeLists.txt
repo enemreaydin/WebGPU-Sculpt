@@ -95,6 +95,7 @@ set(ENGINE_SOURCES
     src/camera/CameraController.cpp
     src/scene/SceneManager.cpp
     src/scene/SdfObjectFactory.cpp
+    src/scene/csg/CsgTree.cpp
     src/serialization/ExtensionLoader.cpp
     src/serialization/SceneSerializer.cpp
     src/utils/FileHelper.cpp
@@ -120,6 +121,9 @@ set(PROJECT_HEADERS
     src/scene/data/SdfEnums.h
     src/scene/data/SdfObjectData.h
     src/scene/data/GlobalsData.h
+    src/scene/csg/CsgCommand.h
+    src/scene/csg/CsgNode.h
+    src/scene/csg/CsgTree.h
     src/renderer/SdfRenderer.h
     src/camera/Camera.h
     src/camera/CameraController.h
@@ -176,6 +180,7 @@ add_executable(create_test_sdfo
     src/tools/create_test_sdfo.cpp
     src/serialization/ExtensionLoader.cpp
     src/scene/SceneManager.cpp
+    src/scene/csg/CsgTree.cpp
 )
 
 target_include_directories(create_test_sdfo PRIVATE

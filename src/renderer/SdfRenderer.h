@@ -3,6 +3,7 @@
 #include <webgpu/webgpu.hpp>
 #include "scene/data/SdfObjectData.h"
 #include "scene/data/GlobalsData.h"
+#include "scene/csg/CsgCommand.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -18,7 +19,8 @@ public:
     void CreateSceneBuffer(
         wgpu::Device device,
         wgpu::Queue queue,
-        const std::vector<SdfObjectData>& objects
+        const std::vector<SdfObjectData>& objects,
+        const std::vector<CsgCommand>& csgProgram
     );
 
     void ClearSceneBuffer();
@@ -39,6 +41,7 @@ public:
     wgpu::RenderPipeline pipeline = nullptr;
     wgpu::BindGroup bindGroup = nullptr;
     wgpu::Buffer sceneBuffer = nullptr;
+    wgpu::Buffer csgProgramBuffer = nullptr;
     wgpu::Buffer globalsBuffer = nullptr;
 
 private:

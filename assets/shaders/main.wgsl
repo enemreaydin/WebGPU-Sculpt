@@ -10,6 +10,8 @@ struct Globals {
 
 @group(0) @binding(1) var<uniform> globals : Globals;
 
+@group(0) @binding(2) var<storage, read> csg_program: array<CsgCommand>;
+
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) uv: vec2f,

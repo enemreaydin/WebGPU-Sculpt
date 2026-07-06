@@ -4,7 +4,7 @@
 #include <vector>
 
 // Write the scene to a binary .sdfo file.
-bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<SdfObjectData>& objects) {
+bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<SdfObjectData>& objects, const CsgTree& csgTree) {
     std::ofstream file(filepath, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "[ExtensionLoader] HATA: Dosya yazma hatasi: " << filepath << "\n";
@@ -20,6 +20,10 @@ bool ExtensionLoader::SaveToSDFO(const std::string& filepath, const std::vector<
 
     // Payload
     file.write((char*)objects.data(), objects.size() * sizeof(SdfObjectData));
+
+    // CSG tree section (size prefix + data). Appended after the object payload so old
+    // files without this section stay loadable.
+    csgTree.WriteToStream(file);
 
     file.close();
     std::cout << "[ExtensionLoader] Dosya basariyla kaydedildi: " << filepath << "\n";
@@ -48,8 +52,15 @@ bool ExtensionLoader::LoadFromSDFO(const std::string& filepath, SceneManager& sc
     for (int i = 0; i < count; ++i) {
         SdfObjectData obj;
         file.read((char*)&obj, sizeof(SdfObjectData));
-        sceneManager.AddObject(obj);
+        // Restore raw (no objectId reassignment, no tree mutation) — the CSG tree is
+        // restored from its own section below.
+        sceneManager.RestoreObjectRaw(obj);
     }
+
+    // CSG tree section. Tolerates EOF gracefully: legacy files without this section
+    // leave the tree empty, and RebuildAfterLoad() then rebuilds a default tree.
+    sceneManager.GetCsgTree().ReadFromStream(file);
+    sceneManager.RebuildAfterLoad();
 
     file.close();
     std::cout << "[ExtensionLoader] Dosya basariyla yuklendi: " << filepath << "\n";

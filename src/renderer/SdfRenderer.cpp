@@ -42,13 +42,20 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
     bglEntryGlobals.visibility = wgpu::ShaderStage::Fragment;
     bglEntryGlobals.buffer.type = wgpu::BufferBindingType::Uniform;
 
-    wgpu::BindGroupLayoutEntry entries[2] = {
+    // Binding 2: the compiled RPN CSG program (read-only storage).
+    wgpu::BindGroupLayoutEntry bglEntryCsg{};
+    bglEntryCsg.binding = 2;
+    bglEntryCsg.visibility = wgpu::ShaderStage::Fragment;
+    bglEntryCsg.buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+    wgpu::BindGroupLayoutEntry entries[3] = {
         bglEntry,
-        bglEntryGlobals
+        bglEntryGlobals,
+        bglEntryCsg
     };
 
     wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.entryCount = 2;
+    bglDesc.entryCount = 3;
     bglDesc.entries = entries;
 
     bindGroupLayout = device.createBindGroupLayout(bglDesc);
@@ -128,7 +135,8 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
 void SdfRenderer::CreateSceneBuffer(
     wgpu::Device device,
     wgpu::Queue queue,
-    const std::vector<SdfObjectData>& objects)
+    const std::vector<SdfObjectData>& objects,
+    const std::vector<CsgCommand>& csgProgram)
 {
     std::vector<SdfObjectData> safeObjects = objects;
 
@@ -136,11 +144,27 @@ void SdfRenderer::CreateSceneBuffer(
     {
         SdfObjectData dummy{};
         dummy.type = -1;
-        dummy.op = 0;
+        dummy.objectId = -1;
+        dummy.parentId = -1;
         dummy.position = { 0.0f, 0.0f, 0.0f, 0.0f };
+        dummy.rotation = { 0.0f, 0.0f, 0.0f, 1.0f };
         dummy.size = { 0.0f, 0.0f, 0.0f, 0.0f };
         dummy.color = { 0.0f, 0.0f, 0.0f, 0.0f };
         safeObjects.push_back(dummy);
+    }
+
+    // A storage buffer cannot be zero-sized. When the program is empty, upload a
+    // single no-op command (an unknown cmd_type) so the shader leaves the stack empty
+    // and falls back to the default background.
+    std::vector<CsgCommand> safeProgram = csgProgram;
+    if (safeProgram.empty())
+    {
+        CsgCommand noop{};
+        noop.cmdType = static_cast<CsgCmdType>(-1);
+        noop.operand = 0;
+        noop.nodeId = -1;
+        noop.pad0 = 0;
+        safeProgram.push_back(noop);
     }
 
     if (!device || !queue || !bindGroupLayout || !globalsBuffer)
@@ -161,6 +185,12 @@ void SdfRenderer::CreateSceneBuffer(
         sceneBuffer = nullptr;
     }
 
+    if (csgProgramBuffer)
+    {
+        csgProgramBuffer.release();
+        csgProgramBuffer = nullptr;
+    }
+
     uint64_t bufferSize = safeObjects.size() * sizeof(SdfObjectData);
 
     wgpu::BufferDescriptor bufferDesc{};
@@ -178,6 +208,24 @@ void SdfRenderer::CreateSceneBuffer(
 
     queue.writeBuffer(sceneBuffer, 0, safeObjects.data(), bufferSize);
 
+    // CSG RPN program buffer (parallel to sceneBuffer).
+    uint64_t programSize = safeProgram.size() * sizeof(CsgCommand);
+
+    wgpu::BufferDescriptor programDesc{};
+    programDesc.size = programSize;
+    programDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    programDesc.mappedAtCreation = false;
+
+    csgProgramBuffer = device.createBuffer(programDesc);
+
+    if (!csgProgramBuffer)
+    {
+        std::cerr << "[KRITIK]: csgProgramBuffer olusturulamadi!\n";
+        return;
+    }
+
+    queue.writeBuffer(csgProgramBuffer, 0, safeProgram.data(), programSize);
+
     wgpu::BindGroupEntry bgEntry{};
     bgEntry.binding = 0;
     bgEntry.buffer = sceneBuffer;
@@ -190,14 +238,21 @@ void SdfRenderer::CreateSceneBuffer(
     bgEntryGlobals.offset = 0;
     bgEntryGlobals.size = sizeof(GlobalsData);
 
-    wgpu::BindGroupEntry bgEntries[2] = {
+    wgpu::BindGroupEntry bgEntryCsg{};
+    bgEntryCsg.binding = 2;
+    bgEntryCsg.buffer = csgProgramBuffer;
+    bgEntryCsg.offset = 0;
+    bgEntryCsg.size = programSize;
+
+    wgpu::BindGroupEntry bgEntries[3] = {
         bgEntry,
-        bgEntryGlobals
+        bgEntryGlobals,
+        bgEntryCsg
     };
 
     wgpu::BindGroupDescriptor bgDesc{};
     bgDesc.layout = bindGroupLayout;
-    bgDesc.entryCount = 2;
+    bgDesc.entryCount = 3;
     bgDesc.entries = bgEntries;
 
     bindGroup = device.createBindGroup(bgDesc);
@@ -281,6 +336,12 @@ void SdfRenderer::ClearSceneBuffer()
     {
         sceneBuffer.release();
         sceneBuffer = nullptr;
+    }
+
+    if (csgProgramBuffer)
+    {
+        csgProgramBuffer.release();
+        csgProgramBuffer = nullptr;
     }
 }
 

@@ -1,12 +1,13 @@
 struct SdfObject
 {
     obj_type : i32,
-    op_type : i32,
+    object_id : i32,
 
+    parent_id : i32,
     pad0 : i32,
-    pad1 : i32,
 
     position : vec4f,
+    rotation : vec4f,
     size : vec4f,
     color : vec4f,
 };
@@ -16,6 +17,15 @@ struct SceneResult
     distance : f32,
     color : vec3f,
 };
+
+// GPU-facing RPN command — mirrors the CPU-side CsgCommand (16 bytes).
+struct CsgCommand
+{
+    cmd_type : i32,
+    operand : i32,
+    node_id : i32,
+    pad0 : i32,
+}
 
 fn sdfSphere(p : vec3f, radius : f32) -> f32
 {
@@ -61,52 +71,93 @@ fn evaluateScene(p : vec3f) -> SceneResult
     var result : SceneResult;
     result.distance = 100000.0;
     result.color = vec3f(0.7);
-    let count = arrayLength(&scene_objects);
+
+    let count = arrayLength(&csg_program);
     if (count == 0u)
     {
         return result;
     }
-    for(var i : u32 = 0u; i < count; i = i + 1u)
+
+    // Fixed-size stacks for the RPN evaluator (WGSL has no recursion). One stack for
+    // distances and a parallel one for colors, sharing the stack pointer sp.
+    var stack : array<f32, 16>;
+    var stackColor : array<vec3f, 16>;
+    var sp : i32 = 0;
+
+    for (var i : u32 = 0u; i < count; i = i + 1u)
     {
-        let obj = scene_objects[i];
-        let localPos = p - obj.position.xyz;
-        var dist = 100000.0;
-        switch(obj.obj_type)
-        {
-            case 0: { dist = sdfSphere(localPos, obj.size.x); }
-            case 1: { dist = sdfBox(localPos, obj.size.xyz); }
-            case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
-            case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
-            default: { continue; }
-        }
+        let cmd = csg_program[i];
 
-        var objColor = obj.color.xyz;
-        if (i32(i) == globals.selectedIndex)
+        if (cmd.cmd_type == 0)
         {
-            objColor = mix(objColor, vec3f(1.0), 0.4);
-        }
-
-        if(i == 0u || obj.op_type == 0)
-        {
-            result.distance = dist;
-            result.color = objColor;
-        }
-        else if(obj.op_type == 1)
-        {
-            if(dist < result.distance)
+            // PUSH_OBJECT: evaluate the primitive and push its distance/color.
+            let obj = scene_objects[cmd.operand];
+            let localPos = p - obj.position.xyz;
+            var dist = 100000.0;
+            switch(obj.obj_type)
             {
-                result.color = objColor;
+                case 0: { dist = sdfSphere(localPos, obj.size.x); }
+                case 1: { dist = sdfBox(localPos, obj.size.xyz); }
+                case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
+                case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
+                default: { dist = 100000.0; }
             }
-            result.distance = opUnion(result.distance, dist);
+
+            var objColor = obj.color.xyz;
+            if (cmd.operand == globals.selectedIndex)
+            {
+                objColor = mix(objColor, vec3f(1.0), 0.4);
+            }
+
+            stack[sp] = dist;
+            stackColor[sp] = objColor;
+            sp = sp + 1;
         }
-        else if(obj.op_type == 2)
+        else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
         {
-            result.distance = opSubtract(dist, result.distance);
-        }
-        else if(obj.op_type == 3)
-        {
-            result.distance = opIntersection(result.distance, dist);
+            // Binary op: pop the top two entries (A = accumulator below, B = top),
+            // combine, and push the single result back. Net stack effect is -1.
+            let dB = stack[sp - 1];
+            let cB = stackColor[sp - 1];
+            let dA = stack[sp - 2];
+            let cA = stackColor[sp - 2];
+
+            var d = 100000.0;
+            var c = cA;
+
+            if (cmd.cmd_type == 1)
+            {
+                // Union: closer surface wins the color (matches old behavior).
+                d = opUnion(dA, dB);
+                if (dB < dA)
+                {
+                    c = cB;
+                }
+            }
+            else if (cmd.cmd_type == 2)
+            {
+                // Subtract: opSubtract(dist, result) order; accumulator keeps its color.
+                d = opSubtract(dB, dA);
+                c = cA;
+            }
+            else
+            {
+                // Intersection: opIntersection(result, dist); accumulator keeps its color.
+                d = opIntersection(dA, dB);
+                c = cA;
+            }
+
+            sp = sp - 1;
+            stack[sp - 1] = d;
+            stackColor[sp - 1] = c;
         }
     }
+
+    if (sp > 0)
+    {
+        result.distance = stack[sp - 1];
+        result.color = stackColor[sp - 1];
+    }
+
     return result;
 }

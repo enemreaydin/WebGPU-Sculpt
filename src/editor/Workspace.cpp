@@ -116,20 +116,8 @@ void Application::DrawWorkspace() {
 
                 ImGui::Separator();
 
-                const char* operations[] = {
-                    "None",
-                    "Union",
-                    "Subtract",
-                    "Intersection"
-                };
-
-                int currentOp = obj.op;
-
-                if (ImGui::Combo("Operation", &currentOp, operations, IM_ARRAYSIZE(operations)))
-                {
-                    obj.op = currentOp;
-                    changed = true;
-                }
+                // Combination logic now lives in the CSG tree (not on the primitive),
+                // so there is no per-object Operation combo here anymore.
 
                 if (changed)
                 {
@@ -138,7 +126,8 @@ void Application::DrawWorkspace() {
 
                 if (ImGui::Button("Delete Object"))
                 {
-                    objects.erase(objects.begin() + selectionState.selectedObjectIndex);
+                    // Remove the object and tombstone its CSG node in one step.
+                    sceneManager.RemoveObjectAt(selectionState.selectedObjectIndex);
 
                     if (objects.empty())
                         selectionState.selectedObjectIndex = -1;

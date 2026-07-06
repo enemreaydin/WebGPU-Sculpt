@@ -212,20 +212,15 @@ void Application::InitializeRenderer()
     renderer.Initialize(graphics.device, graphics.surfaceFormat);
     renderer.CreateRenderTarget(graphics.device, 1000, 800);
 
-    // Create an empty scene buffer so the shader can render the grid.
-    renderer.CreateSceneBuffer(graphics.device, graphics.queue, sceneManager.GetObjects());
+    // Create an empty scene buffer (and empty CSG program) so the shader can render the grid.
+    sceneSerializer.RefreshSceneBuffer();
 }
 
 void Application::AddObjectToScene(const SdfObjectData& object)
 {
-    SdfObjectData obj = object;
-
-    if (sceneManager.GetObjects().empty())
-    {
-        obj.op = static_cast<int32_t>(SdfOperationType::None);
-    }
-
-    sceneManager.AddObject(obj);
+    // SceneManager assigns the permanent objectId and attaches the primitive to the
+    // CSG tree's root Union node.
+    sceneManager.AddObject(object);
 
     selectionState.selectedObjectIndex = static_cast<int>(sceneManager.GetObjects().size()) - 1;
 
