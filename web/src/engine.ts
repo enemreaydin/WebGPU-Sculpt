@@ -1,6 +1,5 @@
 // Loads the compiled C++/WASM SDF engine and wraps its C bindings
 // (src/bindings/WebBindings.cpp) in a typed TypeScript API.
-
 export enum PrimitiveType {
   Sphere = 0,
   Box = 1,

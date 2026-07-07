@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Engine, PrimitiveType, type SceneState, type SdfObject } from "./engine";
 import "./App.css";
-
+import { useShortcuts } from "./shortcuts.ts";
 const EMPTY_SCENE: SceneState = { selectedIndex: -1, showGrid: true, objects: [] };
 
 export default function App() {
@@ -101,7 +101,15 @@ export default function App() {
   };
 
   // ---- Canvas camera interaction -------------------------------------------
-
+  useShortcuts({
+    ready,
+    onNew,
+    onOpen,
+    onSave,
+    toggleGrid,
+    removeSelected,
+    addPrimitive
+  });
   const dragging = useRef(false);
   const panning = useRef(false);
 
@@ -125,6 +133,7 @@ export default function App() {
   const onWheel = (e: React.WheelEvent) => {
     engineRef.current?.cameraZoom(-e.deltaY * 0.01);
   };
+
 
   const selected: SdfObject | undefined =
     scene.selectedIndex >= 0 ? scene.objects[scene.selectedIndex] : undefined;
