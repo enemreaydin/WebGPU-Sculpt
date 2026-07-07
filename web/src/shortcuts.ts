@@ -30,7 +30,7 @@ export function useShortcuts(handlers: ShortcutHandlers) {
         return;
       }
 
-      const { ready, onNew, onOpen, onSave, toggleGrid, removeSelected, addPrimitive } = handlersRef.current;
+      const { ready, onOpen, onSave, toggleGrid, removeSelected, addPrimitive } = handlersRef.current;
 
       // Engine hazır değilse hiçbir kısayolu çalıştırma
       if (!ready) return;
@@ -52,9 +52,10 @@ export function useShortcuts(handlers: ShortcutHandlers) {
       } else {
         // Ctrl/Cmd basılı olmayan tekil tuşlar
         switch (event.key.toLowerCase()) {
-          case "Delete":
-          case "Backspace":
+          case "delete":
+          case "backspace":
             event.preventDefault();
+            removeSelected();
             break;
           case "g":
             event.preventDefault();

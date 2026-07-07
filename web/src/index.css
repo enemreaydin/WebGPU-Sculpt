@@ -1,24 +1,12 @@
-:root {
-  color-scheme: dark;
-  --bg: #1a1a1e;
-  --panel: #232329;
-  --border: #34343c;
-  --text: #e6e6ea;
-  --muted: #9a9aa6;
-  --accent: #4c8bf5;
-  --danger: #b23030;
-  font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  margin: 0;
-  height: 100%;
-  background: var(--bg);
-  color: var(--text);
-}
+/* Global styles ported from the SDFEditorUI.html mockup's <helmet> block. */
+html, body, #root { margin: 0; height: 100%; background: #161616; overflow: hidden; }
+* { box-sizing: border-box; }
+a { color: #e8912d; text-decoration: none; }
+a:hover { color: #f4a340; }
+input { outline: none; }
+input::placeholder { color: #616161; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #363636; border: 3px solid #1f1f1f; border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::selection { background: rgba(232,145,45,0.35); }
+@keyframes sdfFadeIn { from { opacity: 0; } to { opacity: 1; } }

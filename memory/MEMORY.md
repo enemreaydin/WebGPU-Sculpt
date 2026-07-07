@@ -1,1 +1,2 @@
 - [Web build toolchain](web-build-toolchain.md) — how to compile the Emscripten/WASM engine (needs emscripten 3.1.61 + VS2022 ninja/cmake)
+- [Web UI architecture](web-ui-architecture.md) — App.tsx is a verbatim port of the SDFEditorUI.html mockup; buttons drive mock state, not the engine yet
