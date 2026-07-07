@@ -1,5 +1,14 @@
 import React from "react";
-import { Engine } from "./engine";
+import { Engine, PrimitiveType } from "./engine";
+
+// UI type-name <-> engine PrimitiveType enum.
+const TYPE_ENUM: Record<string, PrimitiveType> = {
+  sphere: PrimitiveType.Sphere,
+  box: PrimitiveType.Box,
+  cylinder: PrimitiveType.Cylinder,
+  torus: PrimitiveType.Torus,
+};
+const TYPE_NAME: Record<number, string> = { 0: "sphere", 1: "box", 2: "cylinder", 3: "torus" };
 
 /* ============================================================================
  * SDF Editor UI — faithful port of the root SDFEditorUI.html design mockup.
@@ -161,48 +170,18 @@ export default class App extends React.Component<any, any> {
     dockTab: null,
     propsTab: null,
     filter: "",
-    expanded: { scene: true, env: true, props: true },
-    sel: "sph1",
-    hidden: {},
-    locked: {},
+    expanded: { scene: true },
+    // Selection id: "scene" (root collection), a stringified engine object id, or null.
+    sel: "scene",
     renaming: null,
     renameText: "",
-    tree: [
-      {
-        id: "scene",
-        name: "Scene Collection",
-        type: "collection",
-        children: [
-          {
-            id: "env",
-            name: "Environment",
-            type: "collection",
-            children: [
-              { id: "ground", name: "Ground", type: "box" },
-              { id: "pil1", name: "Pillar.001", type: "cylinder" },
-              { id: "pil2", name: "Pillar.002", type: "cylinder" },
-            ],
-          },
-          {
-            id: "props",
-            name: "Props",
-            type: "collection",
-            children: [
-              { id: "sph1", name: "Sphere.001", type: "sphere" },
-              { id: "tor1", name: "Torus.001", type: "torus" },
-            ],
-          },
-        ],
-      },
-    ],
-    data: {
-      ground: { pos: [0, -0.25, 0], rot: [0, 0, 0], scl: [6, 0.5, 6], hsv: { h: 30, s: 0.08, v: 0.45 }, prm: { round: 0.02 }, op: "Union", smooth: 0 },
-      pil1: { pos: [-1.5, 1, 0], rot: [0, 0, 0], scl: [1, 1, 1], hsv: { h: 28, s: 0.15, v: 0.6 }, prm: { radius: 0.4, height: 2 }, op: "Union", smooth: 0.1 },
-      pil2: { pos: [1.5, 1, 0], rot: [0, 0, 0], scl: [1, 1, 1], hsv: { h: 28, s: 0.15, v: 0.6 }, prm: { radius: 0.4, height: 2 }, op: "Union", smooth: 0.1 },
-      sph1: { pos: [0, 1.2, 0], rot: [0, 0, 0], scl: [1, 1, 1], hsv: { h: 18, s: 0.65, v: 0.8 }, prm: { radius: 1 }, op: "Smooth Union", smooth: 0.25 },
-      tor1: { pos: [0, 2.2, 0], rot: [0, 0, 0], scl: [1, 1, 1], hsv: { h: 38, s: 0.55, v: 0.75 }, prm: { radius: 0.8, thickness: 0.25 }, op: "Union", smooth: 0.15 },
-    },
-    counts: { sphere: 1, box: 1, cylinder: 2, torus: 1, collection: 2 },
+    // Engine-owned object list (rebuilt from engine.getScene() after each mutation).
+    objects: [] as any[],
+    // UI-only per-object attributes, keyed by stringified engine object id. These
+    // hold what the engine has no storage for: display name, visibility/lock flags,
+    // rotation, non-uniform scale, shape params, and the (planned) blend op/smooth.
+    meta: {} as Record<string, any>,
+    counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 },
     secT: true,
     secS: true,
     secB: true,
@@ -222,13 +201,7 @@ export default class App extends React.Component<any, any> {
     demoVal: 0.75,
     demoSlider: 0.4,
     demoCheck: true,
-    logs: [
-      { time: "12:00:01", tag: "engine", msg: "WASM module loaded (sdf-engine.wasm)" },
-      { time: "12:00:01", tag: "engine", msg: "WebGPU device acquired" },
-      { time: "12:00:02", tag: "shader", msg: "sdf_core.wgsl compiled in 38 ms" },
-      { time: "12:00:02", tag: "shader", msg: "main.wgsl compiled in 21 ms" },
-      { time: "12:00:02", tag: "scene", msg: "untitled.sdfo — 6 objects" },
-    ],
+    logs: [] as any[],
   };
 
   componentDidMount() {
@@ -250,8 +223,11 @@ export default class App extends React.Component<any, any> {
       else if (k === "r") this.setState({ tool: "rotate" });
       else if (k === "s") this.setState({ tool: "scale" });
       else if (k === "f2") {
-        const f = this.find(this.state.sel);
-        if (f) this.setState({ renaming: f.node.id, renameText: f.node.name });
+        const o = this.selObj();
+        if (o) {
+          const id = String(o.id);
+          this.setState({ renaming: id, renameText: this.state.meta[id]?.name || o.typeName });
+        }
       } else if (k === "x" || e.key === "Delete") this.deleteSel();
       else if (k === "d" && e.shiftKey) this.duplicateSel();
     };
@@ -279,12 +255,35 @@ export default class App extends React.Component<any, any> {
         this.syncCanvasSize();
         this._ro = new ResizeObserver(() => this.syncCanvasSize());
         this._ro.observe(viewport);
-        this.log("engine", "viewport render surface ready");
+        this.log("engine", "WebGPU device acquired — viewport ready");
+        engine.setShowGrid(this.state.grid);
+        this.seedDemo();
       })
       .catch((err: unknown) => {
         this.log("error", "engine failed: " + String(err));
         this.status("Engine failed to load — check console");
       });
+  }
+
+  // Populate a small starting scene through the real bindings so the viewport
+  // shows something on load and the outliner mirrors what is actually rendered.
+  seedDemo() {
+    const e = this.engine;
+    if (!e) return;
+    const specs: Array<[string, [number, number, number]]> = [
+      ["box", [0, -0.25, 0]],
+      ["sphere", [-2.2, 1, 0]],
+      ["cylinder", [2.2, 1, 0]],
+      ["torus", [0, 2.4, 0]],
+    ];
+    for (const [t, pos] of specs) {
+      const i = e.addPrimitive(TYPE_ENUM[t]);
+      e.setObjectPosition(i, pos[0], pos[1], pos[2]);
+    }
+    e.selectObject(-1);
+    this.refresh(true);
+    this.setState({ sel: "scene", saved: true });
+    this.log("scene", "untitled.sdfo — " + specs.length + " objects");
   }
 
   syncCanvasSize() {
@@ -339,27 +338,85 @@ export default class App extends React.Component<any, any> {
     return String(n).padStart(3, "0");
   }
 
-  find(id: any, list?: any, parent?: any): any {
-    if (!id) return null;
-    list = list || this.state.tree;
-    for (let i = 0; i < list.length; i++) {
-      const n = list[i];
-      if (n.id === id) return { node: n, arr: list, idx: i, parent: parent || null };
-      if (n.children) {
-        const r = this.find(id, n.children, n);
-        if (r) return r;
-      }
-    }
-    return null;
+  countObjects(): number {
+    return this.state.objects.length;
   }
-  countObjects(list?: any): number {
-    list = list || this.state.tree;
-    let c = 0;
-    for (const n of list) {
-      if (n.type !== "collection") c++;
-      if (n.children) c += this.countObjects(n.children);
+
+  // Engine object for a selection id ("scene" and null resolve to no object).
+  objById(id: any): any {
+    if (id == null || id === "scene") return null;
+    return this.state.objects.find((o: any) => String(o.id) === String(id)) || null;
+  }
+  selObj(): any {
+    return this.objById(this.state.sel);
+  }
+
+  // Engine `size` xyz derived from a UI object's shape params + scale.
+  computeSize(typeName: string, prm: any, scl: number[]): [number, number, number] {
+    switch (typeName) {
+      case "sphere": return [(prm.radius ?? 1) * scl[0], 0, 0];
+      case "box": return [scl[0], scl[1], scl[2]];
+      case "cylinder": return [(prm.radius ?? 0.7) * scl[0], (prm.height ?? 1.5) * scl[1], 0];
+      case "torus": return [(prm.radius ?? 1) * scl[0], prm.thickness ?? 0.25, 0];
+      default: return [scl[0], scl[1], scl[2]];
     }
-    return c;
+  }
+
+  // Build default UI meta for an engine object the UI hasn't seen before.
+  // `counts` is a mutable accumulator so generated names stay unique.
+  defaultMeta(o: any, counts: any): any {
+    const typeName = TYPE_NAME[o.type] || "box";
+    const n = (counts[typeName] || 0) + 1;
+    counts[typeName] = n;
+    const size = o.size;
+    let prm: any;
+    if (typeName === "sphere") prm = { radius: size[0] };
+    else if (typeName === "cylinder") prm = { radius: size[0], height: size[1] };
+    else if (typeName === "torus") prm = { radius: size[0], thickness: size[1] };
+    else prm = { round: 0.02 };
+    const c = o.color.map((v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255));
+    return {
+      name: this.cap(typeName) + "." + this.pad3(n),
+      hidden: false,
+      locked: false,
+      rot: [0, 0, 0],
+      scl: typeName === "box" ? [...size] : [1, 1, 1],
+      prm,
+      op: "Union",
+      smooth: 0,
+      hsv: this.rgb2hsv(c[0], c[1], c[2]),
+    };
+  }
+
+  // Re-read the engine's authoritative scene into `objects`, keeping (and lazily
+  // creating) the UI-only `meta` for each object. Pass true to also adopt the
+  // engine's current selection (after add/delete/new/open).
+  refresh(adoptSel = false) {
+    const e = this.engine;
+    if (!e) return;
+    const snap = e.getScene();
+    this.setState((s: any) => {
+      const meta = { ...s.meta };
+      const counts = { ...s.counts };
+      for (const o of snap.objects) {
+        const id = String(o.id);
+        if (!meta[id]) meta[id] = this.defaultMeta(o, counts);
+      }
+      const next: any = { objects: snap.objects, meta, grid: !!snap.showGrid, counts };
+      if (adoptSel) {
+        const selObj = snap.objects.find((o: any) => o.index === snap.selectedIndex);
+        next.sel = selObj ? String(selObj.id) : s.sel === "scene" ? "scene" : "scene";
+      }
+      return next;
+    });
+  }
+
+  // Select an outliner id, mirroring object selection to the engine so the
+  // viewport highlights it.
+  select(id: any) {
+    const o = this.objById(id);
+    this.engine?.selectObject(o ? o.index : -1);
+    this.setState({ sel: id, openMenu: null, ctx: null, picker: null, dd: false, opDd: false });
   }
 
   hsv2rgb(h: number, s: number, v: number) {
@@ -394,11 +451,17 @@ export default class App extends React.Component<any, any> {
     const S = this.state;
     if (key === "demo") return S.demoVal;
     if (key === "demoSlider") return S.demoSlider;
-    const d = S.data[S.sel];
-    if (!d) return 0;
-    if (key === "smooth") return d.smooth;
+    const o = this.selObj();
+    if (!o) return 0;
+    const m = S.meta[String(o.id)];
+    if (!m) return 0;
+    if (key === "smooth") return m.smooth;
     const [a, b] = key.split(".");
-    return d[a][b];
+    if (a === "pos") return o.position[Number(b)];
+    if (a === "rot") return m.rot[Number(b)];
+    if (a === "scl") return m.scl[Number(b)];
+    if (a === "prm") return m.prm[b];
+    return 0;
   }
   sf(key: string, v: number) {
     const S = this.state;
@@ -410,22 +473,45 @@ export default class App extends React.Component<any, any> {
       this.setState({ demoSlider: Math.max(0, Math.min(1, v)) });
       return;
     }
-    const id = S.sel;
-    if (!id || !S.data[id]) return;
-    this.setState((s: any) => {
-      const d = { ...s.data[id] };
-      if (key === "smooth") d.smooth = Math.max(0, Math.min(1, v));
-      else {
-        const [a, b] = key.split(".");
-        if (a === "prm") d.prm = { ...d.prm, [b]: Math.max(0, v) };
-        else {
-          const arr = [...d[a]];
-          arr[Number(b)] = v;
-          d[a] = arr;
-        }
-      }
-      return { data: { ...s.data, [id]: d }, saved: false };
-    });
+    const o = this.selObj();
+    if (!o) return;
+    const id = String(o.id);
+    const m = S.meta[id];
+    if (!m) return;
+    const e = this.engine;
+    const [a, b] = key.split(".");
+    const typeName = TYPE_NAME[o.type] || "box";
+
+    if (key === "smooth") {
+      // Planned blend param — UI-only until the CSG bridge lands.
+      const val = Math.max(0, Math.min(1, v));
+      this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], smooth: val } }, saved: false }));
+      return;
+    }
+    if (a === "pos") {
+      const p = [...o.position];
+      p[Number(b)] = v;
+      e?.setObjectPosition(o.index, p[0], p[1], p[2]);
+      this.setState({ saved: false });
+      this.refresh();
+      return;
+    }
+    if (a === "rot") {
+      // Reserved rotation quaternion has no setter yet — UI-only.
+      const rot = [...m.rot];
+      rot[Number(b)] = v;
+      this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], rot } }, saved: false }));
+      return;
+    }
+    if (a === "scl" || a === "prm") {
+      const prm = a === "prm" ? { ...m.prm, [b]: Math.max(0, v) } : m.prm;
+      const scl = a === "scl" ? m.scl.map((x: number, i: number) => (i === Number(b) ? Math.max(0.001, v) : x)) : m.scl;
+      const size = this.computeSize(typeName, prm, scl);
+      e?.setObjectSize(o.index, size[0], size[1], size[2]);
+      this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], prm, scl } }, saved: false }));
+      this.refresh();
+      return;
+    }
   }
   commitEdit() {
     const k = this.state.editing;
@@ -524,125 +610,114 @@ export default class App extends React.Component<any, any> {
   }
 
   addPrimitive(type: string) {
-    const S = this.state;
-    const n = (S.counts[type] || 0) + 1;
-    const id = type + "_" + Date.now().toString(36);
-    const name = this.cap(type) + "." + this.pad3(n);
-    const tree = JSON.parse(JSON.stringify(S.tree));
-    const f = this.find(S.sel, tree);
-    let target = tree[0].children;
-    let expandId = "scene";
-    if (f && f.node.type === "collection") {
-      f.node.children = f.node.children || [];
-      target = f.node.children;
-      expandId = f.node.id;
-    } else if (f && f.parent) {
-      target = f.parent.children;
-      expandId = f.parent.id;
-    }
-    target.push({ id, name, type });
-    const colors: any = {
-      sphere: { h: 18, s: 0.65, v: 0.8 },
-      box: { h: 30, s: 0.1, v: 0.55 },
-      cylinder: { h: 28, s: 0.15, v: 0.6 },
-      torus: { h: 38, s: 0.55, v: 0.75 },
-    };
-    this.setState((s: any) => ({
-      tree,
-      data: {
-        ...s.data,
-        [id]: { pos: [0, 0.5, 0], rot: [0, 0, 0], scl: [1, 1, 1], hsv: { ...colors[type] }, prm: { ...this.PRM_DEFAULTS[type] }, op: "Union", smooth: 0.1 },
-      },
-      counts: { ...s.counts, [type]: n },
-      sel: id,
-      saved: false,
-      expanded: { ...s.expanded, [expandId]: true },
-      ctx: null,
-      openMenu: null,
-    }));
-    this.log("scene", name + " added");
-    this.status(name + " added");
+    const e = this.engine;
+    if (!e) return;
+    e.addPrimitive(TYPE_ENUM[type]); // engine appends + selects the new object
+    this.refresh(true); // names/meta assigned lazily; selection adopted from engine
+    this.setState((s: any) => ({ saved: false, ctx: null, openMenu: null, expanded: { ...s.expanded, scene: true } }));
+    this.log("scene", this.cap(type) + " added");
+    this.status(this.cap(type) + " added");
   }
   deleteSel() {
-    const S = this.state;
-    const f = this.find(S.sel);
-    if (!f || f.node.id === "scene") return;
-    const tree = JSON.parse(JSON.stringify(S.tree));
-    const g = this.find(S.sel, tree);
-    g.arr.splice(g.idx, 1);
-    const data = { ...S.data };
-    delete data[S.sel];
-    this.setState({ tree, data, sel: null, saved: false, ctx: null });
-    this.log("scene", f.node.name + " deleted");
-    this.status(f.node.name + " deleted");
+    const o = this.selObj();
+    const e = this.engine;
+    if (!o || !e) return;
+    const id = String(o.id);
+    const name = this.state.meta[id]?.name || o.typeName;
+    e.removeObject(o.index);
+    this.setState((s: any) => {
+      const meta = { ...s.meta };
+      delete meta[id];
+      return { meta, ctx: null, saved: false };
+    });
+    this.refresh(true);
+    this.log("scene", name + " deleted");
+    this.status(name + " deleted");
   }
   duplicateSel() {
-    const S = this.state;
-    const f = this.find(S.sel);
-    if (!f || f.node.type === "collection") return;
-    const type = f.node.type;
-    const n = (S.counts[type] || 0) + 1;
-    const id = type + "_" + Date.now().toString(36);
-    const name = this.cap(type) + "." + this.pad3(n);
-    const tree = JSON.parse(JSON.stringify(S.tree));
-    const g = this.find(S.sel, tree);
-    g.arr.splice(g.idx + 1, 0, { id, name, type });
-    this.setState((s: any) => ({
-      tree,
-      data: { ...s.data, [id]: JSON.parse(JSON.stringify(s.data[S.sel])) },
-      counts: { ...s.counts, [type]: n },
-      sel: id,
-      saved: false,
-      ctx: null,
-    }));
-    this.log("scene", name + " duplicated from " + f.node.name);
+    const o = this.selObj();
+    const e = this.engine;
+    if (!o || !e) return;
+    const src = this.state.meta[String(o.id)];
+    const typeName = TYPE_NAME[o.type] || "box";
+    const idx = e.addPrimitive(TYPE_ENUM[typeName]);
+    const p = o.position;
+    e.setObjectPosition(idx, p[0] + 0.5, p[1], p[2]);
+    const size = this.computeSize(typeName, src.prm, src.scl);
+    e.setObjectSize(idx, size[0], size[1], size[2]);
+    const rgb = this.hsv2rgb(src.hsv.h, src.hsv.s, src.hsv.v);
+    e.setObjectColor(idx, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
+    this.refresh(true);
+    this.setState((s: any) => {
+      const newObj = s.objects.find((x: any) => x.index === idx);
+      if (!newObj) return {};
+      const nid = String(newObj.id);
+      const meta = { ...s.meta };
+      meta[nid] = {
+        ...meta[nid],
+        prm: { ...src.prm },
+        scl: [...src.scl],
+        rot: [...src.rot],
+        op: src.op,
+        smooth: src.smooth,
+        hsv: { ...src.hsv },
+      };
+      return { meta, saved: false, ctx: null };
+    });
+    this.log("scene", (src?.name || typeName) + " duplicated");
   }
   addCollection() {
-    const S = this.state;
-    const n = (S.counts.collection || 0) + 1;
-    const id = "col_" + Date.now().toString(36);
-    const name = "Collection." + this.pad3(n);
-    const tree = JSON.parse(JSON.stringify(S.tree));
-    const f = this.find(S.sel, tree);
-    let target = tree[0].children;
-    if (f && f.node.type === "collection") {
-      f.node.children = f.node.children || [];
-      target = f.node.children;
-    } else if (f && f.parent) target = f.parent.children;
-    target.push({ id, name, type: "collection", children: [] });
-    this.setState((s: any) => ({
-      tree,
-      counts: { ...s.counts, collection: n },
-      sel: id,
-      saved: false,
-      ctx: null,
-      expanded: { ...s.expanded, [id]: true },
-    }));
-    this.log("scene", name + " created");
+    // Collections need an object hierarchy the engine does not have yet.
+    this.setState({ ctx: null });
+    this.log("scene", "New Collection — planned (engine has no hierarchy yet)");
+    this.status("Collections — planned");
   }
   commitRename() {
     const S = this.state;
-    if (!S.renaming) return;
-    const tree = JSON.parse(JSON.stringify(S.tree));
-    const f = this.find(S.renaming, tree);
-    if (f && S.renameText.trim()) f.node.name = S.renameText.trim();
-    this.setState({ tree, renaming: null, saved: false });
+    if (!S.renaming || S.renaming === "scene") {
+      this.setState({ renaming: null });
+      return;
+    }
+    const id = S.renaming;
+    const name = S.renameText.trim();
+    if (name && S.meta[id]) {
+      this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], name } }, renaming: null, saved: false }));
+    } else this.setState({ renaming: null });
   }
   newScene() {
+    this.engine?.newScene();
     this.setState({
-      tree: [{ id: "scene", name: "Scene Collection", type: "collection", children: [] }],
-      data: {},
-      sel: null,
+      meta: {},
+      counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 },
+      sel: "scene",
       saved: true,
       openMenu: null,
-      counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 },
     });
+    this.refresh(true);
     this.log("scene", "New scene");
     this.status("New scene");
+  }
+  openScene() {
+    this.engine?.openScene();
+    this.setState({ meta: {}, counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 }, sel: "scene", openMenu: null });
+    this.refresh(true);
+    this.log("scene", "Open scene — reading from engine");
+    this.status("Open scene");
+  }
+  saveScene() {
+    this.engine?.saveScene();
+    this.setState({ saved: true, openMenu: null });
+    this.log("scene", "Saved untitled.sdfo (" + this.countObjects() + " objects)");
+    this.status("Saved");
   }
   csg(op: string) {
     this.log("scene", op + " requested — boolean ops land with the engine bridge");
     this.status(op + " — pending engine bridge");
+  }
+  toggleGrid() {
+    const grid = !this.state.grid;
+    this.engine?.setShowGrid(grid);
+    this.setState({ grid });
   }
 
   mkItem(label: string, key: string, fn: () => void, disabled?: boolean): any {
@@ -686,40 +761,81 @@ export default class App extends React.Component<any, any> {
       mR = this.menu("render"),
       mH = this.menu("help");
 
-    const f = this.find(S.sel);
-    const isObj = !!(f && f.node.type !== "collection" && S.data[f.node.id]);
-    const isColl = !!(f && f.node.type === "collection");
-    const d = isObj ? S.data[f.node.id] : null;
+    const selObj = this.selObj();
+    const isObj = !!selObj;
+    const isColl = S.sel === "scene";
+    const selId = selObj ? String(selObj.id) : null;
+    const d = selObj ? S.meta[selId!] : null;
+    const selTypeName = selObj ? TYPE_NAME[selObj.type] || "box" : "";
 
     const rgb = d ? this.hsv2rgb(d.hsv.h, d.hsv.s, d.hsv.v) : [128, 128, 128];
     const colorCss = "rgb(" + rgb.join(",") + ")";
     const colorHex = this.hex(rgb);
 
-    // tree rows
+    // tree rows — flat object list under the "Scene Collection" root. (The
+    // engine has no hierarchy yet, so collections beyond the root are planned.)
     const rows: any[] = [];
     const filt = S.filter.trim().toLowerCase();
-    const keep = (n: any): boolean => !filt || n.name.toLowerCase().includes(filt) || (n.children || []).some(keep);
-    const walk = (list: any[], depth: number) => {
-      for (const n of list) {
-        if (!keep(n)) continue;
-        const kids = n.children && n.children.length > 0;
-        const exp = filt ? true : !!S.expanded[n.id];
-        const selr = S.sel === n.id;
-        const hid = !!S.hidden[n.id];
-        const lck = !!S.locked[n.id];
+    const nameOf = (o: any) => S.meta[String(o.id)]?.name || o.typeName;
+    const visibleObjs = S.objects.filter((o: any) => !filt || nameOf(o).toLowerCase().includes(filt));
+    const rootExpanded = filt ? true : !!S.expanded.scene;
+    const rootSel = S.sel === "scene";
+    rows.push({
+      id: "scene",
+      name: "Scene Collection",
+      pad: "6px",
+      hasKids: S.objects.length > 0,
+      caretPath: rootExpanded ? this.IC.caretD : this.IC.caretR,
+      iconPath: this.IC.collection,
+      iconColor: rootSel ? "#f0a03c" : "#8f8f8f",
+      bg: rootSel ? "#333333" : "transparent",
+      hoverBg: rootSel ? "#383838" : "#282828",
+      fg: rootSel ? "#f0a03c" : "#c9c9c9",
+      renaming: false,
+      notRenaming: true,
+      editName: "",
+      onNameInput: () => {},
+      onNameKey: () => {},
+      onNameBlur: () => {},
+      eyePath: this.IC.eye,
+      eyeColor: "#7f7f7f",
+      onEye: (e: any) => e.stopPropagation(),
+      lockPath: this.IC.unlock,
+      lockColor: "#4d4d4d",
+      onLock: (e: any) => e.stopPropagation(),
+      onCaret: (e: any) => {
+        e.stopPropagation();
+        this.setState((s: any) => ({ expanded: { ...s.expanded, scene: !s.expanded.scene } }));
+      },
+      onSelect: () => this.select("scene"),
+      onCtx: (e: any) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.setState({ sel: "scene", ctx: { x: e.clientX, y: e.clientY, kind: "node" }, openMenu: null, picker: null });
+      },
+      onRenameStart: () => {},
+    });
+    if (rootExpanded) {
+      for (const o of visibleObjs) {
+        const id = String(o.id);
+        const m = S.meta[id] || {};
+        const tn = TYPE_NAME[o.type] || "box";
+        const selr = S.sel === id;
+        const hid = !!m.hidden;
+        const lck = !!m.locked;
         rows.push({
-          id: n.id,
-          name: n.name,
-          pad: 6 + depth * 14 + "px",
-          hasKids: kids,
-          caretPath: exp ? this.IC.caretD : this.IC.caretR,
-          iconPath: this.IC[n.type] || this.IC.box,
+          id,
+          name: m.name || o.typeName,
+          pad: "20px",
+          hasKids: false,
+          caretPath: "",
+          iconPath: this.IC[tn] || this.IC.box,
           iconColor: selr ? "#f0a03c" : "#8f8f8f",
           bg: selr ? "#333333" : "transparent",
           hoverBg: selr ? "#383838" : "#282828",
           fg: hid ? "#5a5a5a" : selr ? "#f0a03c" : "#c9c9c9",
-          renaming: S.renaming === n.id,
-          notRenaming: S.renaming !== n.id,
+          renaming: S.renaming === id,
+          notRenaming: S.renaming !== id,
           editName: S.renameText,
           onNameInput: (e: any) => this.setState({ renameText: e.target.value }),
           onNameKey: (e: any) => {
@@ -731,30 +847,26 @@ export default class App extends React.Component<any, any> {
           eyeColor: hid ? "#5a5a5a" : "#7f7f7f",
           onEye: (e: any) => {
             e.stopPropagation();
-            this.setState((s: any) => ({ hidden: { ...s.hidden, [n.id]: !s.hidden[n.id] } }));
+            this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], hidden: !s.meta[id]?.hidden } } }));
           },
           lockPath: lck ? this.IC.lock : this.IC.unlock,
           lockColor: lck ? "#e8912d" : "#4d4d4d",
           onLock: (e: any) => {
             e.stopPropagation();
-            this.setState((s: any) => ({ locked: { ...s.locked, [n.id]: !s.locked[n.id] } }));
+            this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], locked: !s.meta[id]?.locked } } }));
           },
-          onCaret: (e: any) => {
-            e.stopPropagation();
-            this.setState((s: any) => ({ expanded: { ...s.expanded, [n.id]: !s.expanded[n.id] } }));
-          },
-          onSelect: () => this.setState({ sel: n.id, openMenu: null, ctx: null, picker: null, dd: false, opDd: false }),
+          onCaret: () => {},
+          onSelect: () => this.select(id),
           onCtx: (e: any) => {
             e.preventDefault();
             e.stopPropagation();
-            this.setState({ sel: n.id, ctx: { x: e.clientX, y: e.clientY, kind: "node" }, openMenu: null, picker: null });
+            this.select(id);
+            this.setState({ ctx: { x: e.clientX, y: e.clientY, kind: "node" }, openMenu: null, picker: null });
           },
-          onRenameStart: () => this.setState({ renaming: n.id, renameText: n.name }),
+          onRenameStart: () => this.setState({ renaming: id, renameText: m.name || o.typeName }),
         });
-        if (kids && exp) walk(n.children, depth + 1);
       }
-    };
-    walk(S.tree, 0);
+    }
 
     // properties
     const axisColors = ["#d8504a", "#7fae3a", "#4b84d6"];
@@ -764,22 +876,47 @@ export default class App extends React.Component<any, any> {
       axes: [0, 1, 2].map((i) => ({ axis: axisNames[i], color: axisColors[i], ...this.field(base + "." + i, step) })),
     });
     const transformRows = isObj ? [trRow("Position", "pos", 0.02), trRow("Rotation", "rot", 0.5), trRow("Scale", "scl", 0.01)] : [];
-    const paramRows = isObj ? (this.PRM_ROWS[f.node.type] || []).map(([label, k, step]: any) => ({ label, ...this.field("prm." + k, step) })) : [];
+    const paramRows = isObj ? (this.PRM_ROWS[selTypeName] || []).map(([label, k, step]: any) => ({ label, ...this.field("prm." + k, step) })) : [];
 
+    // Changing type is done via delete + re-create (no in-place type binding).
     const typeSet = (t: string) => () => {
-      const tree = JSON.parse(JSON.stringify(S.tree));
-      const g = this.find(S.sel, tree);
-      if (!g) return;
-      g.node.type = t;
-      this.setState((s: any) => ({
-        tree,
-        dd: false,
-        saved: false,
-        data: { ...s.data, [S.sel]: { ...s.data[S.sel], prm: { ...this.PRM_DEFAULTS[t] } } },
-      }));
+      const e = this.engine;
+      const o = this.selObj();
+      if (!e || !o) {
+        this.setState({ dd: false });
+        return;
+      }
+      const oldId = String(o.id);
+      const m = S.meta[oldId];
+      const pos = o.position;
+      const hsv = m.hsv;
+      e.removeObject(o.index);
+      const idx = e.addPrimitive(TYPE_ENUM[t]);
+      e.setObjectPosition(idx, pos[0], pos[1], pos[2]);
+      const c = this.hsv2rgb(hsv.h, hsv.s, hsv.v);
+      e.setObjectColor(idx, c[0] / 255, c[1] / 255, c[2] / 255);
+      this.refresh(true);
+      this.setState((s: any) => {
+        const newObj = s.objects.find((x: any) => x.index === idx);
+        const meta = { ...s.meta };
+        delete meta[oldId];
+        if (newObj) {
+          const nid = String(newObj.id);
+          meta[nid] = { ...meta[nid], name: m.name, rot: [...m.rot], op: m.op, smooth: m.smooth, hidden: m.hidden, locked: m.locked, hsv: { ...hsv } };
+        }
+        return { meta, dd: false, saved: false };
+      });
     };
-    const opSet = (o: string) => () =>
-      this.setState((s: any) => ({ opDd: false, saved: false, data: { ...s.data, [S.sel]: { ...s.data[S.sel], op: o } } }));
+    // Blend operation is a planned CSG feature — UI-only for now.
+    const opSet = (o: string) => () => {
+      const so = this.selObj();
+      if (!so) {
+        this.setState({ opDd: false });
+        return;
+      }
+      const id = String(so.id);
+      this.setState((s: any) => ({ opDd: false, saved: false, meta: { ...s.meta, [id]: { ...s.meta[id], op: o } } }));
+    };
 
     // dock / tabs
     const dockTab = S.dockTab || P.dockTab || "timeline";
@@ -804,24 +941,30 @@ export default class App extends React.Component<any, any> {
       scale: "Drag Scale · X/Y/Z Constrain · Esc Cancel",
     };
 
+    // Push an HSV value to the selected object's meta AND the engine color.
+    const applyHsv = (hsv: any) => {
+      if (!selObj || !selId) return;
+      const c = this.hsv2rgb(hsv.h, hsv.s, hsv.v);
+      this.engine?.setObjectColor(selObj.index, c[0] / 255, c[1] / 255, c[2] / 255);
+      this.setState((s: any) => ({ hexEdit: null, saved: false, meta: { ...s.meta, [selId!]: { ...s.meta[selId!], hsv } } }));
+    };
     const svSet = (e: any) => {
-      if (!isObj) return;
+      if (!d) return;
       const r = e.currentTarget.getBoundingClientRect();
       const sN = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
       const vN = 1 - Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
-      this.setState((s: any) => ({ hexEdit: null, saved: false, data: { ...s.data, [S.sel]: { ...s.data[S.sel], hsv: { ...s.data[S.sel].hsv, s: sN, v: vN } } } }));
+      applyHsv({ ...d.hsv, s: sN, v: vN });
     };
     const hueSet = (e: any) => {
-      if (!isObj) return;
+      if (!d) return;
       const r = e.currentTarget.getBoundingClientRect();
       const h = Math.max(0, Math.min(359.9, ((e.clientX - r.left) / r.width) * 360));
-      this.setState((s: any) => ({ hexEdit: null, saved: false, data: { ...s.data, [S.sel]: { ...s.data[S.sel], hsv: { ...s.data[S.sel].hsv, h } } } }));
+      applyHsv({ ...d.hsv, h });
     };
     const commitHex = () => {
       const t = (this.state.hexEdit || "").trim().replace(/^#/, "");
-      if (/^[0-9a-f]{6}$/i.test(t) && isObj) {
-        const hsv = this.rgb2hsv(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16));
-        this.setState((s: any) => ({ hexEdit: null, saved: false, data: { ...s.data, [S.sel]: { ...s.data[S.sel], hsv } } }));
+      if (/^[0-9a-f]{6}$/i.test(t) && d) {
+        applyHsv(this.rgb2hsv(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16)));
       } else this.setState({ hexEdit: null });
     };
 
@@ -838,18 +981,17 @@ export default class App extends React.Component<any, any> {
           mi("Frame All", "Home", () => this.status("Frame All — camera op (engine)")),
           mi("Reset Camera", "", () => this.status("Camera reset")),
           sep,
-          mi(S.grid ? "✓ Grid" : "Grid", "", () => this.setState((s: any) => ({ grid: !s.grid }))),
+          mi(S.grid ? "✓ Grid" : "Grid", "", () => this.toggleGrid()),
         ]
       : [
           mi("Rename", "F2", () => {
-            const g = this.find(S.sel);
-            if (g) this.setState({ renaming: g.node.id, renameText: g.node.name });
-          }),
+            if (selObj && selId) this.setState({ renaming: selId, renameText: d?.name || selObj.typeName });
+          }, !isObj),
           mi("Duplicate", "⇧D", () => this.duplicateSel(), !isObj),
           sep,
           mi("New Collection", "", () => this.addCollection()),
           sep,
-          mi("Delete", "X", () => this.deleteSel(), S.sel === "scene"),
+          mi("Delete", "X", () => this.deleteSel(), !isObj),
         ];
 
     return {
@@ -857,16 +999,9 @@ export default class App extends React.Component<any, any> {
       mFile: { bg: mF.bg }, fileOpen: mF.open, mtFile: mF.mt, mhFile: mF.mh,
       fileItems: [
         mi("New", "Ctrl N", () => this.newScene()),
-        mi("Open…", "Ctrl O", () => {
-          this.log("scene", "Open… — native file dialog is engine-side");
-          this.status("Open — engine file dialog");
-        }),
-        mi("Save", "Ctrl S", () => {
-          this.setState({ saved: true });
-          this.log("scene", "Saved untitled.sdfo (" + this.countObjects() + " objects)");
-          this.status("Saved");
-        }),
-        mi("Save As…", "", () => this.status("Save As — engine file dialog")),
+        mi("Open…", "Ctrl O", () => this.openScene()),
+        mi("Save", "Ctrl S", () => this.saveScene()),
+        mi("Save As…", "", () => this.saveScene()),
         sep,
         mi("Import .sdfo", "", () => {}, true),
         mi("Export", "", () => {}, true),
@@ -886,11 +1021,11 @@ export default class App extends React.Component<any, any> {
         mi("Add Torus", "", () => this.addPrimitive("torus")),
         sep,
         mi("Duplicate", "⇧D", () => this.duplicateSel(), !isObj),
-        mi("Delete", "X", () => this.deleteSel(), !f || S.sel === "scene"),
+        mi("Delete", "X", () => this.deleteSel(), !isObj),
       ],
       mView: { bg: mV.bg }, viewOpen: mV.open, mtView: mV.mt, mhView: mV.mh,
       viewItems: [
-        mi(S.grid ? "✓ Grid" : "Grid", "", () => this.setState((s: any) => ({ grid: !s.grid }))),
+        mi(S.grid ? "✓ Grid" : "Grid", "", () => this.toggleGrid()),
         mi("Frame Selected", ".", () => this.status("Frame Selected — camera op (engine)")),
         mi("Frame All", "Home", () => this.status("Frame All — camera op (engine)")),
         sep,
@@ -935,7 +1070,7 @@ export default class App extends React.Component<any, any> {
       shWire: togSt(S.shading === "wire"), setWire: () => this.setState({ shading: "wire" }),
       shSolid: togSt(S.shading === "solid"), setSolid: () => this.setState({ shading: "solid" }),
       shRend: togSt(S.shading === "rendered"), setRend: () => this.setState({ shading: "rendered" }),
-      tgGrid: togSt(S.grid), onGrid: () => this.setState((s: any) => ({ grid: !s.grid })),
+      tgGrid: togSt(S.grid), onGrid: () => this.toggleGrid(),
       tgSnap: togSt(S.snap), onSnap: () => this.setState((s: any) => ({ snap: !s.snap })),
       showGizmo: P.showAxisGizmo !== false,
 
@@ -1005,22 +1140,22 @@ export default class App extends React.Component<any, any> {
       ptMod: tabSt(propsTab === "modifiers"), onPtMod: () => this.setState({ propsTab: "modifiers" }),
       ptRen: tabSt(propsTab === "render"), onPtRen: () => this.setState({ propsTab: "render" }),
       isObjTab: propsTab === "object", isMatTab: propsTab === "material", isModTab: propsTab === "modifiers", isRenTab: propsTab === "render",
-      hasObj: isObj, isCollSel: isColl, noSel: !f,
-      objIconPath: isObj ? this.IC[f.node.type] : "",
-      objName: isObj ? f.node.name : "",
-      objTypeChip: isObj ? "SDF " + this.cap(f.node.type) : "",
+      hasObj: isObj, isCollSel: isColl, noSel: S.sel == null,
+      objIconPath: isObj ? this.IC[selTypeName] : "",
+      objName: isObj ? (d?.name || selObj.typeName) : "",
+      objTypeChip: isObj ? "SDF " + this.cap(selTypeName) : "",
       secTCaret: S.secT ? this.IC.caretD : this.IC.caretR, secTOpen: S.secT, onSecT: () => this.setState((s: any) => ({ secT: !s.secT })),
       secSCaret: S.secS ? this.IC.caretD : this.IC.caretR, secSOpen: S.secS, onSecS: () => this.setState((s: any) => ({ secS: !s.secS })),
       secBCaret: S.secB ? this.IC.caretD : this.IC.caretR, secBOpen: S.secB, onSecB: () => this.setState((s: any) => ({ secB: !s.secB })),
       secCCaret: S.secC ? this.IC.caretD : this.IC.caretR, secCOpen: S.secC, onSecC: () => this.setState((s: any) => ({ secC: !s.secC })),
       transformRows, paramRows,
-      typeName: isObj ? this.cap(f.node.type) : "",
+      typeName: isObj ? this.cap(selTypeName) : "",
       ddToggle: (e: any) => {
         e.stopPropagation();
         this.setState((s: any) => ({ dd: !s.dd, opDd: false, openMenu: null }));
       },
       ddOpen: S.dd,
-      typeOptions: ["sphere", "box", "cylinder", "torus"].map((t) => ({ label: this.cap(t), fg: isObj && f.node.type === t ? "#e8912d" : "#d6d6d6", onClick: typeSet(t) })),
+      typeOptions: ["sphere", "box", "cylinder", "torus"].map((t) => ({ label: this.cap(t), fg: isObj && selTypeName === t ? "#e8912d" : "#d6d6d6", onClick: typeSet(t) })),
       opName: d ? d.op : "",
       opToggle: (e: any) => {
         e.stopPropagation();
@@ -1039,8 +1174,8 @@ export default class App extends React.Component<any, any> {
         const r = e.currentTarget.getBoundingClientRect();
         this.setState({ picker: { x: Math.min(r.left, window.innerWidth - 220), y: Math.min(r.bottom + 6, window.innerHeight - 230) }, hexEdit: null, openMenu: null, ctx: null });
       },
-      collName: isColl ? f.node.name : "",
-      collCount: isColl ? this.countObjects(f.node.children || []) + " objects" : "",
+      collName: isColl ? "Scene Collection" : "",
+      collCount: isColl ? this.countObjects() + " objects" : "",
 
       // status bar
       showHints: P.statusHints !== false,
@@ -1236,6 +1371,7 @@ export default class App extends React.Component<any, any> {
             <div ref={this.viewportRef} style={css("flex:1 1 auto;position:relative;background:#101010;min-height:0")}>
               {/* Real engine render surface */}
               <canvas
+                id="canvas"
                 ref={this.canvasRef}
                 onPointerDown={this.camDown}
                 onPointerMove={this.camMove}
