@@ -83,3 +83,5 @@ web/dist/
 web/public/engine/sdf-engine.js
 web/public/engine/sdf-engine.wasm
 web/public/engine/sdf-engine.data
+
+memory/

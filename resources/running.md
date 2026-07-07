@@ -1,3 +1,41 @@
+Optional -
+$pythonDir =  "C:\ProgramData\anaconda3\"
+$env:Path = "$pythonDir;$pythonDir\Scripts;$env:Path"
+& "$PSScriptRoot\emsdk\emsdk_env.ps1"
+
+Must do -
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+& "$PWD\deps\emsdk\emsdk_env.ps1"
+emcc --version    # must print 3.1.61
+
+```powershell
+# Put the VS CMake + Ninja on PATH, and activate Emscripten, for THIS shell:
+$vs = "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake"
+$env:Path = "$vs\CMake\bin;$vs\Ninja;$env:Path"
+& "$PWD\deps\emsdk\emsdk_env.ps1"
+
+# Configure once (creates the build-web/ folder). Downloads WebGPU + builds SDL:
+emcmake cmake -S . -B build-web -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+# Compile the engine (repeat this line after any C++ change):
+cmake --build build-web --target main
+```
+
+In a **separate** terminal, from the project root:
+
+```powershell
+cd web
+npm install        # first time only (downloads React, Vite, etc.)
+npm run dev        # starts the dev server
+```
+
+
+-----------------------------------------------------
+
+
+
+
 # Running the SDF Editor (build, compile, run)
 
 This is the complete, repeatable guide to build the C++ engine to WebAssembly
