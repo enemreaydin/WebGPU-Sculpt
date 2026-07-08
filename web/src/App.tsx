@@ -524,14 +524,17 @@ export default class App extends React.Component<any, any> {
     this.selectKey(id, false);
   }
 
-  // Viewport pick result -> selection. objectId -1 means empty space.
-  selectByPick(objectId: number, additive: boolean) {
-    if (objectId === -1) {
+  // Viewport pick result -> selection. The pick buffer stores the object's
+  // vector index (the CSG compile writes the array index into the id target),
+  // not its objectId; -1 means empty space.
+  selectByPick(pickIndex: number, additive: boolean) {
+    if (pickIndex === -1) {
       if (!additive) this.selectKey("scene");
       return;
     }
-    if (!this.state.objects.some((o: any) => o.id === objectId)) return;
-    this.selectKey(String(objectId), additive);
+    const o = this.state.objects.find((x: any) => x.index === pickIndex);
+    if (!o) return;
+    this.selectKey(String(o.id), additive);
   }
 
   // Default UI meta for a CSG operation (group) node the UI hasn't named yet.
