@@ -98,36 +98,7 @@ void CsgTree::RemoveNode(int32_t index)
         return;
     }
 
-    // Detach this node from its parent's sibling chain, handling first-child and
-    // last-child edge cases (previousSibling / nextSibling being -1).
-    int32_t parentIndex = node.parent;
-    int32_t prev = node.previousSibling;
-    int32_t next = node.nextSibling;
-
-    if (prev != -1)
-    {
-        m_Nodes[prev].nextSibling = next;
-    }
-    if (next != -1)
-    {
-        m_Nodes[next].previousSibling = prev;
-    }
-    if (parentIndex != -1)
-    {
-        CsgNode& parent = m_Nodes[parentIndex];
-        if (parent.firstChild == index)
-        {
-            parent.firstChild = next;
-        }
-        if (parent.lastChild == index)
-        {
-            parent.lastChild = prev;
-        }
-    }
-
-    node.parent = -1;
-    node.previousSibling = -1;
-    node.nextSibling = -1;
+    Detach(index);
 
     // Recursively remove all children first (subtree removal). Capture the next
     // sibling before recursing because RemoveNode mutates sibling links.
@@ -276,4 +247,56 @@ void CsgTree::ReadCsgArray(const std::string& filepath)
         return;
     }
     ReadFromStream(file);
+}
+
+int32_t CsgTree::IndexForNodeId(int32_t nodeID) const{
+    for (int32_t i = 0; i < static_cast<int32_t>(m_Nodes.size()); i++)
+    {
+        if (nodeID == m_Nodes[i].nodeId)
+        {
+            return i;
+        }
+        
+    }return -1;
+}
+
+void CsgTree::Detach(int32_t index){
+
+    CsgNode& node = m_Nodes[index];
+    // Detach this node from its parent's sibling chain, handling first-child and
+    // last-child edge cases (previousSibling / nextSibling being -1).
+    int32_t parentIndex = node.parent;
+    int32_t prev = node.previousSibling;
+    int32_t next = node.nextSibling;
+
+    if (prev != -1)
+    {
+        m_Nodes[prev].nextSibling = next;
+    }
+    if (next != -1)
+    {
+        m_Nodes[next].previousSibling = prev;
+    }
+    if (parentIndex != -1)
+    {
+        CsgNode& parent = m_Nodes[parentIndex];
+        if (parent.firstChild == index)
+        {
+            parent.firstChild = next;
+        }
+        if (parent.lastChild == index)
+        {
+            parent.lastChild = prev;
+        }
+    }
+
+    node.parent = -1;
+    node.previousSibling = -1;
+    node.nextSibling = -1;
+
+}
+
+void CsgTree::Reparent(int32_t childIndex, int32_t newParentIndex){
+    Detach(childIndex);
+    AttachChild(newParentIndex, childIndex);
 }

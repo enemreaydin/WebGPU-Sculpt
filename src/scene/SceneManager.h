@@ -39,9 +39,16 @@ public:
     // a default root Union tree for legacy files that lack a CSG section) after a load.
     void RebuildAfterLoad();
 
+    int32_t NodeIdForObject(int32_t objectId) const;              // primitive's nodeId, or -1
+    int32_t GroupNodes(const std::vector<int32_t>& indicesInOrder, // indices[0] = Subtract base
+                   CsgNodeType opType);                        // returns new op node's nodeId
+    void RemoveNodeSubtree(int32_t nodeIndex);                     // node(s) + their objects
+
+
 private:
     // Ensures the root Union node exists, returning its node index.
     int32_t EnsureRootUnion();
+    void CollectSubtreeObjectIds(int32_t nodeIndex, std::vector<int32_t>& out) const;
 
     std::vector<SdfObjectData> m_Objects;
     CsgTree m_CsgTree;

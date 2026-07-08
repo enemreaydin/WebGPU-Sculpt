@@ -63,6 +63,11 @@ public:
     void SetObjectRotation(int index, float x, float y, float z);
     void SetObjectScale(int index, float x, float y, float z);
     void SetObjectParam(int index, int paramId, float value);
+    void SelectNode(int nodeId, int mode);   // mode 0 = replace, 1 = toggle
+    void ClearSelection();
+    int  ApplyOperation(int opType);        
+    void DeleteSelection();
+
 
     // Serialized snapshot of the scene as JSON (object list + selection), for
     // the front-end to render its panels from.
@@ -111,6 +116,7 @@ private:
     glm::mat4 proj{};
 
     // Initializers / helpers
+    void UpdateHighlightIndex();  // recompute selectedObjectIndex from primaryNodeId
     void FindProjectRoot();
     void InitializeRenderer();
     void UpdateCamera();

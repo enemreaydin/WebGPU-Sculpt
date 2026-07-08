@@ -251,7 +251,11 @@ int Application::AddPrimitive(SdfObjectType type) {
     editorStore.Create(created.objectId, type,
                        { created.size[0], created.size[1], created.size[2] });
 
-    selectionState.selectedObjectIndex = index;
+    int32_t newNodeId = sceneManager.NodeIdForObject(created.objectId);
+    selectionState.Clear();
+    if (newNodeId != -1) { selectionState.Add(newNodeId); selectionState.primaryNodeId = newNodeId; }
+    UpdateHighlightIndex();
+
     sceneSerializer.RefreshSceneBuffer();
     return index;
 }
@@ -285,6 +289,18 @@ void Application::SelectObject(int index) {
     if (index < -1 || index >= static_cast<int>(sceneManager.GetObjects().size())) return;
     selectionState.selectedObjectIndex = index;
 }
+void Application::DeleteSelection() {
+    // IndexForNodeId returns -1 for a node already killed as part of an earlier
+    // subtree in this same loop, so overlapping selections are handled safely.
+    for (int32_t nodeId : selectionState.selectedNodeIds) {
+        int32_t idx = sceneManager.GetCsgTree().IndexForNodeId(nodeId);
+        if (idx != -1) sceneManager.RemoveNodeSubtree(idx);
+    }
+    selectionState.Clear();
+    selectionState.selectedObjectIndex = -1;
+    sceneSerializer.RefreshSceneBuffer();
+}
+
 
 void Application::SetObjectPosition(int index, float x, float y, float z) {
     auto& objects = sceneManager.GetObjects();
@@ -369,6 +385,84 @@ void Application::SetObjectParam(int index, int paramId, float value) {
     sceneSerializer.RefreshSceneBuffer();
 }
 
+void Application::ClearSelection(){
+    selectionState.selectedObjectIndex = -1;
+    selectionState.Clear();
+}
+
+// Primary primitive -> its object vector index (for the shader highlight).
+void Application::UpdateHighlightIndex() {
+    selectionState.selectedObjectIndex = -1;
+    if (selectionState.primaryNodeId == -1) return;
+
+    const CsgTree& tree = sceneManager.GetCsgTree();
+    int32_t idx = tree.IndexForNodeId(selectionState.primaryNodeId);
+    if (idx == -1) return;
+    const CsgNode& n = tree.GetNodes()[idx];
+    if (n.type != CsgNodeType::Primitive) return;   // groups don't highlight in 3D
+
+    const auto& objs = sceneManager.GetObjects();
+    for (int32_t i = 0; i < static_cast<int32_t>(objs.size()); ++i)
+        if (objs[i].objectId == n.objectId) { selectionState.selectedObjectIndex = i; return; }
+}
+
+
+void Application::SelectNode(int nodeId, int mode) {
+    if (sceneManager.GetCsgTree().IndexForNodeId(nodeId) == -1) return;  // unknown/dead
+
+    if (mode == 1) {                    // toggle
+        if (selectionState.Contains(nodeId)) {
+            selectionState.Remove(nodeId);
+            if (selectionState.primaryNodeId == nodeId)
+                selectionState.primaryNodeId =
+                    selectionState.selectedNodeIds.empty() ? -1 : selectionState.selectedNodeIds.back();
+        } else {
+            selectionState.Add(nodeId);
+            selectionState.primaryNodeId = nodeId;
+        }
+    } else {                            // replace
+        selectionState.Clear();
+        selectionState.Add(nodeId);
+        selectionState.primaryNodeId = nodeId;
+    }
+    UpdateHighlightIndex();
+}
+int Application::ApplyOperation(int opType) {
+    CsgNodeType t;
+    switch (opType) {
+        case 1: t = CsgNodeType::Union;        break;
+        case 2: t = CsgNodeType::Subtract;     break;
+        case 3: t = CsgNodeType::Intersection; break;
+        default: return -1;
+    }
+
+    // Build indices, primary first (= Subtract base), then the rest in order.
+    const CsgTree& tree = sceneManager.GetCsgTree();
+    std::vector<int32_t> indices;
+    if (selectionState.primaryNodeId != -1) {
+        int32_t p = tree.IndexForNodeId(selectionState.primaryNodeId);
+        if (p != -1) indices.push_back(p);
+    }
+    for (int32_t nid : selectionState.selectedNodeIds) {
+        if (nid == selectionState.primaryNodeId) continue;
+        int32_t idx = tree.IndexForNodeId(nid);
+        if (idx != -1) indices.push_back(idx);
+    }
+    if (indices.size() < 2) return -1;
+
+    int32_t newNodeId = sceneManager.GroupNodes(indices, t);
+    if (newNodeId != -1) {
+        selectionState.Clear();
+        selectionState.Add(newNodeId);
+        selectionState.primaryNodeId = newNodeId;
+        UpdateHighlightIndex();
+    }
+    sceneSerializer.RefreshSceneBuffer();   // recompile RPN + upload
+    return newNodeId;
+}
+
+
+
 const char* Application::TypeName(int32_t type) {
     switch (static_cast<SdfObjectType>(type)) {
     case SdfObjectType::Sphere:   return "Sphere";
@@ -428,8 +522,48 @@ std::string Application::GetSceneJson() const {
             << ",\"roundness\":" << e.params.roundness << "}"
             << "}";
     }
+    out << "]";
 
+    // Engine-owned selection (nodeIds). primaryNodeId is the active node / the
+    // base for Subtract; -1 when nothing is selected.
+    out << ",\"primaryNodeId\":" << selectionState.primaryNodeId
+        << ",\"selectedNodeIds\":[";
+    for (size_t i = 0; i < selectionState.selectedNodeIds.size(); ++i) {
+        if (i) out << ",";
+        out << selectionState.selectedNodeIds[i];
+    }
+    out << "]";
+
+    // CSG hierarchy. `root` and every `children` entry are permanent nodeIds
+    // (NOT vector indices) — the front-end keys the outliner entirely off nodeId.
+    const CsgTree& tree = sceneManager.GetCsgTree();
+    const auto& nodes = tree.GetNodes();
+    int32_t rootIdx = tree.GetRoot();
+    int32_t rootNodeId = (rootIdx >= 0 && rootIdx < static_cast<int32_t>(nodes.size()))
+                       ? nodes[rootIdx].nodeId : -1;
+
+    out << ",\"tree\":{\"root\":" << rootNodeId << ",\"nodes\":[";
+    bool firstNode = true;
+    for (const CsgNode& n : nodes) {
+        if (!n.alive) continue;
+        if (!firstNode) out << ",";
+        firstNode = false;
+        out << "{\"nodeId\":" << n.nodeId
+            << ",\"type\":" << static_cast<int>(n.type)   // 0=prim 1=union 2=sub 3=intersect
+            << ",\"objectId\":" << (n.type == CsgNodeType::Primitive ? n.objectId : -1)
+            << ",\"children\":[";
+        bool firstChild = true;
+        for (int32_t c = n.firstChild; c != -1; c = nodes[c].nextSibling) {
+            if (!nodes[c].alive) continue;
+            if (!firstChild) out << ",";
+            firstChild = false;
+            out << nodes[c].nodeId;
+        }
+        out << "]}";
+    }
     out << "]}";
+
+    out << "}";
     return out.str();
 }
 

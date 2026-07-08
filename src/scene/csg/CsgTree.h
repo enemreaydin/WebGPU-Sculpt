@@ -39,6 +39,10 @@ public:
     const std::vector<CsgNode>& GetNodes() const { return m_Nodes; }
 
     void Clear();
+    int32_t IndexForNodeId(int32_t nodeId) const;   // vector index of a live node, or -1
+    void Detach(int32_t index);                     // unlink from parent, node stays alive
+    void Reparent(int32_t childIndex, int32_t newParentIndex);
+
 
 private:
     void CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, std::vector<CsgCommand>& outProgram) const;
