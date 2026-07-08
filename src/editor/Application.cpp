@@ -45,6 +45,10 @@ void Application::MainLoop() {
         return;
     }
 
+    if (!renderer.GetObjectIdTargetView()) {
+    return; 
+    }
+
     UpdateCamera();
 
     float aspect = (renderHeight > 0)
@@ -76,9 +80,20 @@ void Application::MainLoop() {
     colorAttachment.storeOp = StoreOp::Store;
     colorAttachment.clearValue = WGPUColor{ 0.1, 0.1, 0.12, 1.0 };
 
+    RenderPassColorAttachment objectIdAttachment = {};
+    objectIdAttachment.view = renderer.GetObjectIdTargetView();
+    objectIdAttachment.resolveTarget = nullptr;
+    #ifdef __EMSCRIPTEN__
+        objectIdAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    #endif
+    objectIdAttachment.loadOp = LoadOp::Clear;
+    objectIdAttachment.storeOp = StoreOp::Store;
+    objectIdAttachment.clearValue = WGPUColor{ 4294967295.0, 0.0, 0.0, 0.0 };  // 0xffffffff sentinel: "nothing"
+
+    RenderPassColorAttachment colorAttachments[2] = { colorAttachment, objectIdAttachment };
     RenderPassDescriptor renderPassDesc = {};
-    renderPassDesc.colorAttachmentCount = 1;
-    renderPassDesc.colorAttachments = &colorAttachment;
+    renderPassDesc.colorAttachmentCount = 2;
+    renderPassDesc.colorAttachments = colorAttachments;
     renderPassDesc.depthStencilAttachment = nullptr;
     renderPassDesc.timestampWrites = nullptr;
 
@@ -114,6 +129,7 @@ void Application::OnResize(int newWidth, int newHeight) {
     width = newWidth; height = newHeight;
     renderWidth = newWidth; renderHeight = newHeight;
     graphics.ConfigureSurface(width, height);
+    renderer.CreateRenderTarget(graphics.device, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 }
 
 TextureView Application::GetNextSurfaceTextureView() {
@@ -164,6 +180,8 @@ void Application::FindProjectRoot() {
 void Application::InitializeRenderer() {
     renderer.SetProjectRoot(projectRoot);
     renderer.Initialize(graphics.device, graphics.surfaceFormat);
+    renderer.CreateRenderTarget(graphics.device, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+
 
     // Create an empty scene buffer so the shader can render the grid.
     sceneSerializer.RefreshSceneBuffer();
@@ -192,7 +210,27 @@ void Application::UpdateCamera() {
 // ---------------------------------------------------------------------------
 // Control API
 // ---------------------------------------------------------------------------
+uint32_t Application::PickObjectAt(int x, int y) {
+    if (x < 0 || y < 0 || x >= renderWidth || y >= renderHeight) {
+        return 0xffffffffu;
+    }
+    if (!renderer.GetObjectIdTargetView()) {
+        return 0xffffffffu;
+    }
 
+    bool mapDone = false;
+    uint32_t result = 0xffffffffu;
+
+    renderer.ReadObjectIdAt(graphics.device, graphics.queue, x, y, &mapDone, &result);
+
+#ifdef __EMSCRIPTEN__
+    while (!mapDone) { emscripten_sleep(0); }
+#else
+    while (!mapDone) { graphics.device.poll(true); }
+#endif
+
+    return result;
+}
 int Application::AddPrimitive(SdfObjectType type) {
     SdfObjectData object{};
     switch (type) {

@@ -16,6 +16,7 @@ struct SceneResult
 {
     distance : f32,
     color : vec3f,
+    object_id: u32,
 };
 
 // GPU-facing RPN command — mirrors the CPU-side CsgCommand (16 bytes).
@@ -82,6 +83,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
     // distances and a parallel one for colors, sharing the stack pointer sp.
     var stack : array<f32, 16>;
     var stackColor : array<vec3f, 16>;
+    var stackId : array<u32, 16>;
     var sp : i32 = 0;
 
     for (var i : u32 = 0u; i < count; i = i + 1u)
@@ -111,6 +113,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
 
             stack[sp] = dist;
             stackColor[sp] = objColor;
+            stackId[sp] = u32(cmd.operand);
             sp = sp + 1;
         }
         else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
@@ -119,11 +122,14 @@ fn evaluateScene(p : vec3f) -> SceneResult
             // combine, and push the single result back. Net stack effect is -1.
             let dB = stack[sp - 1];
             let cB = stackColor[sp - 1];
+            let idB = stackId[sp - 1];
             let dA = stack[sp - 2];
             let cA = stackColor[sp - 2];
+            let idA = stackId[sp - 2];
 
             var d = 100000.0;
             var c = cA;
+            var id = idA;
 
             if (cmd.cmd_type == 1)
             {
@@ -132,6 +138,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
                 if (dB < dA)
                 {
                     c = cB;
+                    id = idB;
                 }
             }
             else if (cmd.cmd_type == 2)
@@ -150,6 +157,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             sp = sp - 1;
             stack[sp - 1] = d;
             stackColor[sp - 1] = c;
+            stackId[sp - 1] = id;
         }
     }
 
@@ -157,6 +165,10 @@ fn evaluateScene(p : vec3f) -> SceneResult
     {
         result.distance = stack[sp - 1];
         result.color = stackColor[sp - 1];
+        result.object_id = stackId[sp - 1];
+    }else
+    {
+    result.object_id = 0xffffffffu;
     }
 
     return result;

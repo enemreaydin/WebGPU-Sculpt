@@ -34,6 +34,14 @@ void sdf_select_object(int index) {
 }
 
 EMSCRIPTEN_KEEPALIVE
+int sdf_pick_object(int x, int y) {
+    if (!g_App) return -1;
+    uint32_t id = g_App->PickObjectAt(x, y);
+    if (id == 0xffffffffu) return -1;
+    return static_cast<int>(id);
+}
+
+EMSCRIPTEN_KEEPALIVE
 int sdf_get_selected_index() {
     return g_App ? g_App->GetSelectedIndex() : -1;
 }

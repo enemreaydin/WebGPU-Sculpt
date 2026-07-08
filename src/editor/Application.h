@@ -47,6 +47,7 @@ public:
     int  AddPrimitive(SdfObjectType type);   // returns the new object's index
     void RemoveObject(int index);
     void SelectObject(int index);
+    uint32_t PickObjectAt(int x, int y);
     int  GetSelectedIndex() const { return selectionState.selectedObjectIndex; }
 
     void SetObjectPosition(int index, float x, float y, float z);

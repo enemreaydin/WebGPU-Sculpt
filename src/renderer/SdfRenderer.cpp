@@ -73,6 +73,13 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
 
     globalsBuffer = device.createBuffer(globalsDesc);
 
+    wgpu::BufferDescriptor pickReadbackDesc{};
+    pickReadbackDesc.size = 256;
+    pickReadbackDesc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
+    pickReadbackDesc.mappedAtCreation = false;
+
+    pickReadbackBuffer = device.createBuffer(pickReadbackDesc);
+
     if (!globalsBuffer)
     {
         std::cerr << "[KRITIK]: globalsBuffer olusturulamadi!\n";
@@ -106,11 +113,17 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
     colorTarget.format = format;
     colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
+    wgpu::ColorTargetState objectIdTarget{};
+    objectIdTarget.format = objectIdTargetFormat;
+    objectIdTarget.writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::ColorTargetState colorTargets[2] = { colorTarget, objectIdTarget };
+
     wgpu::FragmentState fragmentState{};
     fragmentState.module = shaderModule;
     fragmentState.entryPoint = "fs_main";
-    fragmentState.targetCount = 1;
-    fragmentState.targets = &colorTarget;
+    fragmentState.targetCount = 2;
+    fragmentState.targets = colorTargets;
 
     pipelineDesc.fragment = &fragmentState;
 
@@ -285,6 +298,17 @@ void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32
         renderTargetTexture.release();
         renderTargetTexture = nullptr;
     }
+    if (objectIdTargetView)
+    {
+        objectIdTargetView.release();
+        objectIdTargetView = nullptr;
+    }
+
+    if (objectIdTargetTexture)
+    {
+        objectIdTargetTexture.release();
+        objectIdTargetTexture = nullptr;
+    }
 
     wgpu::TextureDescriptor texDesc{};
     texDesc.size = { width, height, 1 };
@@ -305,6 +329,25 @@ void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32
 
     renderTargetView = renderTargetTexture.createView(viewDesc);
 
+    wgpu::TextureDescriptor idTexDesc{};
+    idTexDesc.size = { width, height, 1 };
+    idTexDesc.format = objectIdTargetFormat;
+    idTexDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+    idTexDesc.dimension = wgpu::TextureDimension::_2D;
+    idTexDesc.mipLevelCount = 1;
+    idTexDesc.sampleCount = 1;
+
+    objectIdTargetTexture = device.createTexture(idTexDesc);
+
+    wgpu::TextureViewDescriptor idViewDesc{};
+    idViewDesc.format = objectIdTargetFormat;
+    idViewDesc.dimension = wgpu::TextureViewDimension::_2D;
+    idViewDesc.mipLevelCount = 1;
+    idViewDesc.arrayLayerCount = 1;
+    idViewDesc.aspect = wgpu::TextureAspect::All;
+
+    objectIdTargetView = objectIdTargetTexture.createView(idViewDesc);
+
     renderWidth = width;
     renderHeight = height;
 }
@@ -312,6 +355,11 @@ void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32
 wgpu::TextureView SdfRenderer::GetRenderTargetView() const
 {
     return renderTargetView;
+}
+
+wgpu::TextureView SdfRenderer::GetObjectIdTargetView() const
+{
+    return objectIdTargetView;
 }
 
 uint32_t SdfRenderer::GetRenderWidth() const
@@ -345,6 +393,51 @@ void SdfRenderer::ClearSceneBuffer()
     }
 }
 
+void SdfRenderer::ReadObjectIdAt(wgpu::Device device, wgpu::Queue queue, int x, int y,
+                                   bool* outDone, uint32_t* outResult) {
+    wgpu::ImageCopyTexture srcTexture = {};
+    srcTexture.texture = objectIdTargetTexture;
+    srcTexture.origin = { (uint32_t)x, (uint32_t)y, 0 };
+    srcTexture.aspect = wgpu::TextureAspect::All;
+
+    wgpu::ImageCopyBuffer dstBuffer = {};
+    dstBuffer.buffer = pickReadbackBuffer;
+    dstBuffer.layout.offset = 0;
+    dstBuffer.layout.bytesPerRow = 256;
+    dstBuffer.layout.rowsPerImage = 1;
+
+    wgpu::Extent3D copySize = { 1, 1, 1 };
+
+    wgpu::CommandEncoderDescriptor encoderDesc = {};
+    wgpu::CommandEncoder encoder = device.createCommandEncoder(encoderDesc);
+    encoder.copyTextureToBuffer(srcTexture, dstBuffer, copySize);
+
+    wgpu::CommandBufferDescriptor cmdBufDesc = {};
+    wgpu::CommandBuffer cmdBuf = encoder.finish(cmdBufDesc);
+    encoder.release();
+    queue.submit(1, &cmdBuf);
+    cmdBuf.release();
+
+    wgpu::Buffer bufferRef = pickReadbackBuffer;
+
+    // The returned unique_ptr owns the heap-allocated callback that the GPU
+    // will invoke asynchronously. We must keep it alive until it fires, so we
+    // store it in a member instead of discarding it. Discarding it freed the
+    // std::function immediately, leaving wgpuBufferMapAsync holding a dangling
+    // userdata pointer -> "table index is out of bounds" when the map completed.
+    pickMapCallback = bufferRef.mapAsync(
+        wgpu::MapMode::Read, 0, 256,
+        [outDone, outResult, bufferRef](wgpu::BufferMapAsyncStatus status) mutable {
+            if (status == wgpu::BufferMapAsyncStatus::Success) {
+                const void* data = bufferRef.getConstMappedRange(0, 256);
+                *outResult = *reinterpret_cast<const uint32_t*>(data);
+                bufferRef.unmap();
+            }
+            *outDone = true;
+        }
+    );
+}
+
 void SdfRenderer::Destroy()
 {
     if (renderTargetView)
@@ -358,6 +451,17 @@ void SdfRenderer::Destroy()
         renderTargetTexture.release();
         renderTargetTexture = nullptr;
     }
+    if (objectIdTargetView)
+    {
+        objectIdTargetView.release();
+        objectIdTargetView = nullptr;
+    }
+
+    if (objectIdTargetTexture)
+    {
+        objectIdTargetTexture.release();
+        objectIdTargetTexture = nullptr;
+    }
 
     ClearSceneBuffer();
 
@@ -365,6 +469,12 @@ void SdfRenderer::Destroy()
     {
         globalsBuffer.release();
         globalsBuffer = nullptr;
+    }
+
+    if (pickReadbackBuffer)
+    {
+        pickReadbackBuffer.release();
+        pickReadbackBuffer = nullptr;
     }
 
     if (pipeline)

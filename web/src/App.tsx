@@ -157,6 +157,8 @@ export default class App extends React.Component<any, any> {
   _ro: ResizeObserver | null = null;
   _camDrag = false;
   _camPan = false;
+  _downPos: { x: number; y: number } | null = null;  
+  _didDrag = false;                                  
 
   state: any = {
     openMenu: null,
@@ -302,17 +304,43 @@ export default class App extends React.Component<any, any> {
     if (e.button === 2) return; // right-click → context menu
     this._camDrag = true;
     this._camPan = e.button === 1 || e.ctrlKey || e.shiftKey;
+    this._downPos = { x: e.clientX, y: e.clientY };   // YENİ
+    this._didDrag = false;                             // YENİ
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
+  _pickInFlight = false;
   camUp = (e: React.PointerEvent) => {
+    // YENİ: sürükleme olmadan bırakılan sol tık = seçim tıklaması
+    const wasClick = this._camDrag && !this._didDrag && e.button === 0;
+
     this._camDrag = false;
     this._camPan = false;
+    this._downPos = null;
     try {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     } catch (_) {}
+
+    if (wasClick && this.engine && !this._pickInFlight) {   // YENİ koşul
+    const canvas = this.canvasRef.current;
+    if (canvas) {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      this._pickInFlight = true;   // YENİ
+      this.engine.pickObject(x, y)
+        .then((index) => this.selectByIndex(index))
+        .finally(() => { this._pickInFlight = false; });   // YENİ
+      }
+    }
   };
+
   camMove = (e: React.PointerEvent) => {
     if (!this._camDrag || !this.engine) return;
+    if (this._downPos) {                                
+      const dx = e.clientX - this._downPos.x;
+      const dy = e.clientY - this._downPos.y;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) this._didDrag = true;
+    }
     if (this._camPan) this.engine.cameraPan(e.movementX, e.movementY);
     else this.engine.cameraOrbit(e.movementX, e.movementY);
   };
@@ -417,6 +445,19 @@ export default class App extends React.Component<any, any> {
     const o = this.objById(id);
     this.engine?.selectObject(o ? o.index : -1);
     this.setState({ sel: id, openMenu: null, ctx: null, picker: null, dd: false, opDd: false });
+  }
+
+  selectByIndex(index: number) {
+    this.engine?.selectObject(index);
+    if (index === -1) {
+      this.setState({ sel: "scene", openMenu: null, ctx: null, picker: null, dd: false, opDd: false });
+      return;
+    }
+    const obj = this.state.objects.find((o: any) => o.index === index);
+    this.setState({
+      sel: obj ? String(obj.id) : "scene",
+      openMenu: null, ctx: null, picker: null, dd: false, opDd: false,
+    });
   }
 
   hsv2rgb(h: number, s: number, v: number) {

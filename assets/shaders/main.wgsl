@@ -30,8 +30,14 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
     return out;
 }
 
+struct FragmentOutput
+{
+    @location(0) color : vec4f,
+    @location(1) object_id : u32,
+}
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+fn fs_main(in: VertexOutput) -> FragmentOutput {
     let ratio = globals.resolution.x / globals.resolution.y;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
 
@@ -43,12 +49,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let right = normalize(cross(forward, worldUp));
     let up = cross(right, forward);
 
-    let focalLength = 2.414; 
+    let focalLength = 2.414;
     let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
 
     var t = 0.0;
     var hit = false;
     var final_color = vec3f(0.0);
+    var final_id : u32 = 0xffffffffu;   
 
     for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
@@ -57,6 +64,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         if (result.distance < 0.001) {
             hit = true;
             final_color = result.color;
+            final_id = result.object_id;   
             break;
         }
 
@@ -64,17 +72,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
         if (t > 50.0) { break; }
     }
 
+    var out : FragmentOutput;  
+
     if (hit) {
         let depth_shade = 1.0 - (t / 15.0);
-        return vec4f(final_color * depth_shade, 1.0);
+        out.color = vec4f(final_color * depth_shade, 1.0);
+        out.object_id = final_id;
+        return out;
     }
 
     if (globals.showGrid == 1) {
-        return vec4f(gridBackground(ro, rd), 1.0);
+        out.color = vec4f(gridBackground(ro, rd), 1.0);
+        out.object_id = 0xffffffffu;  
+        return out;
     }
 
-    return vec4f(0.02, 0.02, 0.02, 1.0);
+    out.color = vec4f(0.02, 0.02, 0.02, 1.0);
+    out.object_id = 0xffffffffu; 
+    return out;
 }
+
 
 fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
     let bgColor = vec3f(0.05, 0.05, 0.05);

@@ -32,7 +32,8 @@ interface EmscriptenModule {
     name: string,
     returnType: string | null,
     argTypes: string[],
-    args: unknown[]
+    args: unknown[],
+    opts?: { async?: boolean }
   ) => unknown;
 }
 
@@ -110,6 +111,17 @@ export class Engine {
 
   selectObject(index: number): void {
     this.call("sdf_select_object", null, ["number"], [index]);
+  }
+
+  async pickObject(x: number, y: number): Promise<number> {
+  const promise = this.module.ccall(
+    "sdf_pick_object",
+    "number",
+    ["number", "number"],
+    [x, y],
+    { async: true }
+  ) as Promise<number>;
+  return await promise;
   }
 
   setObjectPosition(index: number, x: number, y: number, z: number): void {
