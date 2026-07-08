@@ -33,6 +33,33 @@ void sdf_select_object(int index) {
     if (g_App) g_App->SelectObject(index);
 }
 
+// Selection is engine-owned (see SelectionState). These just mutate it.
+// mode: 0 = replace selection with this node, 1 = toggle it in the set.
+EMSCRIPTEN_KEEPALIVE
+void sdf_select_node(int nodeId, int mode) {
+    if (g_App) g_App->SelectNode(nodeId, mode);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_clear_selection() {
+    if (g_App) g_App->ClearSelection();
+}
+
+// Groups the current selection under a new operation node of the given
+// CsgNodeType (1=Union, 2=Subtract, 3=Intersection); the primary node is the
+// base for Subtract. Returns the new node's id, or -1 on failure.
+EMSCRIPTEN_KEEPALIVE
+int sdf_apply_operation(int opType) {
+    if (!g_App) return -1;
+    return g_App->ApplyOperation(opType);
+}
+
+// Removes every currently-selected node (primitives + objects, op subtrees).
+EMSCRIPTEN_KEEPALIVE
+void sdf_delete_selection() {
+    if (g_App) g_App->DeleteSelection();
+}
+
 EMSCRIPTEN_KEEPALIVE
 int sdf_pick_object(int x, int y) {
     if (!g_App) return -1;
@@ -59,6 +86,38 @@ void sdf_set_object_size(int index, float x, float y, float z) {
 EMSCRIPTEN_KEEPALIVE
 void sdf_set_object_color(int index, float r, float g, float b) {
     if (g_App) g_App->SetObjectColor(index, r, g, b);
+}
+
+// --- Editor attributes (name / visibility / lock / rotation / scale / params).
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_object_name(int index, const char* name) {
+    if (g_App) g_App->SetObjectName(index, name);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_object_visible(int index, int visible) {
+    if (g_App) g_App->SetObjectVisible(index, visible != 0);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_object_locked(int index, int locked) {
+    if (g_App) g_App->SetObjectLocked(index, locked != 0);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_object_rotation(int index, float x, float y, float z) {
+    if (g_App) g_App->SetObjectRotation(index, x, y, z);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_object_scale(int index, float x, float y, float z) {
+    if (g_App) g_App->SetObjectScale(index, x, y, z);
+}
+
+// paramId: 0=radius, 1=height, 2=thickness, 3=roundness (see PrimitiveParam).
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_object_param(int index, int paramId, float value) {
+    if (g_App) g_App->SetObjectParam(index, paramId, value);
 }
 
 EMSCRIPTEN_KEEPALIVE

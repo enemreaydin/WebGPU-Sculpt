@@ -1,5 +1,5 @@
 import React from "react";
-import { Engine, PrimitiveType } from "./engine";
+import { Engine, PrimitiveType, CsgOp, ShapeParam } from "./engine";
 
 // UI type-name <-> engine PrimitiveType enum.
 const TYPE_ENUM: Record<string, PrimitiveType> = {
@@ -140,6 +140,14 @@ export default class App extends React.Component<any, any> {
     torus: [["Radius", "radius", 0.01], ["Thickness", "thickness", 0.005]],
   };
 
+  // Property-row param name -> engine ShapeParam id (see engine.ts).
+  PARAM_ID: Record<string, ShapeParam> = {
+    radius: ShapeParam.Radius,
+    height: ShapeParam.Height,
+    thickness: ShapeParam.Thickness,
+    round: ShapeParam.Roundness,
+  };
+
   // Transient (non-render) scratch handles used by drag helpers.
   _dg: any = null;
   _sl: any = null;
@@ -173,8 +181,16 @@ export default class App extends React.Component<any, any> {
     propsTab: null,
     filter: "",
     expanded: { scene: true },
-    // Selection id: "scene" (root collection), a stringified engine object id, or null.
+    // Primary selection key: "scene" (root collection), a stringified engine
+    // object id (primitive), or "g<nodeId>" (a CSG operation/group node). Drives
+    // the property panel and the 3D highlight.
     sel: "scene",
+    // Every currently-selected key (always includes `sel`). Multi-selection for
+    // applying boolean operations; single-select keeps this at [sel].
+    selSet: ["scene"] as string[],
+    // Engine's CSG hierarchy from the last getScene(); null before first read or
+    // against an engine build that predates the tree section (flat fallback).
+    tree: null as any,
     renaming: null,
     renameText: "",
     // Engine-owned object list (rebuilt from engine.getScene() after each mutation).
@@ -282,9 +298,9 @@ export default class App extends React.Component<any, any> {
       const i = e.addPrimitive(TYPE_ENUM[t]);
       e.setObjectPosition(i, pos[0], pos[1], pos[2]);
     }
-    e.selectObject(-1);
-    this.refresh(true);
-    this.setState({ sel: "scene", saved: true });
+    e.clearSelection();
+    this.refresh();
+    this.setState({ saved: true });
     this.log("scene", "untitled.sdfo — " + specs.length + " objects");
   }
 
@@ -326,10 +342,13 @@ export default class App extends React.Component<any, any> {
       const rect = canvas.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      this._pickInFlight = true;   // YENİ
+      // Ctrl/Shift/Cmd click adds to the selection; captured now since the
+      // event may be recycled by the time the pick promise resolves.
+      const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+      this._pickInFlight = true;
       this.engine.pickObject(x, y)
-        .then((index) => this.selectByIndex(index))
-        .finally(() => { this._pickInFlight = false; });   // YENİ
+        .then((objectId) => this.selectByPick(objectId, additive))
+        .finally(() => { this._pickInFlight = false; });
       }
     }
   };
@@ -379,85 +398,149 @@ export default class App extends React.Component<any, any> {
     return this.objById(this.state.sel);
   }
 
-  // Engine `size` xyz derived from a UI object's shape params + scale.
-  computeSize(typeName: string, prm: any, scl: number[]): [number, number, number] {
-    switch (typeName) {
-      case "sphere": return [(prm.radius ?? 1) * scl[0], 0, 0];
-      case "box": return [scl[0], scl[1], scl[2]];
-      case "cylinder": return [(prm.radius ?? 0.7) * scl[0], (prm.height ?? 1.5) * scl[1], 0];
-      case "torus": return [(prm.radius ?? 1) * scl[0], prm.thickness ?? 0.25, 0];
-      default: return [scl[0], scl[1], scl[2]];
-    }
-  }
-
-  // Build default UI meta for an engine object the UI hasn't seen before.
-  // `counts` is a mutable accumulator so generated names stay unique.
-  defaultMeta(o: any, counts: any): any {
+  // Build the UI view-model (`meta`) for an engine object. Everything here is a
+  // straight mirror of engine-owned data (name/visibility/lock/rotation/scale/
+  // shape params/color) — no logic. `prev` carries the two UI-only, engine-less
+  // fields (blend `op` and `smooth`, both planned) across refreshes.
+  metaFromObject(o: any, prev: any): any {
     const typeName = TYPE_NAME[o.type] || "box";
-    const n = (counts[typeName] || 0) + 1;
-    counts[typeName] = n;
-    const size = o.size;
+    const p = o.params || {};
     let prm: any;
-    if (typeName === "sphere") prm = { radius: size[0] };
-    else if (typeName === "cylinder") prm = { radius: size[0], height: size[1] };
-    else if (typeName === "torus") prm = { radius: size[0], thickness: size[1] };
-    else prm = { round: 0.02 };
+    if (typeName === "sphere") prm = { radius: p.radius };
+    else if (typeName === "cylinder") prm = { radius: p.radius, height: p.height };
+    else if (typeName === "torus") prm = { radius: p.radius, thickness: p.thickness };
+    else prm = { round: p.roundness };
     const c = o.color.map((v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255));
     return {
-      name: this.cap(typeName) + "." + this.pad3(n),
-      hidden: false,
-      locked: false,
-      rot: [0, 0, 0],
-      scl: typeName === "box" ? [...size] : [1, 1, 1],
+      name: o.name,
+      hidden: !o.visible,
+      locked: !!o.locked,
+      rot: o.rotation ? [...o.rotation] : [0, 0, 0],
+      scl: o.scale ? [...o.scale] : [1, 1, 1],
       prm,
-      op: "Union",
-      smooth: 0,
+      op: prev?.op ?? "Union",       // UI-only, planned CSG blend selector
+      smooth: prev?.smooth ?? 0,     // UI-only, planned blend radius
       hsv: this.rgb2hsv(c[0], c[1], c[2]),
     };
   }
 
-  // Re-read the engine's authoritative scene into `objects`, keeping (and lazily
-  // creating) the UI-only `meta` for each object. Pass true to also adopt the
-  // engine's current selection (after add/delete/new/open).
-  refresh(adoptSel = false) {
+  // Re-read the engine's authoritative scene. `objects` and their `meta`
+  // view-model are rebuilt from what the engine reports (it owns name, transform,
+  // shape params, etc.); the UI keeps no object logic of its own. Selection is
+  // likewise mirrored from the engine. The legacy `adoptSel` param is a no-op.
+  refresh(_adoptSel = false) {
     const e = this.engine;
     if (!e) return;
     const snap = e.getScene();
+    const tree = snap.tree || null;
     this.setState((s: any) => {
-      const meta = { ...s.meta };
       const counts = { ...s.counts };
+      // Object meta is a pure mirror of engine data (rebuilt every refresh), so
+      // engine-side edits like rename/scale show up without UI bookkeeping.
+      const meta: Record<string, any> = {};
       for (const o of snap.objects) {
         const id = String(o.id);
-        if (!meta[id]) meta[id] = this.defaultMeta(o, counts);
+        meta[id] = this.metaFromObject(o, s.meta[id]);
       }
-      const next: any = { objects: snap.objects, meta, grid: !!snap.showGrid, counts };
-      if (adoptSel) {
-        const selObj = snap.objects.find((o: any) => o.index === snap.selectedIndex);
-        next.sel = selObj ? String(selObj.id) : s.sel === "scene" ? "scene" : "scene";
+      // CSG operation (group) nodes have no engine-side name yet, so their labels
+      // stay UI-only: carry the previous meta over, or make a default.
+      if (tree) {
+        for (const nd of tree.nodes) {
+          if (nd.type === 0 || nd.nodeId === tree.root) continue;
+          const gk = "g" + nd.nodeId;
+          meta[gk] = s.meta[gk] || this.defaultGroupMeta(nd.type, counts);
+        }
       }
+      // Mirror the engine's selection (nodeIds) into UI selection keys.
+      const keyForNodeId = (nid: number | undefined): string | null => {
+        if (nid == null || nid < 0 || !tree) return null;
+        const nd = tree.nodes.find((n: any) => n.nodeId === nid);
+        if (!nd) return null;
+        return nd.type === 0 ? String(nd.objectId) : "g" + nid;
+      };
+      const selSet = (snap.selectedNodeIds || [])
+        .map(keyForNodeId)
+        .filter((k: string | null): k is string => !!k);
+      const primary = keyForNodeId(snap.primaryNodeId);
+      const next: any = { objects: snap.objects, tree, meta, grid: !!snap.showGrid, counts };
+      next.selSet = selSet.length ? selSet : ["scene"];
+      next.sel = primary || next.selSet[0];
       return next;
     });
   }
 
-  // Select an outliner id, mirroring object selection to the engine so the
-  // viewport highlights it.
-  select(id: any) {
-    const o = this.objById(id);
-    this.engine?.selectObject(o ? o.index : -1);
-    this.setState({ sel: id, openMenu: null, ctx: null, picker: null, dd: false, opDd: false });
+  // ---- Selection & CSG-tree helpers ---------------------------------------
+  // Selection state is owned by the engine (SelectionState). These helpers only
+  // translate between UI selection keys and engine CSG nodeIds, issue selection
+  // commands, and then refresh() re-reads the authoritative selection back.
+  //
+  // A selection key is "scene" (root / nothing selected), a stringified object
+  // id (primitive), or "g<nodeId>" (a CSG operation/group node).
+
+  isGroupKey(key: any): boolean {
+    return typeof key === "string" && key.length > 1 && key[0] === "g";
+  }
+  // Engine CSG nodeId a selection key refers to, or -1 (e.g. "scene", or when
+  // the engine has not emitted a tree yet).
+  nodeIdForKey(key: any): number {
+    if (this.isGroupKey(key)) return Number(key.slice(1));
+    const o = this.objById(key);
+    const t = this.state.tree;
+    if (!o || !t) return -1;
+    const n = t.nodes.find((nd: any) => nd.type === 0 && nd.objectId === o.id);
+    return n ? n.nodeId : -1;
   }
 
-  selectByIndex(index: number) {
-    this.engine?.selectObject(index);
-    if (index === -1) {
-      this.setState({ sel: "scene", openMenu: null, ctx: null, picker: null, dd: false, opDd: false });
+  // Housekeeping after any selection command: close transient popups and pull
+  // the new selection back from the engine.
+  afterSelect() {
+    this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false });
+    this.refresh();
+  }
+
+  // Click-select a key. Additive (ctrl/shift/meta) toggles it in the engine's
+  // set; a plain click replaces it. "scene" clears the selection.
+  selectKey(key: string, additive = false) {
+    const e = this.engine;
+    if (!e) return;
+    try {
+      if (key === "scene") {
+        e.clearSelection();
+      } else {
+        const nid = this.nodeIdForKey(key);
+        if (nid < 0) return;
+        e.selectNode(nid, additive ? 1 : 0);
+      }
+    } catch (err) {
+      this.status("Selection needs the engine bridge");
+      this.log("error", "select: " + String(err));
       return;
     }
-    const obj = this.state.objects.find((o: any) => o.index === index);
-    this.setState({
-      sel: obj ? String(obj.id) : "scene",
-      openMenu: null, ctx: null, picker: null, dd: false, opDd: false,
-    });
+    this.afterSelect();
+  }
+
+  // Back-compat single-select entry point (menus, root row).
+  select(id: any) {
+    this.selectKey(id, false);
+  }
+
+  // Viewport pick result -> selection. objectId -1 means empty space.
+  selectByPick(objectId: number, additive: boolean) {
+    if (objectId === -1) {
+      if (!additive) this.selectKey("scene");
+      return;
+    }
+    if (!this.state.objects.some((o: any) => o.id === objectId)) return;
+    this.selectKey(String(objectId), additive);
+  }
+
+  // Default UI meta for a CSG operation (group) node the UI hasn't named yet.
+  defaultGroupMeta(nodeType: number, counts: any): any {
+    const opName = nodeType === 2 ? "Subtract" : nodeType === 3 ? "Intersect" : "Union";
+    const ck = "group" + opName;
+    const n = (counts[ck] || 0) + 1;
+    counts[ck] = n;
+    return { name: opName + "." + this.pad3(n), hidden: false, locked: false, group: true, op: opName };
   }
 
   hsv2rgb(h: number, s: number, v: number) {
@@ -521,10 +604,11 @@ export default class App extends React.Component<any, any> {
     if (!m) return;
     const e = this.engine;
     const [a, b] = key.split(".");
-    const typeName = TYPE_NAME[o.type] || "box";
+
+    if (!e) return;
 
     if (key === "smooth") {
-      // Planned blend param — UI-only until the CSG bridge lands.
+      // Planned blend param — the only per-object field with no engine storage.
       const val = Math.max(0, Math.min(1, v));
       this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], smooth: val } }, saved: false }));
       return;
@@ -532,24 +616,31 @@ export default class App extends React.Component<any, any> {
     if (a === "pos") {
       const p = [...o.position];
       p[Number(b)] = v;
-      e?.setObjectPosition(o.index, p[0], p[1], p[2]);
+      e.setObjectPosition(o.index, p[0], p[1], p[2]);
       this.setState({ saved: false });
       this.refresh();
       return;
     }
     if (a === "rot") {
-      // Reserved rotation quaternion has no setter yet — UI-only.
       const rot = [...m.rot];
       rot[Number(b)] = v;
-      this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], rot } }, saved: false }));
+      e.setObjectRotation(o.index, rot[0], rot[1], rot[2]);
+      this.setState({ saved: false });
+      this.refresh();
       return;
     }
-    if (a === "scl" || a === "prm") {
-      const prm = a === "prm" ? { ...m.prm, [b]: Math.max(0, v) } : m.prm;
-      const scl = a === "scl" ? m.scl.map((x: number, i: number) => (i === Number(b) ? Math.max(0.001, v) : x)) : m.scl;
-      const size = this.computeSize(typeName, prm, scl);
-      e?.setObjectSize(o.index, size[0], size[1], size[2]);
-      this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], prm, scl } }, saved: false }));
+    if (a === "scl") {
+      const scl = m.scl.map((x: number, i: number) => (i === Number(b) ? Math.max(0.001, v) : x));
+      e.setObjectScale(o.index, scl[0], scl[1], scl[2]);
+      this.setState({ saved: false });
+      this.refresh();
+      return;
+    }
+    if (a === "prm") {
+      const param = this.PARAM_ID[b];
+      if (param === undefined) return;
+      e.setObjectParam(o.index, param, Math.max(0, v));
+      this.setState({ saved: false });
       this.refresh();
       return;
     }
@@ -660,52 +751,48 @@ export default class App extends React.Component<any, any> {
     this.status(this.cap(type) + " added");
   }
   deleteSel() {
-    const o = this.selObj();
     const e = this.engine;
-    if (!o || !e) return;
-    const id = String(o.id);
-    const name = this.state.meta[id]?.name || o.typeName;
-    e.removeObject(o.index);
-    this.setState((s: any) => {
-      const meta = { ...s.meta };
-      delete meta[id];
-      return { meta, ctx: null, saved: false };
+    if (!e) return;
+    const keys = (this.state.selSet || []).filter((k: string) => k !== "scene");
+    if (keys.length === 0) return;
+    const names = keys.map((k: string) => {
+      const o = this.objById(k);
+      return this.state.meta[k]?.name || (o ? o.typeName : "Group");
     });
-    this.refresh(true);
-    this.log("scene", name + " deleted");
-    this.status(name + " deleted");
+    try {
+      // The engine deletes its current selection (primitives + op subtrees).
+      e.deleteSelection();
+    } catch (err) {
+      this.status("Delete failed — engine bridge missing");
+      this.log("error", "delete: " + String(err));
+      return;
+    }
+    this.refresh();
+    this.setState({ ctx: null, saved: false });
+    this.log("scene", names.join(", ") + " deleted");
+    this.status(names.length + " deleted");
   }
   duplicateSel() {
     const o = this.selObj();
     const e = this.engine;
     if (!o || !e) return;
-    const src = this.state.meta[String(o.id)];
     const typeName = TYPE_NAME[o.type] || "box";
+    // Copy the source's engine-owned attributes onto a fresh primitive through
+    // the same setters the UI uses — no size math on the web side.
     const idx = e.addPrimitive(TYPE_ENUM[typeName]);
     const p = o.position;
     e.setObjectPosition(idx, p[0] + 0.5, p[1], p[2]);
-    const size = this.computeSize(typeName, src.prm, src.scl);
-    e.setObjectSize(idx, size[0], size[1], size[2]);
-    const rgb = this.hsv2rgb(src.hsv.h, src.hsv.s, src.hsv.v);
-    e.setObjectColor(idx, rgb[0] / 255, rgb[1] / 255, rgb[2] / 255);
-    this.refresh(true);
-    this.setState((s: any) => {
-      const newObj = s.objects.find((x: any) => x.index === idx);
-      if (!newObj) return {};
-      const nid = String(newObj.id);
-      const meta = { ...s.meta };
-      meta[nid] = {
-        ...meta[nid],
-        prm: { ...src.prm },
-        scl: [...src.scl],
-        rot: [...src.rot],
-        op: src.op,
-        smooth: src.smooth,
-        hsv: { ...src.hsv },
-      };
-      return { meta, saved: false, ctx: null };
-    });
-    this.log("scene", (src?.name || typeName) + " duplicated");
+    e.setObjectScale(idx, o.scale[0], o.scale[1], o.scale[2]);
+    e.setObjectParam(idx, ShapeParam.Radius, o.params.radius);
+    e.setObjectParam(idx, ShapeParam.Height, o.params.height);
+    e.setObjectParam(idx, ShapeParam.Thickness, o.params.thickness);
+    e.setObjectParam(idx, ShapeParam.Roundness, o.params.roundness);
+    e.setObjectRotation(idx, o.rotation[0], o.rotation[1], o.rotation[2]);
+    e.setObjectColor(idx, o.color[0], o.color[1], o.color[2]);
+    e.setObjectName(idx, (o.name || typeName) + " copy");
+    this.refresh();
+    this.setState({ saved: false, ctx: null });
+    this.log("scene", (o.name || typeName) + " duplicated");
   }
   addCollection() {
     // Collections need an object hierarchy the engine does not have yet.
@@ -721,9 +808,19 @@ export default class App extends React.Component<any, any> {
     }
     const id = S.renaming;
     const name = S.renameText.trim();
-    if (name && S.meta[id]) {
+    if (!name || !S.meta[id]) {
+      this.setState({ renaming: null });
+      return;
+    }
+    const o = this.objById(id);
+    if (o) {
+      // Primitive names are engine-owned; group names stay UI-only for now.
+      this.engine?.setObjectName(o.index, name);
+      this.setState({ renaming: null, saved: false });
+      this.refresh();
+    } else {
       this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], name } }, renaming: null, saved: false }));
-    } else this.setState({ renaming: null });
+    }
   }
   newScene() {
     this.engine?.newScene();
@@ -752,8 +849,41 @@ export default class App extends React.Component<any, any> {
     this.status("Saved");
   }
   csg(op: string) {
-    this.log("scene", op + " requested — boolean ops land with the engine bridge");
-    this.status(op + " — pending engine bridge");
+    const e = this.engine;
+    if (!e) return;
+    const codeMap: Record<string, CsgOp> = {
+      Union: CsgOp.Union,
+      Subtract: CsgOp.Subtract,
+      Intersect: CsgOp.Intersect,
+    };
+    const code = codeMap[op];
+    if (!code) {
+      // Smooth Union etc. are not wired into the CSG tree yet.
+      this.status(op + " — not implemented yet");
+      return;
+    }
+    // The engine operates on its own current selection; we only sanity-check the
+    // count here for a friendly message.
+    const count = (this.state.selSet || []).filter((k: string) => k !== "scene").length;
+    if (count < 2) {
+      this.status(op + " needs 2 or more selected objects");
+      return;
+    }
+    let newNodeId = -1;
+    try {
+      newNodeId = e.applyOperation(code);
+    } catch (err) {
+      this.status(op + " failed — engine bridge missing");
+      this.log("error", op + ": " + String(err));
+      return;
+    }
+    // The engine selects the new group; refresh() mirrors that. Just expand it.
+    this.refresh();
+    if (newNodeId >= 0) {
+      this.setState((s: any) => ({ saved: false, expanded: { ...s.expanded, ["g" + newNodeId]: true } }));
+    }
+    this.log("scene", op + " applied");
+    this.status(op);
   }
   toggleGrid() {
     const grid = !this.state.grid;
@@ -813,14 +943,130 @@ export default class App extends React.Component<any, any> {
     const colorCss = "rgb(" + rgb.join(",") + ")";
     const colorHex = this.hex(rgb);
 
-    // tree rows — flat object list under the "Scene Collection" root. (The
-    // engine has no hierarchy yet, so collections beyond the root are planned.)
+    // tree rows — the engine's CSG hierarchy rendered under the "Scene
+    // Collection" root (which stands in for the tree's root operation node).
+    // When a filter is active, or the engine has not yet emitted a tree, fall
+    // back to a flat list of primitives.
     const rows: any[] = [];
     const filt = S.filter.trim().toLowerCase();
     const nameOf = (o: any) => S.meta[String(o.id)]?.name || o.typeName;
     const visibleObjs = S.objects.filter((o: any) => !filt || nameOf(o).toLowerCase().includes(filt));
+    const tree = S.tree;
+    const isRowSel = (key: string) => (S.selSet || []).includes(key);
+    const objByOid: Record<number, any> = {};
+    for (const o of S.objects) objByOid[o.id] = o;
+
+    // Modifier-aware click / context handlers shared by every row.
+    const rowSelect = (key: string) => (e: any) =>
+      this.selectKey(key, !!(e && (e.ctrlKey || e.shiftKey || e.metaKey)));
+    const rowCtx = (key: string) => (e: any) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!isRowSel(key)) this.selectKey(key, false);
+      this.setState({ ctx: { x: e.clientX, y: e.clientY, kind: "node" }, openMenu: null, picker: null });
+    };
+
+    const pushPrimitive = (o: any, depth: number) => {
+      const id = String(o.id);
+      const m = S.meta[id] || {};
+      const tn = TYPE_NAME[o.type] || "box";
+      const selr = isRowSel(id);
+      const hid = !!m.hidden;
+      const lck = !!m.locked;
+      rows.push({
+        id,
+        name: m.name || o.typeName,
+        pad: 6 + depth * 14 + "px",
+        hasKids: false,
+        caretPath: "",
+        iconPath: this.IC[tn] || this.IC.box,
+        iconColor: selr ? "#f0a03c" : "#8f8f8f",
+        bg: selr ? "#333333" : "transparent",
+        hoverBg: selr ? "#383838" : "#282828",
+        fg: hid ? "#5a5a5a" : selr ? "#f0a03c" : "#c9c9c9",
+        renaming: S.renaming === id,
+        notRenaming: S.renaming !== id,
+        editName: S.renameText,
+        onNameInput: (e: any) => this.setState({ renameText: e.target.value }),
+        onNameKey: (e: any) => {
+          if (e.key === "Enter") this.commitRename();
+          else if (e.key === "Escape") this.setState({ renaming: null });
+        },
+        onNameBlur: () => this.commitRename(),
+        eyePath: hid ? this.IC.eyeOff : this.IC.eye,
+        eyeColor: hid ? "#5a5a5a" : "#7f7f7f",
+        onEye: (e: any) => {
+          e.stopPropagation();
+          this.engine?.setObjectVisible(o.index, hid); // hid=true -> make visible
+          this.refresh();
+        },
+        lockPath: lck ? this.IC.lock : this.IC.unlock,
+        lockColor: lck ? "#e8912d" : "#4d4d4d",
+        onLock: (e: any) => {
+          e.stopPropagation();
+          this.engine?.setObjectLocked(o.index, !lck);
+          this.refresh();
+        },
+        onCaret: () => {},
+        onSelect: rowSelect(id),
+        onCtx: rowCtx(id),
+        onRenameStart: () => this.setState({ renaming: id, renameText: m.name || o.typeName }),
+      });
+    };
+
+    // Recurse a CSG node: primitives become leaf rows, operation nodes become
+    // expandable group rows that nest their children.
+    const renderNode = (nodeId: number, depth: number) => {
+      const nd = tree.nodes.find((n: any) => n.nodeId === nodeId);
+      if (!nd) return;
+      if (nd.type === 0) {
+        const o = objByOid[nd.objectId];
+        if (o) pushPrimitive(o, depth);
+        return;
+      }
+      const key = "g" + nd.nodeId;
+      const m = S.meta[key] || {};
+      const selr = isRowSel(key);
+      const gexp = S.expanded[key] !== false; // default expanded
+      rows.push({
+        id: key,
+        name: m.name || "Group",
+        pad: 6 + depth * 14 + "px",
+        hasKids: nd.children.length > 0,
+        caretPath: gexp ? this.IC.caretD : this.IC.caretR,
+        iconPath: this.IC.collection,
+        iconColor: selr ? "#f0a03c" : "#8f8f8f",
+        bg: selr ? "#333333" : "transparent",
+        hoverBg: selr ? "#383838" : "#282828",
+        fg: selr ? "#f0a03c" : "#c9c9c9",
+        renaming: S.renaming === key,
+        notRenaming: S.renaming !== key,
+        editName: S.renameText,
+        onNameInput: (e: any) => this.setState({ renameText: e.target.value }),
+        onNameKey: (e: any) => {
+          if (e.key === "Enter") this.commitRename();
+          else if (e.key === "Escape") this.setState({ renaming: null });
+        },
+        onNameBlur: () => this.commitRename(),
+        eyePath: this.IC.eye,
+        eyeColor: "#7f7f7f",
+        onEye: (e: any) => e.stopPropagation(),
+        lockPath: this.IC.unlock,
+        lockColor: "#4d4d4d",
+        onLock: (e: any) => e.stopPropagation(),
+        onCaret: (e: any) => {
+          e.stopPropagation();
+          this.setState((s: any) => ({ expanded: { ...s.expanded, [key]: s.expanded[key] === false } }));
+        },
+        onSelect: rowSelect(key),
+        onCtx: rowCtx(key),
+        onRenameStart: () => this.setState({ renaming: key, renameText: m.name || "Group" }),
+      });
+      if (gexp) for (const cid of nd.children) renderNode(cid, depth + 1);
+    };
+
     const rootExpanded = filt ? true : !!S.expanded.scene;
-    const rootSel = S.sel === "scene";
+    const rootSel = isRowSel("scene");
     rows.push({
       id: "scene",
       name: "Scene Collection",
@@ -849,63 +1095,16 @@ export default class App extends React.Component<any, any> {
         this.setState((s: any) => ({ expanded: { ...s.expanded, scene: !s.expanded.scene } }));
       },
       onSelect: () => this.select("scene"),
-      onCtx: (e: any) => {
-        e.preventDefault();
-        e.stopPropagation();
-        this.setState({ sel: "scene", ctx: { x: e.clientX, y: e.clientY, kind: "node" }, openMenu: null, picker: null });
-      },
+      onCtx: rowCtx("scene"),
       onRenameStart: () => {},
     });
     if (rootExpanded) {
-      for (const o of visibleObjs) {
-        const id = String(o.id);
-        const m = S.meta[id] || {};
-        const tn = TYPE_NAME[o.type] || "box";
-        const selr = S.sel === id;
-        const hid = !!m.hidden;
-        const lck = !!m.locked;
-        rows.push({
-          id,
-          name: m.name || o.typeName,
-          pad: "20px",
-          hasKids: false,
-          caretPath: "",
-          iconPath: this.IC[tn] || this.IC.box,
-          iconColor: selr ? "#f0a03c" : "#8f8f8f",
-          bg: selr ? "#333333" : "transparent",
-          hoverBg: selr ? "#383838" : "#282828",
-          fg: hid ? "#5a5a5a" : selr ? "#f0a03c" : "#c9c9c9",
-          renaming: S.renaming === id,
-          notRenaming: S.renaming !== id,
-          editName: S.renameText,
-          onNameInput: (e: any) => this.setState({ renameText: e.target.value }),
-          onNameKey: (e: any) => {
-            if (e.key === "Enter") this.commitRename();
-            else if (e.key === "Escape") this.setState({ renaming: null });
-          },
-          onNameBlur: () => this.commitRename(),
-          eyePath: hid ? this.IC.eyeOff : this.IC.eye,
-          eyeColor: hid ? "#5a5a5a" : "#7f7f7f",
-          onEye: (e: any) => {
-            e.stopPropagation();
-            this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], hidden: !s.meta[id]?.hidden } } }));
-          },
-          lockPath: lck ? this.IC.lock : this.IC.unlock,
-          lockColor: lck ? "#e8912d" : "#4d4d4d",
-          onLock: (e: any) => {
-            e.stopPropagation();
-            this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], locked: !s.meta[id]?.locked } } }));
-          },
-          onCaret: () => {},
-          onSelect: () => this.select(id),
-          onCtx: (e: any) => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.select(id);
-            this.setState({ ctx: { x: e.clientX, y: e.clientY, kind: "node" }, openMenu: null, picker: null });
-          },
-          onRenameStart: () => this.setState({ renaming: id, renameText: m.name || o.typeName }),
-        });
+      if (tree && !filt) {
+        const rootNode = tree.nodes.find((n: any) => n.nodeId === tree.root);
+        const kids = rootNode ? rootNode.children : [];
+        for (const cid of kids) renderNode(cid, 1);
+      } else {
+        for (const o of visibleObjs) pushPrimitive(o, 1);
       }
     }
 
@@ -920,6 +1119,8 @@ export default class App extends React.Component<any, any> {
     const paramRows = isObj ? (this.PRM_ROWS[selTypeName] || []).map(([label, k, step]: any) => ({ label, ...this.field("prm." + k, step) })) : [];
 
     // Changing type is done via delete + re-create (no in-place type binding).
+    // Carry over the engine-owned attributes that still make sense; shape params
+    // reset to the new type's defaults.
     const typeSet = (t: string) => () => {
       const e = this.engine;
       const o = this.selObj();
@@ -927,26 +1128,18 @@ export default class App extends React.Component<any, any> {
         this.setState({ dd: false });
         return;
       }
-      const oldId = String(o.id);
-      const m = S.meta[oldId];
       const pos = o.position;
-      const hsv = m.hsv;
+      const col = o.color;
+      const rot = o.rotation;
+      const name = o.name;
       e.removeObject(o.index);
       const idx = e.addPrimitive(TYPE_ENUM[t]);
       e.setObjectPosition(idx, pos[0], pos[1], pos[2]);
-      const c = this.hsv2rgb(hsv.h, hsv.s, hsv.v);
-      e.setObjectColor(idx, c[0] / 255, c[1] / 255, c[2] / 255);
-      this.refresh(true);
-      this.setState((s: any) => {
-        const newObj = s.objects.find((x: any) => x.index === idx);
-        const meta = { ...s.meta };
-        delete meta[oldId];
-        if (newObj) {
-          const nid = String(newObj.id);
-          meta[nid] = { ...meta[nid], name: m.name, rot: [...m.rot], op: m.op, smooth: m.smooth, hidden: m.hidden, locked: m.locked, hsv: { ...hsv } };
-        }
-        return { meta, dd: false, saved: false };
-      });
+      e.setObjectColor(idx, col[0], col[1], col[2]);
+      e.setObjectRotation(idx, rot[0], rot[1], rot[2]);
+      e.setObjectName(idx, name);
+      this.refresh();
+      this.setState({ dd: false, saved: false });
     };
     // Blend operation is a planned CSG feature — UI-only for now.
     const opSet = (o: string) => () => {

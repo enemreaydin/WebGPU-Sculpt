@@ -44,6 +44,7 @@ endif()
 # Editor layer: application + main render loop.
 set(EDITOR_SOURCES
     src/editor/Application.cpp
+    src/editor/EditorObjectStore.cpp
 )
 
 # Platform layer: window, graphics context, WebGPU wrapper implementation.
@@ -60,6 +61,7 @@ set(ENGINE_SOURCES
     src/camera/CameraController.cpp
     src/scene/SceneManager.cpp
     src/scene/SdfObjectFactory.cpp
+    src/scene/PrimitiveGeometry.cpp
     src/scene/csg/CsgTree.cpp
     src/serialization/ExtensionLoader.cpp
     src/serialization/SceneSerializer.cpp
@@ -81,7 +83,10 @@ set(PROJECT_HEADERS
     src/editor/Settings.h
     src/scene/data/SdfEnums.h
     src/scene/data/SdfObjectData.h
+    src/scene/data/EditorObject.h
     src/scene/data/GlobalsData.h
+    src/scene/PrimitiveGeometry.h
+    src/editor/EditorObjectStore.h
     src/scene/csg/CsgCommand.h
     src/scene/csg/CsgNode.h
     src/scene/csg/CsgTree.h

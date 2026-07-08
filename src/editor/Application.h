@@ -17,6 +17,7 @@
 #include "core/ViewportInput.h"
 #include "interaction/SelectionState.h"
 #include "serialization/SceneSerializer.h"
+#include "editor/EditorObjectStore.h"
 
 using namespace wgpu;
 
@@ -54,6 +55,15 @@ public:
     void SetObjectSize(int index, float x, float y, float z);
     void SetObjectColor(int index, float r, float g, float b);
 
+    // Editor attributes (owned by the engine via EditorObjectStore). Scale and
+    // shape-param edits recompute the object's SDF `size`; the rest are stored.
+    void SetObjectName(int index, const char* name);
+    void SetObjectVisible(int index, bool visible);
+    void SetObjectLocked(int index, bool locked);
+    void SetObjectRotation(int index, float x, float y, float z);
+    void SetObjectScale(int index, float x, float y, float z);
+    void SetObjectParam(int index, int paramId, float value);
+
     // Serialized snapshot of the scene as JSON (object list + selection), for
     // the front-end to render its panels from.
     std::string GetSceneJson() const;
@@ -90,6 +100,7 @@ private:
     bool showGrid = true;
 
     SelectionState selectionState;
+    EditorObjectStore editorStore;
 
     // Scene / camera state
     GlobalsData globals{};
@@ -103,6 +114,7 @@ private:
     void FindProjectRoot();
     void InitializeRenderer();
     void UpdateCamera();
+    void RebuildEditorRecords();   // recreate editor records after a scene load
     TextureView GetNextSurfaceTextureView();
 
     static const char* TypeName(int32_t type);

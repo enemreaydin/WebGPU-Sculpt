@@ -1,6 +1,7 @@
 #include "Application.h"
 #include "utils/FileHelper.h"
 #include "scene/SdfObjectFactory.h"
+#include "scene/PrimitiveGeometry.h"
 #include <iostream>
 #include <sstream>
 #include <filesystem>
@@ -243,6 +244,13 @@ int Application::AddPrimitive(SdfObjectType type) {
 
     sceneManager.AddObject(object);
     int index = static_cast<int>(sceneManager.GetObjects().size()) - 1;
+
+    // Give the new object its editor record (default name + shape params derived
+    // from the factory size).
+    const SdfObjectData& created = sceneManager.GetObjects()[index];
+    editorStore.Create(created.objectId, type,
+                       { created.size[0], created.size[1], created.size[2] });
+
     selectionState.selectedObjectIndex = index;
     sceneSerializer.RefreshSceneBuffer();
     return index;
@@ -252,6 +260,7 @@ void Application::RemoveObject(int index) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
 
+    editorStore.Remove(objects[index].objectId);
     sceneManager.RemoveObjectAt(index);
 
     if (objects.empty())
@@ -260,6 +269,16 @@ void Application::RemoveObject(int index) {
         selectionState.selectedObjectIndex = static_cast<int>(objects.size()) - 1;
 
     sceneSerializer.RefreshSceneBuffer();
+}
+
+// Rebuild every object's editor record from the current scene — used after a
+// load, where objects come straight off disk with no records yet.
+void Application::RebuildEditorRecords() {
+    editorStore.Clear();
+    for (const SdfObjectData& o : sceneManager.GetObjects()) {
+        editorStore.Create(o.objectId, static_cast<SdfObjectType>(o.type),
+                           { o.size[0], o.size[1], o.size[2] });
+    }
 }
 
 void Application::SelectObject(int index) {
@@ -288,6 +307,68 @@ void Application::SetObjectColor(int index, float r, float g, float b) {
     sceneSerializer.RefreshSceneBuffer();
 }
 
+// --- Editor attribute setters -----------------------------------------------
+// Each resolves the object's editor record via its permanent objectId; scale
+// and shape-param edits then recompute the SDF `size` from the params.
+
+void Application::SetObjectName(int index, const char* name) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    if (EditorObject* eo = editorStore.Find(objects[index].objectId))
+        eo->name = name ? name : "";
+}
+
+void Application::SetObjectVisible(int index, bool visible) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    if (EditorObject* eo = editorStore.Find(objects[index].objectId))
+        eo->visible = visible;
+}
+
+void Application::SetObjectLocked(int index, bool locked) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    if (EditorObject* eo = editorStore.Find(objects[index].objectId))
+        eo->locked = locked;
+}
+
+void Application::SetObjectRotation(int index, float x, float y, float z) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    if (EditorObject* eo = editorStore.Find(objects[index].objectId))
+        eo->rotationEuler = { x, y, z };  // stored; not yet applied to the SDF
+}
+
+void Application::SetObjectScale(int index, float x, float y, float z) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    EditorObject* eo = editorStore.Find(objects[index].objectId);
+    if (!eo) return;
+    eo->scale = { x, y, z };
+    auto size = PrimitiveGeometry::ComputeSize(
+        static_cast<SdfObjectType>(objects[index].type), eo->params, eo->scale);
+    objects[index].size = { size[0], size[1], size[2], 0.0f };
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+void Application::SetObjectParam(int index, int paramId, float value) {
+    auto& objects = sceneManager.GetObjects();
+    if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    EditorObject* eo = editorStore.Find(objects[index].objectId);
+    if (!eo) return;
+    switch (static_cast<PrimitiveParam>(paramId)) {
+    case PrimitiveParam::Radius:    eo->params.radius = value; break;
+    case PrimitiveParam::Height:    eo->params.height = value; break;
+    case PrimitiveParam::Thickness: eo->params.thickness = value; break;
+    case PrimitiveParam::Roundness: eo->params.roundness = value; break;
+    default: return;
+    }
+    auto size = PrimitiveGeometry::ComputeSize(
+        static_cast<SdfObjectType>(objects[index].type), eo->params, eo->scale);
+    objects[index].size = { size[0], size[1], size[2], 0.0f };
+    sceneSerializer.RefreshSceneBuffer();
+}
+
 const char* Application::TypeName(int32_t type) {
     switch (static_cast<SdfObjectType>(type)) {
     case SdfObjectType::Sphere:   return "Sphere";
@@ -296,6 +377,23 @@ const char* Application::TypeName(int32_t type) {
     case SdfObjectType::Torus:    return "Torus";
     default:                      return "Object";
     }
+}
+
+// Minimal JSON string escaping for user-entered object names.
+static std::string JsonEscape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    for (char c : s) {
+        switch (c) {
+        case '"':  out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n";  break;
+        case '\r': out += "\\r";  break;
+        case '\t': out += "\\t";  break;
+        default:   out += c;      break;
+        }
+    }
+    return out;
 }
 
 std::string Application::GetSceneJson() const {
@@ -308,6 +406,9 @@ std::string Application::GetSceneJson() const {
 
     for (size_t i = 0; i < objects.size(); ++i) {
         const SdfObjectData& o = objects[i];
+        const EditorObject* eo = editorStore.Find(o.objectId);
+        EditorObject fallback;  // defaults if a record is somehow missing
+        const EditorObject& e = eo ? *eo : fallback;
         if (i > 0) out << ",";
         out << "{\"index\":" << i
             << ",\"id\":" << o.objectId
@@ -316,6 +417,15 @@ std::string Application::GetSceneJson() const {
             << ",\"position\":[" << o.position[0] << "," << o.position[1] << "," << o.position[2] << "]"
             << ",\"size\":[" << o.size[0] << "," << o.size[1] << "," << o.size[2] << "]"
             << ",\"color\":[" << o.color[0] << "," << o.color[1] << "," << o.color[2] << "]"
+            << ",\"name\":\"" << JsonEscape(e.name) << "\""
+            << ",\"visible\":" << (e.visible ? "true" : "false")
+            << ",\"locked\":" << (e.locked ? "true" : "false")
+            << ",\"rotation\":[" << e.rotationEuler[0] << "," << e.rotationEuler[1] << "," << e.rotationEuler[2] << "]"
+            << ",\"scale\":[" << e.scale[0] << "," << e.scale[1] << "," << e.scale[2] << "]"
+            << ",\"params\":{\"radius\":" << e.params.radius
+            << ",\"height\":" << e.params.height
+            << ",\"thickness\":" << e.params.thickness
+            << ",\"roundness\":" << e.params.roundness << "}"
             << "}";
     }
 
@@ -323,8 +433,8 @@ std::string Application::GetSceneJson() const {
     return out.str();
 }
 
-void Application::NewScene()  { sceneSerializer.NewScene();  selectionState.selectedObjectIndex = -1; }
-void Application::OpenScene() { sceneSerializer.OpenSceneFromSDFO(); selectionState.selectedObjectIndex = -1; }
+void Application::NewScene()  { sceneSerializer.NewScene();  editorStore.Clear(); selectionState.selectedObjectIndex = -1; }
+void Application::OpenScene() { sceneSerializer.OpenSceneFromSDFO(); RebuildEditorRecords(); selectionState.selectedObjectIndex = -1; }
 void Application::SaveScene() { sceneSerializer.SaveSceneToSDFO(); }
 
 void Application::CameraOrbit(float dx, float dy) {
