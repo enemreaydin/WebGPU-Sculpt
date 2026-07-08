@@ -252,12 +252,14 @@ void CsgTree::ReadCsgArray(const std::string& filepath)
 int32_t CsgTree::IndexForNodeId(int32_t nodeID) const{
     for (int32_t i = 0; i < static_cast<int32_t>(m_Nodes.size()); i++)
     {
-        if (nodeID == m_Nodes[i].nodeId)
+        // Skip tombstoned nodes: a dead nodeId must resolve to -1, otherwise
+        // callers act on a removed node.
+        if (m_Nodes[i].alive && nodeID == m_Nodes[i].nodeId)
         {
             return i;
         }
-        
-    }return -1;
+    }
+    return -1;
 }
 
 void CsgTree::Detach(int32_t index){

@@ -2,9 +2,15 @@
 
 int32_t SceneManager::EnsureRootUnion()
 {
-    if (m_RootNodeIndex == -1)
+    const auto& nodes = m_CsgTree.GetNodes();
+    bool valid = m_RootNodeIndex >= 0
+              && m_RootNodeIndex < static_cast<int32_t>(nodes.size())
+              && nodes[m_RootNodeIndex].alive;
+
+    if (!valid)
     {
-        // The root is always a Union node; primitives attach as its children.
+        // No live root (fresh scene, or a previously-corrupted one). AddOperationNode
+        // sets CsgTree::m_Root when it is -1, so this also re-syncs the two roots.
         m_RootNodeIndex = m_CsgTree.AddOperationNode(CsgNodeType::Union, -1);
     }
     return m_RootNodeIndex;
@@ -74,7 +80,10 @@ int32_t SceneManager::GroupNodes(const std::vector<int32_t>& indices, CsgNodeTyp
     int32_t opIndex = m_CsgTree.AddOperationNode(opType, -1);
     m_CsgTree.AttachChild(parent, opIndex);
     for (int32_t idx : indices)
+    {
+        if (idx == m_RootNodeIndex || idx == opIndex) continue; // never reparent the root/self (would cycle)
         m_CsgTree.Reparent(idx, opIndex);
+    }
 
     return m_CsgTree.GetNodes()[opIndex].nodeId;
 }
@@ -93,6 +102,13 @@ void SceneManager::CollectSubtreeObjectIds(int32_t nodeIndex, std::vector<int32_
 
 void SceneManager::RemoveNodeSubtree(int32_t nodeIndex)
 {
+    // The root Union is structural — deleting it would tombstone the whole scene
+    // and desync m_RootNodeIndex from CsgTree::m_Root (blank screen + new shapes
+    // never appearing). Refuse it; selecting all real objects still deletes them
+    // individually and leaves an empty root.
+    if (nodeIndex < 0 || nodeIndex == m_RootNodeIndex || nodeIndex == m_CsgTree.GetRoot())
+        return;
+
     std::vector<int32_t> objectIds;
     CollectSubtreeObjectIds(nodeIndex, objectIds);   // gather BEFORE tombstoning
 
