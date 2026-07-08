@@ -1,5 +1,4 @@
 #include "Camera.h"
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 
 glm::vec3 Camera::GetPosition() {
 	float x = targetP.x + distance * cos(pitch) * sin(yaw);

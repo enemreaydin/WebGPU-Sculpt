@@ -16,6 +16,7 @@
 #include "camera/CameraController.h"
 #include "core/ViewportInput.h"
 #include "interaction/SelectionState.h"
+#include "interaction/GizmoState.h"
 #include "serialization/SceneSerializer.h"
 #include "editor/EditorObjectStore.h"
 
@@ -87,6 +88,19 @@ public:
     void CameraPan(float dx, float dy);
     void CameraZoom(float delta);
 
+    // Translate gizmo. Mouse coords are in render (device) pixels, origin
+    // top-left. GizmoHover returns the hit GizmoAxis (0 = none).
+    int  GizmoHover(float mouseX, float mouseY);
+    void GizmoBeginDrag(float mouseX, float mouseY);
+    void GizmoDrag(float mouseX, float mouseY);
+    void GizmoEndDrag();
+    bool IsGizmoDragging() const { return gizmoState.isDragging; }
+
+    // Screen-space geometry of the gizmo for the front-end overlay: the selected
+    // object's screen origin + each axis endpoint, plus hovered/active axis.
+    // Non-const because the camera's matrix accessors are non-const.
+    std::string GetGizmoJson();
+
 private:
     bool running = true;
     int width;
@@ -106,6 +120,7 @@ private:
 
     SelectionState selectionState;
     EditorObjectStore editorStore;
+    GizmoState gizmoState;
 
     // Scene / camera state
     GlobalsData globals{};
@@ -121,6 +136,7 @@ private:
     void InitializeRenderer();
     void UpdateCamera();
     void RebuildEditorRecords();   // recreate editor records after a scene load
+    bool GetSelectedObjectPosition(glm::vec3& outPosition) const;
     TextureView GetNextSurfaceTextureView();
 
     static const char* TypeName(int32_t type);

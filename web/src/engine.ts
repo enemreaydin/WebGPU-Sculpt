@@ -65,6 +65,24 @@ export enum CsgOp {
   Intersect = 3,
 }
 
+// One gizmo axis segment in screen space (render pixels): its endpoint away
+// from the object origin. axis is 1=X, 2=Y, 3=Z.
+export interface GizmoAxisSeg {
+  axis: number;
+  valid: boolean;
+  end: [number, number];
+}
+
+// Screen-space gizmo geometry for the overlay. `visible` is false when no
+// object is selected (or it projects off-screen).
+export interface GizmoInfo {
+  visible: boolean;
+  hovered?: number;
+  active?: number;
+  origin?: [number, number];
+  axes?: GizmoAxisSeg[];
+}
+
 export interface SceneState {
   selectedIndex: number;
   showGrid: boolean;
@@ -315,5 +333,31 @@ export class Engine {
 
   cameraZoom(delta: number): void {
     this.call("sdf_camera_zoom", null, ["number"], [delta]);
+  }
+
+  // ---- Translate gizmo ----------------------------------------------------
+  // All coords are in render (device) pixels, top-left origin. gizmoHover
+  // returns the hit axis (0=none, 1=X, 2=Y, 3=Z).
+
+  gizmoHover(x: number, y: number): number {
+    return this.call("sdf_gizmo_hover", "number", ["number", "number"], [x, y]) as number;
+  }
+
+  gizmoBeginDrag(x: number, y: number): void {
+    this.call("sdf_gizmo_begin_drag", null, ["number", "number"], [x, y]);
+  }
+
+  gizmoDrag(x: number, y: number): void {
+    this.call("sdf_gizmo_drag", null, ["number", "number"], [x, y]);
+  }
+
+  gizmoEndDrag(): void {
+    this.call("sdf_gizmo_end_drag", null, [], []);
+  }
+
+  // Screen-space geometry for drawing the gizmo overlay (render pixels).
+  gizmoInfo(): GizmoInfo {
+    const json = this.call("sdf_gizmo_json", "string", [], []) as string;
+    return JSON.parse(json) as GizmoInfo;
   }
 }

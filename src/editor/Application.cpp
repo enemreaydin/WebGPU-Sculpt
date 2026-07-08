@@ -2,6 +2,7 @@
 #include "utils/FileHelper.h"
 #include "scene/SdfObjectFactory.h"
 #include "scene/PrimitiveGeometry.h"
+#include "interaction/GizmoMath.h"
 #include <iostream>
 #include <sstream>
 #include <filesystem>
@@ -585,4 +586,144 @@ void Application::CameraPan(float dx, float dy) {
 
 void Application::CameraZoom(float delta) {
     viewportInput.scrollDelta += delta;
+}
+
+// ---------------------------------------------------------------------------
+// Translate gizmo
+// ---------------------------------------------------------------------------
+
+// Screen-length of the gizmo axes (in render pixels) and the pick tolerance.
+namespace {
+    constexpr float GIZMO_SCREEN_LENGTH_PX = 96.0f;
+    constexpr float GIZMO_HIT_THRESHOLD_PX = 10.0f;
+}
+
+bool Application::GetSelectedObjectPosition(glm::vec3& outPosition) const {
+    const auto& objects = sceneManager.GetObjects();
+    int index = selectionState.selectedObjectIndex;
+    if (index < 0 || index >= static_cast<int>(objects.size()))
+        return false;
+    const auto& p = objects[index].position;
+    outPosition = glm::vec3(p[0], p[1], p[2]);
+    return true;
+}
+
+int Application::GizmoHover(float mouseX, float mouseY) {
+    if (gizmoState.isDragging)
+        return static_cast<int>(gizmoState.activeAxis);
+
+    glm::vec3 selectedPos;
+    if (!GetSelectedObjectPosition(selectedPos)) {
+        gizmoState.hoveredAxis = GizmoAxis::None;
+        return 0;
+    }
+
+    float aspect = (renderHeight > 0)
+        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
+    glm::mat4 v = camera.GetViewMatrix();
+    glm::mat4 p = camera.GetProjectionMatrix(aspect);
+
+    GizmoAxis hovered = GizmoMath::HitTestTranslateAxes(
+        glm::vec2(mouseX, mouseY), selectedPos, v, p,
+        static_cast<float>(renderWidth), static_cast<float>(renderHeight),
+        GIZMO_SCREEN_LENGTH_PX, GIZMO_HIT_THRESHOLD_PX);
+
+    gizmoState.hoveredAxis = hovered;
+    return static_cast<int>(hovered);
+}
+
+void Application::GizmoBeginDrag(float mouseX, float mouseY) {
+    glm::vec3 selectedPos;
+    if (!GetSelectedObjectPosition(selectedPos)) {
+        gizmoState.activeAxis = GizmoAxis::None;
+        gizmoState.isDragging = false;
+        return;
+    }
+
+    GizmoHover(mouseX, mouseY);
+    if (gizmoState.hoveredAxis == GizmoAxis::None) {
+        gizmoState.activeAxis = GizmoAxis::None;
+        gizmoState.isDragging = false;
+        return;
+    }
+
+    gizmoState.activeAxis = gizmoState.hoveredAxis;
+    gizmoState.isDragging = true;
+    gizmoState.dragStartMouse = glm::vec2(mouseX, mouseY);
+    gizmoState.dragStartObjectPosition = selectedPos;
+}
+
+void Application::GizmoDrag(float mouseX, float mouseY) {
+    if (!gizmoState.isDragging || gizmoState.activeAxis == GizmoAxis::None)
+        return;
+
+    auto& objects = sceneManager.GetObjects();
+    int index = selectionState.selectedObjectIndex;
+    if (index < 0 || index >= static_cast<int>(objects.size()))
+        return;
+
+    float aspect = (renderHeight > 0)
+        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
+    glm::mat4 v = camera.GetViewMatrix();
+    glm::mat4 p = camera.GetProjectionMatrix(aspect);
+
+    glm::vec3 newPosition;
+    bool ok = GizmoMath::ComputeTranslateDragPosition(
+        gizmoState.activeAxis, gizmoState.dragStartMouse, glm::vec2(mouseX, mouseY),
+        gizmoState.dragStartObjectPosition, v, p,
+        static_cast<float>(renderWidth), static_cast<float>(renderHeight),
+        GIZMO_SCREEN_LENGTH_PX, newPosition);
+    if (!ok)
+        return;
+
+    objects[index].position = { newPosition.x, newPosition.y, newPosition.z, 0.0f };
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+void Application::GizmoEndDrag() {
+    gizmoState.isDragging = false;
+    gizmoState.activeAxis = GizmoAxis::None;
+    gizmoState.hoveredAxis = GizmoAxis::None;
+}
+
+std::string Application::GetGizmoJson() {
+    std::ostringstream out;
+
+    glm::vec3 selectedPos;
+    if (!GetSelectedObjectPosition(selectedPos)) {
+        return "{\"visible\":false}";
+    }
+
+    float aspect = (renderHeight > 0)
+        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
+    glm::mat4 v = camera.GetViewMatrix();
+    glm::mat4 p = camera.GetProjectionMatrix(aspect);
+
+    glm::vec2 origin;
+    if (!GizmoMath::WorldToScreen(selectedPos, v, p,
+            static_cast<float>(renderWidth), static_cast<float>(renderHeight), origin)) {
+        return "{\"visible\":false}";
+    }
+
+    out << "{\"visible\":true"
+        << ",\"hovered\":" << static_cast<int>(gizmoState.hoveredAxis)
+        << ",\"active\":" << static_cast<int>(gizmoState.activeAxis)
+        << ",\"origin\":[" << origin.x << "," << origin.y << "]"
+        << ",\"axes\":[";
+
+    const GizmoAxis axes[3] = { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z };
+    bool first = true;
+    for (GizmoAxis axis : axes) {
+        GizmoMath::AxisScreenSegment seg = GizmoMath::BuildAxisSegment(
+            axis, selectedPos, v, p,
+            static_cast<float>(renderWidth), static_cast<float>(renderHeight),
+            GIZMO_SCREEN_LENGTH_PX);
+        if (!first) out << ",";
+        first = false;
+        out << "{\"axis\":" << static_cast<int>(axis)
+            << ",\"valid\":" << (seg.valid ? "true" : "false")
+            << ",\"end\":[" << seg.screenEnd.x << "," << seg.screenEnd.y << "]}";
+    }
+    out << "]}";
+    return out.str();
 }

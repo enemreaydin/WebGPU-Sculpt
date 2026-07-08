@@ -1,4 +1,12 @@
 #pragma once
+
+// Must be defined before any glm header so glm::perspective produces a
+// [0,1] clip-space depth (WebGPU/D3D convention) rather than OpenGL's [-1,1].
+// Defining it after the include (as Camera.cpp used to) is a silent no-op.
+#ifndef GLM_FORCE_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#endif
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include "core/Vec2.h"

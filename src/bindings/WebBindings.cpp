@@ -151,6 +151,35 @@ void sdf_camera_pan(float dx, float dy) { if (g_App) g_App->CameraPan(dx, dy); }
 EMSCRIPTEN_KEEPALIVE
 void sdf_camera_zoom(float delta) { if (g_App) g_App->CameraZoom(delta); }
 
+// --- Translate gizmo. Mouse coords are render (device) pixels, top-left origin.
+EMSCRIPTEN_KEEPALIVE
+int sdf_gizmo_hover(float mouseX, float mouseY) {
+    return g_App ? g_App->GizmoHover(mouseX, mouseY) : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_gizmo_begin_drag(float mouseX, float mouseY) {
+    if (g_App) g_App->GizmoBeginDrag(mouseX, mouseY);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_gizmo_drag(float mouseX, float mouseY) {
+    if (g_App) g_App->GizmoDrag(mouseX, mouseY);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_gizmo_end_drag() {
+    if (g_App) g_App->GizmoEndDrag();
+}
+
+// Screen-space gizmo geometry for the front-end overlay (JSON).
+EMSCRIPTEN_KEEPALIVE
+const char* sdf_gizmo_json() {
+    static std::string buffer;
+    buffer = g_App ? g_App->GetGizmoJson() : "{\"visible\":false}";
+    return buffer.c_str();
+}
+
 } // extern "C"
 
 #endif // __EMSCRIPTEN__
