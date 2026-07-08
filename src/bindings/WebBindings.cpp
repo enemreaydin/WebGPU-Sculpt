@@ -84,6 +84,27 @@ void sdf_camera_pan(float dx, float dy) { if (g_App) g_App->CameraPan(dx, dy); }
 EMSCRIPTEN_KEEPALIVE
 void sdf_camera_zoom(float delta) { if (g_App) g_App->CameraZoom(delta); }
 
+EMSCRIPTEN_KEEPALIVE
+int sdf_gizmo_hover(float mouseX, float mouseY) {
+    if (!g_App) return 0;
+    return g_App->GizmoHover(mouseX, mouseY);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_gizmo_begin_drag(float mouseX, float mouseY) {
+    if (g_App) g_App->GizmoBeginDrag(mouseX, mouseY);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_gizmo_drag(float mouseX, float mouseY) {
+    if (g_App) g_App->GizmoDrag(mouseX, mouseY);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void sdf_gizmo_end_drag() {
+    if (g_App) g_App->GizmoEndDrag();
+}
+
 } // extern "C"
 
 #endif // __EMSCRIPTEN__

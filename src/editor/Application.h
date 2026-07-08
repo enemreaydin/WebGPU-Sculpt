@@ -17,6 +17,7 @@
 #include "core/ViewportInput.h"
 #include "interaction/SelectionState.h"
 #include "serialization/SceneSerializer.h"
+#include "interaction/GizmoState.h"
 
 using namespace wgpu;
 
@@ -71,6 +72,13 @@ public:
     void CameraPan(float dx, float dy);
     void CameraZoom(float delta);
 
+    // Gizmo interaction
+    int  GizmoHover(float mouseX, float mouseY);
+    void GizmoBeginDrag(float mouseX, float mouseY);
+    void GizmoDrag(float mouseX, float mouseY);
+    void GizmoEndDrag();
+    bool IsGizmoDragging() const { return gizmoState.isDragging; }
+
 private:
     bool running = true;
     int width;
@@ -89,6 +97,7 @@ private:
     bool showGrid = true;
 
     SelectionState selectionState;
+    GizmoState gizmoState;
 
     // Scene / camera state
     GlobalsData globals{};
@@ -105,4 +114,7 @@ private:
     TextureView GetNextSurfaceTextureView();
 
     static const char* TypeName(int32_t type);
+
+    bool GetSelectedObjectPosition(glm::vec3& outPosition) const;
+    void UpdateSceneBufferAfterTransform();
 };

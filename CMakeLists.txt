@@ -64,6 +64,7 @@ set(ENGINE_SOURCES
     src/serialization/ExtensionLoader.cpp
     src/serialization/SceneSerializer.cpp
     src/utils/FileHelper.cpp
+    src/interaction/GizmoMath.cpp
 )
 
 # Web bindings: compiled into the WASM module only (guarded by __EMSCRIPTEN__).
@@ -91,6 +92,8 @@ set(PROJECT_HEADERS
     src/scene/SceneManager.h
     src/scene/SdfObjectFactory.h
     src/interaction/SelectionState.h
+    src/interaction/GizmoState.h
+    src/interaction/GizmoMath.h
     src/serialization/ExtensionLoader.h
     src/serialization/SceneSerializer.h
     src/utils/FileHelper.h

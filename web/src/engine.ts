@@ -179,4 +179,37 @@ export class Engine {
   cameraZoom(delta: number): void {
     this.call("sdf_camera_zoom", null, ["number"], [delta]);
   }
+
+  // ---- Gizmo --------------------------------------------------------------
+
+  gizmoHover(x: number, y: number): number {
+      return this.call(
+          "sdf_gizmo_hover",
+          "number",
+          ["number", "number"],
+          [x, y]
+      ) as number;
+  }
+
+  gizmoBeginDrag(x: number, y: number): void {
+      this.call(
+          "sdf_gizmo_begin_drag",
+          null,
+          ["number", "number"],
+          [x, y]
+      );
+  }
+
+  gizmoDrag(x: number, y: number): void {
+      this.call(
+          "sdf_gizmo_drag",
+          null,
+          ["number", "number"],
+          [x, y]
+      );
+  }
+
+  gizmoEndDrag(): void {
+      this.call("sdf_gizmo_end_drag", null, [], []);
+  }
 }

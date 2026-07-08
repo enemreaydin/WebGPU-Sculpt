@@ -4,6 +4,7 @@
 #include <iostream>
 #include <sstream>
 #include <filesystem>
+#include "interaction/GizmoMath.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -303,4 +304,142 @@ void Application::CameraPan(float dx, float dy) {
 
 void Application::CameraZoom(float delta) {
     viewportInput.scrollDelta += delta;
+}
+
+bool Application::GetSelectedObjectPosition(glm::vec3& outPosition) const
+{
+    const auto& objects = sceneManager.GetObjects();
+    int index = selectionState.selectedObjectIndex;
+
+    if (index < 0 || index >= static_cast<int>(objects.size()))
+        return false;
+
+    const auto& p = objects[index].position;
+    outPosition = glm::vec3(p[0], p[1], p[2]);
+
+    return true;
+}
+
+void Application::UpdateSceneBufferAfterTransform()
+{
+    // Þimdilik güvenli yol: mevcut serializer ile GPU buffer yenileniyor.
+    // Bir sonraki optimizasyon adýmýnda sadece queue.writeBuffer kullanacaðýz.
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+int Application::GizmoHover(float mouseX, float mouseY)
+{
+    if (gizmoState.isDragging)
+        return static_cast<int>(gizmoState.activeAxis);
+
+    glm::vec3 selectedPos;
+    if (!GetSelectedObjectPosition(selectedPos))
+    {
+        gizmoState.hoveredAxis = GizmoAxis::None;
+        return 0;
+    }
+
+    float aspect = (renderHeight > 0)
+        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight)
+        : 1.0f;
+
+    glm::mat4 currentView = camera.GetViewMatrix();
+    glm::mat4 currentProj = camera.GetProjectionMatrix(aspect);
+
+    constexpr float GIZMO_SCREEN_LENGTH_PX = 96.0f;
+    constexpr float HIT_THRESHOLD_PX = 10.0f;
+
+    GizmoAxis hovered = GizmoMath::HitTestTranslateAxes(
+        glm::vec2(mouseX, mouseY),
+        selectedPos,
+        currentView,
+        currentProj,
+        static_cast<float>(renderWidth),
+        static_cast<float>(renderHeight),
+        GIZMO_SCREEN_LENGTH_PX,
+        HIT_THRESHOLD_PX
+    );
+
+    gizmoState.hoveredAxis = hovered;
+    return static_cast<int>(hovered);
+}
+
+void Application::GizmoBeginDrag(float mouseX, float mouseY)
+{
+    glm::vec3 selectedPos;
+    if (!GetSelectedObjectPosition(selectedPos))
+    {
+        gizmoState.hoveredAxis = GizmoAxis::None;
+        gizmoState.activeAxis = GizmoAxis::None;
+        gizmoState.isDragging = false;
+        return;
+    }
+
+    GizmoHover(mouseX, mouseY);
+
+    if (gizmoState.hoveredAxis == GizmoAxis::None)
+    {
+        gizmoState.activeAxis = GizmoAxis::None;
+        gizmoState.isDragging = false;
+        return;
+    }
+
+    gizmoState.activeAxis = gizmoState.hoveredAxis;
+    gizmoState.isDragging = true;
+    gizmoState.dragStartMouse = glm::vec2(mouseX, mouseY);
+    gizmoState.dragStartObjectPosition = selectedPos;
+}
+
+void Application::GizmoDrag(float mouseX, float mouseY)
+{
+    if (!gizmoState.isDragging || gizmoState.activeAxis == GizmoAxis::None)
+        return;
+
+    auto& objects = sceneManager.GetObjects();
+    int index = selectionState.selectedObjectIndex;
+
+    if (index < 0 || index >= static_cast<int>(objects.size()))
+        return;
+
+    float aspect = (renderHeight > 0)
+        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight)
+        : 1.0f;
+
+    glm::mat4 currentView = camera.GetViewMatrix();
+    glm::mat4 currentProj = camera.GetProjectionMatrix(aspect);
+
+    constexpr float GIZMO_SCREEN_LENGTH_PX = 96.0f;
+
+    glm::vec3 newPosition;
+    bool ok = GizmoMath::ComputeTranslateDragPosition(
+        gizmoState.activeAxis,
+        gizmoState.dragStartMouse,
+        glm::vec2(mouseX, mouseY),
+        gizmoState.dragStartObjectPosition,
+        currentView,
+        currentProj,
+        static_cast<float>(renderWidth),
+        static_cast<float>(renderHeight),
+        GIZMO_SCREEN_LENGTH_PX,
+        newPosition
+    );
+
+    if (!ok)
+        return;
+
+    objects[index].position = {
+        newPosition.x,
+        newPosition.y,
+        newPosition.z,
+        0.0f
+    };
+
+    UpdateSceneBufferAfterTransform();
+}
+
+void Application::GizmoEndDrag()
+{
+    gizmoState.isDragging = false;
+    gizmoState.activeAxis = GizmoAxis::None;
+    gizmoState.hoveredAxis = GizmoAxis::None;
 }
