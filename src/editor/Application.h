@@ -89,6 +89,11 @@ public:
     void CameraPan(float dx, float dy);
     void CameraZoom(float delta);
 
+    // Render settings. `id` is a RenderSetting (see Settings.h); ints are passed
+    // as float and rounded. Writes appSettings; SyncRenderGlobals mirrors it into
+    // the GPU uniform each frame.
+    void SetRenderSetting(int id, float value);
+
     // Translate gizmo. Mouse coords are in render (device) pixels, origin
     // top-left. GizmoHover returns the hit GizmoAxis (0 = none).
     int  GizmoHover(float mouseX, float mouseY);
@@ -138,6 +143,7 @@ private:
     void InitializeRenderer();
     void UpdateCamera();
     void UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p);  // fill gizmo* in globals
+    void SyncRenderGlobals();  // copy appSettings render values into globals each frame
     void RebuildEditorRecords();   // recreate editor records after a scene load
     bool GetSelectedObjectPosition(glm::vec3& outPosition) const;
     TextureView GetNextSurfaceTextureView();

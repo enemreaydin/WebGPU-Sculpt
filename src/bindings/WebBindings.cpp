@@ -151,6 +151,13 @@ void sdf_camera_pan(float dx, float dy) { if (g_App) g_App->CameraPan(dx, dy); }
 EMSCRIPTEN_KEEPALIVE
 void sdf_camera_zoom(float delta) { if (g_App) g_App->CameraZoom(delta); }
 
+// Set one render setting by RenderSetting id (see Settings.h). Ints are passed
+// as float. Read the current values back from sdf_get_scene_json().render.
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_render_setting(int id, float value) {
+    if (g_App) g_App->SetRenderSetting(id, value);
+}
+
 // --- Translate gizmo. Mouse coords are render (device) pixels, top-left origin.
 EMSCRIPTEN_KEEPALIVE
 int sdf_gizmo_hover(float mouseX, float mouseY) {

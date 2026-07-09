@@ -6,6 +6,7 @@
 #include <iostream>
 #include <sstream>
 #include <filesystem>
+#include <algorithm>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -63,6 +64,9 @@ void Application::MainLoop() {
     // so the shader-drawn gizmo lands in the identical frame — zero lag, even
     // while orbiting/panning.
     UpdateGizmoGlobals(view, proj);
+
+    // Push the user's render settings into the GPU uniform.
+    SyncRenderGlobals();
 
     if (renderer.globalsBuffer) {
         graphics.queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
@@ -571,6 +575,29 @@ std::string Application::GetSceneJson() const {
     }
     out << "]}";
 
+    // Render settings mirror (so the front-end panel reflects engine state).
+    const Settings& rs = appSettings;
+    out << ",\"render\":{"
+        << "\"lightDirX\":" << rs.lightDirection[0]
+        << ",\"lightDirY\":" << rs.lightDirection[1]
+        << ",\"lightDirZ\":" << rs.lightDirection[2]
+        << ",\"lightColR\":" << rs.lightColor[0]
+        << ",\"lightColG\":" << rs.lightColor[1]
+        << ",\"lightColB\":" << rs.lightColor[2]
+        << ",\"lightIntensity\":" << rs.lightIntensity
+        << ",\"ambientStrength\":" << rs.ambientStrength
+        << ",\"shadowSharpness\":" << rs.shadowSharpness
+        << ",\"specularGloss\":" << rs.specularGloss
+        << ",\"specularStrength\":" << rs.specularStrength
+        << ",\"aoStrength\":" << rs.aoStrength
+        << ",\"maxSteps\":" << rs.maxSteps
+        << ",\"hitEpsilon\":" << rs.hitEpsilon
+        << ",\"maxDistance\":" << rs.maxDistance
+        << ",\"shadowSteps\":" << rs.shadowSteps
+        << ",\"shadowDistance\":" << rs.shadowDistance
+        << ",\"aoSamples\":" << rs.aoSamples
+        << "}";
+
     out << "}";
     return out.str();
 }
@@ -689,4 +716,58 @@ void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
     globals.gizmoAxisX[0] = ex.x; globals.gizmoAxisX[1] = ex.y; globals.gizmoAxisX[2] = ex.z; globals.gizmoAxisX[3] = 0.0f;
     globals.gizmoAxisY[0] = ey.x; globals.gizmoAxisY[1] = ey.y; globals.gizmoAxisY[2] = ey.z; globals.gizmoAxisY[3] = 0.0f;
     globals.gizmoAxisZ[0] = ez.x; globals.gizmoAxisZ[1] = ez.y; globals.gizmoAxisZ[2] = ez.z; globals.gizmoAxisZ[3] = 0.0f;
+}
+
+// Mirror the user's render settings (appSettings) into the GPU uniform. Cheap;
+// runs every frame from MainLoop, same pattern as the camera/gizmo copies.
+void Application::SyncRenderGlobals() {
+    const Settings& s = appSettings;
+    globals.lightDirection[0] = s.lightDirection[0];
+    globals.lightDirection[1] = s.lightDirection[1];
+    globals.lightDirection[2] = s.lightDirection[2];
+    globals.lightColor[0] = s.lightColor[0];
+    globals.lightColor[1] = s.lightColor[1];
+    globals.lightColor[2] = s.lightColor[2];
+    // Ambient is exposed to the user as a single grayscale strength.
+    globals.ambientColor[0] = s.ambientStrength;
+    globals.ambientColor[1] = s.ambientStrength;
+    globals.ambientColor[2] = s.ambientStrength;
+    globals.lightIntensity    = s.lightIntensity;
+    globals.specularShininess = s.specularGloss;
+    globals.specularStrength  = s.specularStrength;
+    globals.shadowSoftness    = s.shadowSharpness;
+    globals.aoStrength        = s.aoStrength;
+    globals.maxSteps          = s.maxSteps;
+    globals.hitEpsilon        = s.hitEpsilon;
+    globals.maxDistance       = s.maxDistance;
+    globals.shadowMaxSteps    = s.shadowSteps;
+    globals.shadowMaxDistance = s.shadowDistance;
+    globals.aoSamples         = s.aoSamples;
+}
+
+// Update one render setting by RenderSetting id (see Settings.h). Ints arrive as
+// float and are rounded. Values are assumed pre-clamped by the UI, but the int
+// counts are floored to sane minimums here as a safety net.
+void Application::SetRenderSetting(int id, float value) {
+    switch (static_cast<RenderSetting>(id)) {
+    case RenderSetting::LightDirX:        appSettings.lightDirection[0] = value; break;
+    case RenderSetting::LightDirY:        appSettings.lightDirection[1] = value; break;
+    case RenderSetting::LightDirZ:        appSettings.lightDirection[2] = value; break;
+    case RenderSetting::LightColorR:      appSettings.lightColor[0] = value; break;
+    case RenderSetting::LightColorG:      appSettings.lightColor[1] = value; break;
+    case RenderSetting::LightColorB:      appSettings.lightColor[2] = value; break;
+    case RenderSetting::LightIntensity:   appSettings.lightIntensity = value; break;
+    case RenderSetting::AmbientStrength:  appSettings.ambientStrength = value; break;
+    case RenderSetting::ShadowSharpness:  appSettings.shadowSharpness = value; break;
+    case RenderSetting::SpecularGloss:    appSettings.specularGloss = value; break;
+    case RenderSetting::SpecularStrength: appSettings.specularStrength = value; break;
+    case RenderSetting::AoStrength:       appSettings.aoStrength = value; break;
+    case RenderSetting::MaxSteps:         appSettings.maxSteps = std::max(1, static_cast<int>(value + 0.5f)); break;
+    case RenderSetting::HitEpsilon:       appSettings.hitEpsilon = value; break;
+    case RenderSetting::MaxDistance:      appSettings.maxDistance = value; break;
+    case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::max(1, static_cast<int>(value + 0.5f)); break;
+    case RenderSetting::ShadowDistance:   appSettings.shadowDistance = value; break;
+    case RenderSetting::AoSamples:        appSettings.aoSamples = std::max(2, static_cast<int>(value + 0.5f)); break;
+    default: break;
+    }
 }

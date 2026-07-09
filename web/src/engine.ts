@@ -65,6 +65,44 @@ export enum CsgOp {
   Intersect = 3,
 }
 
+// Render-setting ids for Engine.setRenderSetting — mirror RenderSetting in
+// src/editor/Settings.h. Vector components are individual ids.
+export enum RenderSetting {
+  LightDirX = 0, LightDirY = 1, LightDirZ = 2,
+  LightColorR = 3, LightColorG = 4, LightColorB = 5,
+  LightIntensity = 6,
+  AmbientStrength = 7,
+  ShadowSharpness = 8,
+  SpecularGloss = 9,
+  SpecularStrength = 10,
+  AoStrength = 11,
+  MaxSteps = 12,
+  HitEpsilon = 13,
+  MaxDistance = 14,
+  ShadowSteps = 15,
+  ShadowDistance = 16,
+  AoSamples = 17,
+}
+
+// Current render settings, mirrored from the engine (Settings). Keys match the
+// "render" object in the scene JSON.
+export interface RenderSettings {
+  lightDirX: number; lightDirY: number; lightDirZ: number;
+  lightColR: number; lightColG: number; lightColB: number;
+  lightIntensity: number;
+  ambientStrength: number;
+  shadowSharpness: number;
+  specularGloss: number;
+  specularStrength: number;
+  aoStrength: number;
+  maxSteps: number;
+  hitEpsilon: number;
+  maxDistance: number;
+  shadowSteps: number;
+  shadowDistance: number;
+  aoSamples: number;
+}
+
 export interface SceneState {
   selectedIndex: number;
   showGrid: boolean;
@@ -77,6 +115,9 @@ export interface SceneState {
   // Present once the engine serializes its CSG hierarchy. Optional so the UI
   // still works against an engine build that predates the tree section.
   tree?: CsgTreeJson;
+  // Current render settings (light/material/quality). Optional so the UI still
+  // works against an engine build that predates them.
+  render?: RenderSettings;
 }
 
 // Minimal shape of the Emscripten module we rely on.
@@ -315,6 +356,13 @@ export class Engine {
 
   cameraZoom(delta: number): void {
     this.call("sdf_camera_zoom", null, ["number"], [delta]);
+  }
+
+  // ---- Render settings ----------------------------------------------------
+  // Set one render setting by RenderSetting id. Read current values back from
+  // getScene().render.
+  setRenderSetting(id: RenderSetting, value: number): void {
+    this.call("sdf_set_render_setting", null, ["number", "number"], [id, value]);
   }
 
   // ---- Translate gizmo ----------------------------------------------------

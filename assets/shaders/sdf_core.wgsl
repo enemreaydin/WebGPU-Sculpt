@@ -143,13 +143,13 @@ fn calcNormal(p: vec3f) -> vec3f
 fn calcSoftShadow(origin: vec3f, lightDir: vec3f) -> f32
 {
     let tmin = 0.03;
-    let tmax = 30.0;
-    let k = 16.0;
+    let tmax = globals.shadowMaxDistance;
+    let k = globals.shadowSoftness;
     let eps = 0.001;
 
     var res = 1.0;
     var t = tmin;
-    for (var i = 0; i < 64; i++)
+    for (var i = 0; i < globals.shadowMaxSteps; i++)
     {
         let h = distanceCalc(origin + lightDir * t);
         if (h < eps)
@@ -170,14 +170,15 @@ fn calcAO(hitPos: vec3f, n: vec3f) -> f32
 {
     var occ = 0.0;
     var sca = 1.0;
-    for (var i = 0; i < 5; i++)
+    let span = f32(max(globals.aoSamples - 1, 1));
+    for (var i = 0; i < globals.aoSamples; i++)
     {
-        let h = 0.01 + 0.12 * f32(i) / 4.0;
+        let h = 0.01 + 0.12 * f32(i) / span;
         let d = distanceCalc(hitPos + n * h);
         occ += (h - d) * sca;
         sca *= 0.95;
     }
-    return clamp(1.0 - 3.0 * occ, 0.0, 1.0);
+    return clamp(1.0 - globals.aoStrength * occ, 0.0, 1.0);
 }
 
 

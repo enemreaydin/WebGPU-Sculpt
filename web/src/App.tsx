@@ -1,5 +1,5 @@
 import React from "react";
-import { Engine, PrimitiveType, CsgOp, ShapeParam } from "./engine";
+import { Engine, PrimitiveType, CsgOp, ShapeParam, RenderSetting } from "./engine";
 
 // UI type-name <-> engine PrimitiveType enum.
 const TYPE_ENUM: Record<string, PrimitiveType> = {
@@ -195,6 +195,12 @@ export default class App extends React.Component<any, any> {
     // Engine's CSG hierarchy from the last getScene(); null before first read or
     // against an engine build that predates the tree section (flat fallback).
     tree: null as any,
+    // Engine render settings mirror (light/material/quality), from getScene().render.
+    render: null as any,
+    // Whether the advanced (quality/performance) render settings are shown.
+    advancedRender: false,
+    // Which render-setting rows have their explanation expanded (keyed by setting key).
+    renderHelp: {} as Record<string, boolean>,
     renaming: null,
     renameText: "",
     // Engine-owned object list (rebuilt from engine.getScene() after each mutation).
@@ -530,7 +536,7 @@ export default class App extends React.Component<any, any> {
         .map(keyForNodeId)
         .filter((k: string | null): k is string => !!k);
       const primary = keyForNodeId(snap.primaryNodeId);
-      const next: any = { objects: snap.objects, tree, meta, grid: !!snap.showGrid, counts };
+      const next: any = { objects: snap.objects, tree, meta, grid: !!snap.showGrid, counts, render: snap.render || s.render || null };
       next.selSet = selSet.length ? selSet : ["scene"];
       next.sel = primary || next.selSet[0];
       return next;
@@ -603,6 +609,89 @@ export default class App extends React.Component<any, any> {
     const o = this.state.objects.find((x: any) => x.index === pickIndex);
     if (!o) return;
     this.selectKey(String(o.id), additive);
+  }
+
+  // ---- Render settings panel ----------------------------------------------
+  // Config for the render panel. `id` = engine RenderSetting, `key` matches the
+  // scene JSON `render` object, `help` is the standard-user explanation, min/max
+  // are the clamp bounds. General ("look") settings are cheap/free; the advanced
+  // set trades speed for quality.
+  RENDER_SETTINGS = [
+    { id: RenderSetting.LightIntensity, key: "lightIntensity", label: "Light Intensity", min: 0, max: 3, step: 0.05,
+      help: "Overall brightness of the main light. Higher = brighter direct light. No performance cost." },
+    { id: RenderSetting.AmbientStrength, key: "ambientStrength", label: "Ambient Light", min: 0, max: 1, step: 0.01,
+      help: "Base fill light present everywhere, even in shadow. Higher = flatter and brighter; lower = darker, moodier shadows. No performance cost." },
+    { id: RenderSetting.ShadowSharpness, key: "shadowSharpness", label: "Shadow Sharpness", min: 1, max: 64, step: 1,
+      help: "How crisp shadow edges are. Higher = hard, sharp shadows; lower = soft, blurry penumbra. No performance cost." },
+    { id: RenderSetting.SpecularGloss, key: "specularGloss", label: "Glossiness", min: 1, max: 256, step: 1,
+      help: "Size of the shiny highlight. Higher = small, tight, polished-looking; lower = broad, matte. No performance cost." },
+    { id: RenderSetting.SpecularStrength, key: "specularStrength", label: "Highlight Strength", min: 0, max: 1, step: 0.02,
+      help: "Brightness of the specular highlight. 0 = fully matte, no shine. No performance cost." },
+    { id: RenderSetting.AoStrength, key: "aoStrength", label: "Ambient Occlusion", min: 0, max: 5, step: 0.1,
+      help: "Soft darkening in creases and where objects meet, which adds depth. Higher = darker contact shadows. Tiny performance cost." },
+    { id: RenderSetting.LightColorR, key: "lightColR", label: "Light Color R", min: 0, max: 1, step: 0.02, help: "Red amount of the main light's color." },
+    { id: RenderSetting.LightColorG, key: "lightColG", label: "Light Color G", min: 0, max: 1, step: 0.02, help: "Green amount of the main light's color." },
+    { id: RenderSetting.LightColorB, key: "lightColB", label: "Light Color B", min: 0, max: 1, step: 0.02, help: "Blue amount of the main light's color." },
+    { id: RenderSetting.LightDirX, key: "lightDirX", label: "Light Dir X", min: -1, max: 1, step: 0.05, help: "Horizontal direction the light shines from (left / right)." },
+    { id: RenderSetting.LightDirY, key: "lightDirY", label: "Light Dir Y", min: -1, max: 1, step: 0.05, help: "Vertical direction of the light. Higher = more from above (overhead)." },
+    { id: RenderSetting.LightDirZ, key: "lightDirZ", label: "Light Dir Z", min: -1, max: 1, step: 0.05, help: "Front / back direction the light shines from." },
+  ];
+
+  RENDER_ADVANCED = [
+    { id: RenderSetting.MaxSteps, key: "maxSteps", label: "Max Ray Steps", min: 16, max: 512, step: 1, int: true,
+      help: "How many steps each view ray may take. This is the MAIN performance dial: higher renders distant and thin shapes correctly but costs speed; too low and object edges dissolve or vanish." },
+    { id: RenderSetting.HitEpsilon, key: "hitEpsilon", label: "Surface Threshold", min: 0.0001, max: 0.01, step: 0.0001,
+      help: "How close a ray must get to count as hitting a surface. Smaller = sharper silhouettes and finer detail, but needs more Max Ray Steps or surfaces develop holes. Lower value = higher quality, higher cost." },
+    { id: RenderSetting.MaxDistance, key: "maxDistance", label: "View Distance", min: 10, max: 200, step: 1,
+      help: "How far view rays travel before giving up. Higher lets you see distant objects; too high just wastes steps on empty space." },
+    { id: RenderSetting.ShadowSteps, key: "shadowSteps", label: "Shadow Steps", min: 8, max: 128, step: 1, int: true,
+      help: "Step budget for shadow rays. Higher = more accurate soft shadows, at a performance cost." },
+    { id: RenderSetting.ShadowDistance, key: "shadowDistance", label: "Shadow Distance", min: 5, max: 100, step: 1,
+      help: "How far shadow rays search for blockers. Higher catches shadows from distant objects; costs performance." },
+    { id: RenderSetting.AoSamples, key: "aoSamples", label: "AO Samples", min: 2, max: 16, step: 1, int: true,
+      help: "Number of samples used for ambient occlusion. Higher = smoother contact shadows, lower performance." },
+  ];
+
+  // Apply a render setting: clamp to the config bounds, push to the engine, and
+  // optimistically mirror into state (no full refresh — the engine just stores it).
+  rsSet(cfg: any, value: number) {
+    if (isNaN(value)) return;
+    let v = Math.max(cfg.min, Math.min(cfg.max, value));
+    if (cfg.int) v = Math.round(v);
+    this.engine?.setRenderSetting(cfg.id, v);
+    this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false }));
+  }
+
+  rsToggleHelp(key: string) {
+    this.setState((s: any) => ({ renderHelp: { ...s.renderHelp, [key]: !s.renderHelp[key] } }));
+  }
+
+  // One render-setting row: an expandable label (click to show the explanation),
+  // a slider, and a number field. The number field is uncontrolled (keyed on the
+  // value) so free typing works; it commits on blur / Enter.
+  rsRow(cfg: any) {
+    const r = this.state.render || {};
+    const val = typeof r[cfg.key] === "number" ? r[cfg.key] : cfg.min;
+    const open = !!this.state.renderHelp[cfg.key];
+    const disp = cfg.int ? String(Math.round(val)) : String(Math.round(val * 10000) / 10000);
+    return (
+      <div key={cfg.key} style={css("display:flex;flex-direction:column;gap:3px")}>
+        <div style={css("display:flex;align-items:center;gap:6px")}>
+          <Hv onClick={() => this.rsToggleHelp(cfg.key)} s="flex:0 0 116px;display:flex;align-items:center;gap:4px;font-size:11px;color:#a0a0a0;cursor:default;overflow:hidden" h="color:#dedede">
+            <Ico d={`<svg width="9" height="9" viewBox="0 0 16 16"><path d="${open ? this.IC.caretD : this.IC.caretR}" fill="none" stroke="#6f6f6f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />
+            <span style={css("white-space:nowrap;overflow:hidden;text-overflow:ellipsis")}>{cfg.label}</span>
+          </Hv>
+          <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={val}
+            onChange={(e: any) => this.rsSet(cfg, Number(e.target.value))}
+            style={css("flex:1;min-width:0;height:4px;accent-color:#e8912d;cursor:pointer")} />
+          <input type="number" min={cfg.min} max={cfg.max} step={cfg.step} key={cfg.key + ":" + val} defaultValue={disp}
+            onBlur={(e: any) => this.rsSet(cfg, Number(e.target.value))}
+            onKeyDown={(e: any) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+            style={css("flex:0 0 56px;width:56px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 5px;box-sizing:border-box")} />
+        </div>
+        {open && <span style={css("font-size:10px;line-height:1.5;color:#8a8a8a;padding:0 6px 3px 15px")}>{cfg.help}</span>}
+      </div>
+    );
   }
 
   // Default UI meta for a CSG operation (group) node the UI hasn't named yet.
@@ -2031,21 +2120,32 @@ export default class App extends React.Component<any, any> {
                 )}
 
                 {V.isRenTab && (
-                  <div style={css("display:flex;flex-direction:column;gap:8px;padding:12px 10px;opacity:0.55")}>
-                    <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Output</span>
-                    <div style={css("display:flex;align-items:center;gap:8px")}>
-                      <span style={css("flex:0 0 64px;font-size:11px;color:#a0a0a0")}>Resolution</span>
-                      <div style={css("flex:1;height:22px;display:flex;align-items:center;justify-content:flex-end;background:#151515;border:1px solid #303030;border-radius:2px;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>1920</div>
-                      <div style={css("flex:1;height:22px;display:flex;align-items:center;justify-content:flex-end;background:#151515;border:1px solid #303030;border-radius:2px;padding:0 8px;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>1080</div>
-                    </div>
-                    <div style={css("display:flex;align-items:center;gap:8px")}>
-                      <span style={css("flex:0 0 64px;font-size:11px;color:#a0a0a0")}>Samples</span>
-                      <div style={css("flex:1;height:22px;position:relative;background:#151515;border:1px solid #303030;border-radius:2px;overflow:hidden")}>
-                        <div style={css("position:absolute;left:0;top:0;bottom:0;width:25%;background:rgba(232,145,45,0.25)")} />
-                        <span style={css("position:absolute;right:8px;top:0;bottom:0;display:flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>64</span>
-                      </div>
-                    </div>
-                    <span style={css("font-size:11px;color:#616161;text-align:center;padding:12px 0 0")}>Render export — planned</span>
+                  <div style={css("display:flex;flex-direction:column;gap:10px;padding:10px")}>
+                    {!this.state.render ? (
+                      <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Loading render settings…</span>
+                    ) : (
+                      <>
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Lighting &amp; Look</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Click a setting's name for a short explanation. These affect the look and cost little or no performance.</span>
+                        <div style={css("display:flex;flex-direction:column;gap:8px")}>
+                          {this.RENDER_SETTINGS.map((cfg: any) => this.rsRow(cfg))}
+                        </div>
+
+                        <Hv onClick={() => this.setState((s: any) => ({ advancedRender: !s.advancedRender }))} s="display:flex;align-items:center;gap:7px;margin-top:2px;padding:7px 4px;border-top:1px solid #2a2a2a;cursor:default;font-size:11px;color:#a0a0a0" h="color:#dedede">
+                          <span style={css(`width:13px;height:13px;flex:0 0 auto;border:1px solid ${this.state.advancedRender ? "#e8912d" : "#454545"};border-radius:2px;background:${this.state.advancedRender ? "#e8912d" : "transparent"};display:flex;align-items:center;justify-content:center`)}>
+                            {this.state.advancedRender && <Ico d={`<svg width="9" height="9" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7.5" fill="none" stroke="#151515" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />}
+                          </span>
+                          <span>Advanced Settings (Quality / Performance)</span>
+                        </Hv>
+
+                        {this.state.advancedRender && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px")}>
+                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>These trade rendering speed for quality/range. Lower them if the viewport feels slow on your machine; raise them for crisper, more accurate images.</span>
+                            {this.RENDER_ADVANCED.map((cfg: any) => this.rsRow(cfg))}
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>

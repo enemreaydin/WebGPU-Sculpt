@@ -14,6 +14,21 @@ struct Globals {
     gizmoHovered : i32,
     gizmoActive : i32,
     gizmoPad : i32,
+    lightDirection : vec4f,
+    lightColor : vec4f,
+    ambientColor : vec4f,
+    lightIntensity : f32,
+    specularShininess : f32,
+    specularStrength : f32,
+    shadowSoftness : f32,
+    aoStrength : f32,
+    maxSteps : i32,
+    hitEpsilon : f32,
+    maxDistance : f32,
+    shadowMaxSteps : i32,
+    shadowMaxDistance : f32,
+    aoSamples : i32,
+    qualityPad0 : i32,
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;
@@ -60,10 +75,10 @@ fn toneMapAndEncode(linearColor : vec3f) -> vec3f {
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
-    let lightDirection = normalize(vec3f(0.5, 0.8, 0.6));
-    let lightColor = vec3f(1.0);
-    let intensity = 1.0;
-    let ambient = vec3f(0.12);
+    let lightDirection = normalize(globals.lightDirection.xyz);
+    let lightColor = globals.lightColor.xyz;
+    let intensity = globals.lightIntensity;
+    let ambient = globals.ambientColor.xyz;
 
     let ratio = globals.resolution.x / globals.resolution.y;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
@@ -82,16 +97,16 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var t = 0.0;
     var hit = false;
 
-    for (var i = 0; i < 100; i++) {
+    for (var i = 0; i < globals.maxSteps; i++) {
         let p = ro + rd * t;
         let nearestObjectDistance = distanceCalc(p);
 
-        if (nearestObjectDistance < 0.001) {
+        if (nearestObjectDistance < globals.hitEpsilon) {
             hit = true;
             break;
         }
         t += nearestObjectDistance;
-        if (t > 50.0) { break; }
+        if (t > globals.maxDistance) { break; }
     }
 
     var col : vec3f;
@@ -104,8 +119,8 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let diff = max(dot(n, lightDirection), 0.0);
         let v = normalize(ro - hitPos);
         let h = normalize(lightDirection + v);
-        let shininess = 48.0;
-        let specularStrength = 0.4;
+        let shininess = globals.specularShininess;
+        let specularStrength = globals.specularStrength;
         let spec = pow(max(dot(n, h), 0.0), shininess);
         let shadow = calcSoftShadow(hitPos, lightDirection);
         let ao = calcAO(hitPos, n);
