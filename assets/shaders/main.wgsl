@@ -45,7 +45,16 @@ struct FragmentOutput
 }
 
 fn toneMapAndEncode(linearColor : vec3f) -> vec3f {
-    let mapped = linearColor / (linearColor + vec3f(1.0));
+    let a = 2.51;
+    let b = 0.03;
+    let c = 2.43;
+    let d = 0.59;
+    let e = 0.14;
+    let mapped = clamp(
+        (linearColor * (a * linearColor + b)) / (linearColor * (c * linearColor + d) + e),
+        vec3f(0.0),
+        vec3f(1.0)
+    );
     return pow(mapped, vec3f(1.0 / 2.2));
 }
 
@@ -98,7 +107,11 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let shininess = 48.0;
         let specularStrength = 0.4;
         let spec = pow(max(dot(n, h), 0.0), shininess);
-        col = result.color * (ambient + lightColor * intensity * diff) + lightColor * intensity * spec * specularStrength;
+        let shadow = calcSoftShadow(hitPos, lightDirection);
+        let ao = calcAO(hitPos, n);
+        let diffuseTerm = result.color * lightColor * intensity * diff;
+        let specularTerm = lightColor * intensity * spec * specularStrength;
+        col = result.color * ambient * ao + shadow * (diffuseTerm + specularTerm);
         id = result.object_id;
     } else if (globals.showGrid == 1) {
         col = gridBackground(ro, rd);

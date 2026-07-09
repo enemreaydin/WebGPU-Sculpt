@@ -140,6 +140,46 @@ fn calcNormal(p: vec3f) -> vec3f
     return normalize(sumVectorDists);
 }
 
+fn calcSoftShadow(origin: vec3f, lightDir: vec3f) -> f32
+{
+    let tmin = 0.03;
+    let tmax = 30.0;
+    let k = 16.0;
+    let eps = 0.001;
+
+    var res = 1.0;
+    var t = tmin;
+    for (var i = 0; i < 64; i++)
+    {
+        let h = distanceCalc(origin + lightDir * t);
+        if (h < eps)
+        {
+            return 0.0;
+        }
+        res = min(res, k * h / t);
+        t += h;
+        if (t > tmax)
+        {
+            break;
+        }
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+fn calcAO(hitPos: vec3f, n: vec3f) -> f32
+{
+    var occ = 0.0;
+    var sca = 1.0;
+    for (var i = 0; i < 5; i++)
+    {
+        let h = 0.01 + 0.12 * f32(i) / 4.0;
+        let d = distanceCalc(hitPos + n * h);
+        occ += (h - d) * sca;
+        sca *= 0.95;
+    }
+    return clamp(1.0 - 3.0 * occ, 0.0, 1.0);
+}
+
 
 
 fn evaluateScene(p : vec3f) -> SceneResult
