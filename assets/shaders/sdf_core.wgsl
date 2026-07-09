@@ -126,6 +126,21 @@ fn distanceCalc(p : vec3f) -> f32
     return resultDistance;
 }
 
+fn calcNormal(p: vec3f) -> vec3f
+{
+    let h = 0.0005;
+    let k0 = vec3f(1.0, -1.0, -1.0);
+    let k1 = vec3f(-1.0, -1.0, 1.0);
+    let k2 = vec3f(-1.0, 1.0, -1.0);
+    let k3 = vec3f(1.0, 1.0, 1.0);
+    let sumVectorDists = k0 * distanceCalc(p + k0*h)
+                       + k1 * distanceCalc(p + k1*h)
+                       + k2 * distanceCalc(p + k2*h)
+                       + k3 * distanceCalc(p + k3*h);
+    return normalize(sumVectorDists);
+}
+
+
 
 fn evaluateScene(p : vec3f) -> SceneResult
 {
