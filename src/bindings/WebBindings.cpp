@@ -172,12 +172,12 @@ void sdf_gizmo_end_drag() {
     if (g_App) g_App->GizmoEndDrag();
 }
 
-// Screen-space gizmo geometry for the front-end overlay (JSON).
+// Enable/disable drawing the translate gizmo (the front-end sets this from its
+// active tool). The gizmo itself is rendered by the SDF shader, so there is no
+// screen-space geometry to hand back — it stays in lockstep with the scene.
 EMSCRIPTEN_KEEPALIVE
-const char* sdf_gizmo_json() {
-    static std::string buffer;
-    buffer = g_App ? g_App->GetGizmoJson() : "{\"visible\":false}";
-    return buffer.c_str();
+void sdf_set_gizmo_enabled(int enabled) {
+    if (g_App) g_App->SetGizmoEnabled(enabled != 0);
 }
 
 } // extern "C"

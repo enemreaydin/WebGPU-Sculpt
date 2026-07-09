@@ -59,6 +59,11 @@ void Application::MainLoop() {
     view = camera.GetViewMatrix();
     proj = camera.GetProjectionMatrix(aspect);
 
+    // Refresh the gizmo geometry from the *same* camera the SDF is about to use,
+    // so the shader-drawn gizmo lands in the identical frame — zero lag, even
+    // while orbiting/panning.
+    UpdateGizmoGlobals(view, proj);
+
     if (renderer.globalsBuffer) {
         graphics.queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     }
@@ -437,15 +442,15 @@ int Application::ApplyOperation(int opType) {
         default: return -1;
     }
 
-    // Build indices, primary first (= Subtract base), then the rest in order.
+    // Order children by SELECTION order: the first-selected node is the base
+    // (it becomes firstChild in the RPN fold), and for Subtract the remaining
+    // selected nodes are carved out of it. So "click A, then B, Subtract" gives
+    // A − B (the second selection is removed from the first). selectedNodeIds is
+    // maintained in click order by SelectionState::Add, so we use it directly
+    // rather than putting the primary/last-clicked node first.
     const CsgTree& tree = sceneManager.GetCsgTree();
     std::vector<int32_t> indices;
-    if (selectionState.primaryNodeId != -1) {
-        int32_t p = tree.IndexForNodeId(selectionState.primaryNodeId);
-        if (p != -1) indices.push_back(p);
-    }
     for (int32_t nid : selectionState.selectedNodeIds) {
-        if (nid == selectionState.primaryNodeId) continue;
         int32_t idx = tree.IndexForNodeId(nid);
         if (idx != -1) indices.push_back(idx);
     }
@@ -525,8 +530,10 @@ std::string Application::GetSceneJson() const {
     }
     out << "]";
 
-    // Engine-owned selection (nodeIds). primaryNodeId is the active node / the
-    // base for Subtract; -1 when nothing is selected.
+    // Engine-owned selection (nodeIds). primaryNodeId is the active node (the
+    // last-clicked one, used for the 3D highlight); -1 when nothing is selected.
+    // The Subtract base is the FIRST selected node, not the primary (see
+    // ApplyOperation).
     out << ",\"primaryNodeId\":" << selectionState.primaryNodeId
         << ",\"selectedNodeIds\":[";
     for (size_t i = 0; i < selectionState.selectedNodeIds.size(); ++i) {
@@ -591,12 +598,10 @@ void Application::CameraZoom(float delta) {
 // ---------------------------------------------------------------------------
 // Translate gizmo
 // ---------------------------------------------------------------------------
-
-// Screen-length of the gizmo axes (in render pixels) and the pick tolerance.
-namespace {
-    constexpr float GIZMO_SCREEN_LENGTH_PX = 96.0f;
-    constexpr float GIZMO_HIT_THRESHOLD_PX = 10.0f;
-}
+// The interaction state machine lives in GizmoController; these methods only
+// gather the camera/selection inputs and forward to it. The gizmo is drawn by
+// the SDF fragment shader (see UpdateGizmoGlobals + main.wgsl), not as a
+// front-end overlay, so it never trails the scene.
 
 bool Application::GetSelectedObjectPosition(glm::vec3& outPosition) const {
     const auto& objects = sceneManager.GetObjects();
@@ -608,72 +613,50 @@ bool Application::GetSelectedObjectPosition(glm::vec3& outPosition) const {
     return true;
 }
 
-int Application::GizmoHover(float mouseX, float mouseY) {
-    if (gizmoState.isDragging)
-        return static_cast<int>(gizmoState.activeAxis);
-
-    glm::vec3 selectedPos;
-    if (!GetSelectedObjectPosition(selectedPos)) {
-        gizmoState.hoveredAxis = GizmoAxis::None;
-        return 0;
-    }
-
+// Current camera view/proj for gizmo hit-testing (matches the render frame).
+static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeight,
+                                 glm::mat4& v, glm::mat4& p) {
     float aspect = (renderHeight > 0)
         ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
-    glm::mat4 v = camera.GetViewMatrix();
-    glm::mat4 p = camera.GetProjectionMatrix(aspect);
+    v = camera.GetViewMatrix();
+    p = camera.GetProjectionMatrix(aspect);
+}
 
-    GizmoAxis hovered = GizmoMath::HitTestTranslateAxes(
-        glm::vec2(mouseX, mouseY), selectedPos, v, p,
-        static_cast<float>(renderWidth), static_cast<float>(renderHeight),
-        GIZMO_SCREEN_LENGTH_PX, GIZMO_HIT_THRESHOLD_PX);
+int Application::GizmoHover(float mouseX, float mouseY) {
+    glm::vec3 selectedPos;
+    if (!GetSelectedObjectPosition(selectedPos))
+        return 0;
 
-    gizmoState.hoveredAxis = hovered;
-    return static_cast<int>(hovered);
+    glm::mat4 v, p;
+    GizmoViewProj(camera, renderWidth, renderHeight, v, p);
+    return gizmoController.Hover(glm::vec2(mouseX, mouseY), selectedPos, v, p,
+        static_cast<float>(renderWidth), static_cast<float>(renderHeight));
 }
 
 void Application::GizmoBeginDrag(float mouseX, float mouseY) {
     glm::vec3 selectedPos;
-    if (!GetSelectedObjectPosition(selectedPos)) {
-        gizmoState.activeAxis = GizmoAxis::None;
-        gizmoState.isDragging = false;
+    if (!GetSelectedObjectPosition(selectedPos))
         return;
-    }
 
-    GizmoHover(mouseX, mouseY);
-    if (gizmoState.hoveredAxis == GizmoAxis::None) {
-        gizmoState.activeAxis = GizmoAxis::None;
-        gizmoState.isDragging = false;
-        return;
-    }
-
-    gizmoState.activeAxis = gizmoState.hoveredAxis;
-    gizmoState.isDragging = true;
-    gizmoState.dragStartMouse = glm::vec2(mouseX, mouseY);
-    gizmoState.dragStartObjectPosition = selectedPos;
+    glm::mat4 v, p;
+    GizmoViewProj(camera, renderWidth, renderHeight, v, p);
+    gizmoController.BeginDrag(glm::vec2(mouseX, mouseY), selectedPos, v, p,
+        static_cast<float>(renderWidth), static_cast<float>(renderHeight));
 }
 
 void Application::GizmoDrag(float mouseX, float mouseY) {
-    if (!gizmoState.isDragging || gizmoState.activeAxis == GizmoAxis::None)
-        return;
-
     auto& objects = sceneManager.GetObjects();
     int index = selectionState.selectedObjectIndex;
     if (index < 0 || index >= static_cast<int>(objects.size()))
         return;
 
-    float aspect = (renderHeight > 0)
-        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
-    glm::mat4 v = camera.GetViewMatrix();
-    glm::mat4 p = camera.GetProjectionMatrix(aspect);
+    glm::mat4 v, p;
+    GizmoViewProj(camera, renderWidth, renderHeight, v, p);
 
     glm::vec3 newPosition;
-    bool ok = GizmoMath::ComputeTranslateDragPosition(
-        gizmoState.activeAxis, gizmoState.dragStartMouse, glm::vec2(mouseX, mouseY),
-        gizmoState.dragStartObjectPosition, v, p,
-        static_cast<float>(renderWidth), static_cast<float>(renderHeight),
-        GIZMO_SCREEN_LENGTH_PX, newPosition);
-    if (!ok)
+    if (!gizmoController.Drag(glm::vec2(mouseX, mouseY), v, p,
+            static_cast<float>(renderWidth), static_cast<float>(renderHeight),
+            newPosition))
         return;
 
     objects[index].position = { newPosition.x, newPosition.y, newPosition.z, 0.0f };
@@ -681,49 +664,29 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
 }
 
 void Application::GizmoEndDrag() {
-    gizmoState.isDragging = false;
-    gizmoState.activeAxis = GizmoAxis::None;
-    gizmoState.hoveredAxis = GizmoAxis::None;
+    gizmoController.EndDrag();
 }
 
-std::string Application::GetGizmoJson() {
-    std::ostringstream out;
+// Fill the gizmo* fields of `globals` so the SDF shader can draw the gizmo in
+// the same frame as the scene. Called every frame from MainLoop with the live
+// camera matrices.
+void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
+    glm::vec3 origin;
+    bool visible = gizmoEnabled && GetSelectedObjectPosition(origin);
 
-    glm::vec3 selectedPos;
-    if (!GetSelectedObjectPosition(selectedPos)) {
-        return "{\"visible\":false}";
-    }
+    globals.gizmoVisible = visible ? 1 : 0;
+    globals.gizmoHovered = static_cast<int32_t>(gizmoController.HoveredAxis());
+    globals.gizmoActive  = static_cast<int32_t>(gizmoController.ActiveAxis());
+    if (!visible)
+        return;
 
-    float aspect = (renderHeight > 0)
-        ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
-    glm::mat4 v = camera.GetViewMatrix();
-    glm::mat4 p = camera.GetProjectionMatrix(aspect);
+    float h = static_cast<float>(renderHeight);
+    glm::vec3 ex = gizmoController.AxisEndWorld(GizmoAxis::X, origin, v, p, h);
+    glm::vec3 ey = gizmoController.AxisEndWorld(GizmoAxis::Y, origin, v, p, h);
+    glm::vec3 ez = gizmoController.AxisEndWorld(GizmoAxis::Z, origin, v, p, h);
 
-    glm::vec2 origin;
-    if (!GizmoMath::WorldToScreen(selectedPos, v, p,
-            static_cast<float>(renderWidth), static_cast<float>(renderHeight), origin)) {
-        return "{\"visible\":false}";
-    }
-
-    out << "{\"visible\":true"
-        << ",\"hovered\":" << static_cast<int>(gizmoState.hoveredAxis)
-        << ",\"active\":" << static_cast<int>(gizmoState.activeAxis)
-        << ",\"origin\":[" << origin.x << "," << origin.y << "]"
-        << ",\"axes\":[";
-
-    const GizmoAxis axes[3] = { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z };
-    bool first = true;
-    for (GizmoAxis axis : axes) {
-        GizmoMath::AxisScreenSegment seg = GizmoMath::BuildAxisSegment(
-            axis, selectedPos, v, p,
-            static_cast<float>(renderWidth), static_cast<float>(renderHeight),
-            GIZMO_SCREEN_LENGTH_PX);
-        if (!first) out << ",";
-        first = false;
-        out << "{\"axis\":" << static_cast<int>(axis)
-            << ",\"valid\":" << (seg.valid ? "true" : "false")
-            << ",\"end\":[" << seg.screenEnd.x << "," << seg.screenEnd.y << "]}";
-    }
-    out << "]}";
-    return out.str();
+    globals.gizmoOrigin[0] = origin.x; globals.gizmoOrigin[1] = origin.y; globals.gizmoOrigin[2] = origin.z; globals.gizmoOrigin[3] = 0.0f;
+    globals.gizmoAxisX[0] = ex.x; globals.gizmoAxisX[1] = ex.y; globals.gizmoAxisX[2] = ex.z; globals.gizmoAxisX[3] = 0.0f;
+    globals.gizmoAxisY[0] = ey.x; globals.gizmoAxisY[1] = ey.y; globals.gizmoAxisY[2] = ey.z; globals.gizmoAxisY[3] = 0.0f;
+    globals.gizmoAxisZ[0] = ez.x; globals.gizmoAxisZ[1] = ez.y; globals.gizmoAxisZ[2] = ez.z; globals.gizmoAxisZ[3] = 0.0f;
 }

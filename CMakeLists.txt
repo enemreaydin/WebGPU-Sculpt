@@ -99,6 +99,7 @@ set(PROJECT_HEADERS
     src/interaction/SelectionState.h
     src/interaction/GizmoState.h
     src/interaction/GizmoMath.h
+    src/interaction/GizmoController.h
     src/serialization/ExtensionLoader.h
     src/serialization/SceneSerializer.h
     src/utils/FileHelper.h

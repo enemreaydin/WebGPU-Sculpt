@@ -65,24 +65,6 @@ export enum CsgOp {
   Intersect = 3,
 }
 
-// One gizmo axis segment in screen space (render pixels): its endpoint away
-// from the object origin. axis is 1=X, 2=Y, 3=Z.
-export interface GizmoAxisSeg {
-  axis: number;
-  valid: boolean;
-  end: [number, number];
-}
-
-// Screen-space gizmo geometry for the overlay. `visible` is false when no
-// object is selected (or it projects off-screen).
-export interface GizmoInfo {
-  visible: boolean;
-  hovered?: number;
-  active?: number;
-  origin?: [number, number];
-  axes?: GizmoAxisSeg[];
-}
-
 export interface SceneState {
   selectedIndex: number;
   showGrid: boolean;
@@ -355,9 +337,10 @@ export class Engine {
     this.call("sdf_gizmo_end_drag", null, [], []);
   }
 
-  // Screen-space geometry for drawing the gizmo overlay (render pixels).
-  gizmoInfo(): GizmoInfo {
-    const json = this.call("sdf_gizmo_json", "string", [], []) as string;
-    return JSON.parse(json) as GizmoInfo;
+  // Enable/disable drawing the translate gizmo (drive this from the active
+  // tool). The gizmo is rendered by the engine's SDF shader — in the same frame
+  // as the scene — so there is no overlay geometry to read back.
+  setGizmoEnabled(enabled: boolean): void {
+    this.call("sdf_set_gizmo_enabled", null, ["number"], [enabled ? 1 : 0]);
   }
 }

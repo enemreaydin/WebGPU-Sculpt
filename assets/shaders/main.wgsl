@@ -6,6 +6,16 @@ struct Globals {
     selectedIndex : i32,
     cameraPos : vec4f,
     cameraTarget : vec4f,
+    // Translate gizmo (see GlobalsData). World-space origin + axis endpoints;
+    // the fragment shader projects and draws them so they share this frame.
+    gizmoOrigin : vec4f,
+    gizmoAxisX : vec4f,
+    gizmoAxisY : vec4f,
+    gizmoAxisZ : vec4f,
+    gizmoVisible : i32,
+    gizmoHovered : i32,
+    gizmoActive : i32,
+    gizmoPad : i32,
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;
@@ -72,24 +82,96 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         if (t > 50.0) { break; }
     }
 
-    var out : FragmentOutput;  
+    var col : vec3f;
+    var id : u32;
 
     if (hit) {
         let depth_shade = 1.0 - (t / 15.0);
-        out.color = vec4f(final_color * depth_shade, 1.0);
-        out.object_id = final_id;
-        return out;
+        col = final_color * depth_shade;
+        id = final_id;
+    } else if (globals.showGrid == 1) {
+        col = gridBackground(ro, rd);
+        id = 0xffffffffu;
+    } else {
+        col = vec3f(0.02, 0.02, 0.02);
+        id = 0xffffffffu;
     }
 
-    if (globals.showGrid == 1) {
-        out.color = vec4f(gridBackground(ro, rd), 1.0);
-        out.object_id = 0xffffffffu;  
-        return out;
-    }
+    // Draw the gizmo on top of the scene color, in the SAME frame/camera as the
+    // SDF. object_id (the pick buffer) is left untouched so the gizmo can never
+    // be picked as if it were geometry.
+    col = overlayGizmo(col, uv, ro, right, up, forward, focalLength);
 
-    out.color = vec4f(0.02, 0.02, 0.02, 1.0);
-    out.object_id = 0xffffffffu; 
+    var out : FragmentOutput;
+    out.color = vec4f(col, 1.0);
+    out.object_id = id;
     return out;
+}
+
+// --- Translate gizmo overlay -------------------------------------------------
+
+fn gizmoAxisColor(axis : i32) -> vec3f {
+    if (axis == 1) { return vec3f(0.85, 0.31, 0.29); }   // X red
+    if (axis == 2) { return vec3f(0.50, 0.68, 0.23); }   // Y green
+    return vec3f(0.29, 0.52, 0.84);                       // Z blue
+}
+
+// Project a world point into this fragment's uv space (the exact basis the view
+// rays are built from above). Returns xy = uv, z = validity (<0 = behind camera).
+fn gizmoProject(world : vec3f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
+    let rel = world - ro;
+    let zc = dot(rel, forward);
+    if (zc <= 0.0001) { return vec3f(0.0, 0.0, -1.0); }
+    let xc = dot(rel, right);
+    let yc = dot(rel, up);
+    return vec3f(xc * focal / zc, yc * focal / zc, 1.0);
+}
+
+fn gizmoSegDist(p : vec2f, a : vec2f, b : vec2f) -> f32 {
+    let ab = b - a;
+    let l2 = dot(ab, ab);
+    if (l2 < 1e-8) { return length(p - a); }
+    let s = clamp(dot(p - a, ab) / l2, 0.0, 1.0);
+    return length(p - (a + ab * s));
+}
+
+fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
+    if (globals.gizmoVisible != 1) { return baseCol; }
+
+    let o = gizmoProject(globals.gizmoOrigin.xyz, ro, right, up, forward, focal);
+    if (o.z < 0.0) { return baseCol; }
+
+    // uv units per render pixel — uniform in x and y (the uv span is 2 across
+    // resolution.y). Lets us size the gizmo in screen pixels regardless of zoom.
+    let uvPerPx = 2.0 / globals.resolution.y;
+    let lineHalf = 2.5 * uvPerPx;   // ~5px-wide axis line
+    let dotR = 5.0 * uvPerPx;       // origin handle radius
+
+    var col = baseCol;
+
+    var ends = array<vec3f, 3>(globals.gizmoAxisX.xyz, globals.gizmoAxisY.xyz, globals.gizmoAxisZ.xyz);
+    for (var a = 0; a < 3; a++) {
+        let e = gizmoProject(ends[a], ro, right, up, forward, focal);
+        if (e.z < 0.0) { continue; }
+        let d = gizmoSegDist(uv, o.xy, e.xy);
+        if (d < lineHalf) {
+            let axisId = a + 1;
+            let hot = (globals.gizmoActive == axisId) || (globals.gizmoActive == 0 && globals.gizmoHovered == axisId);
+            var c = gizmoAxisColor(axisId);
+            if (hot) { c = vec3f(0.96, 0.77, 0.26); }
+            let aa = 1.0 - smoothstep(lineHalf - uvPerPx, lineHalf, d);
+            col = mix(col, c, aa);
+        }
+    }
+
+    // White origin handle on top.
+    let dO = length(uv - o.xy);
+    if (dO < dotR) {
+        let aa = 1.0 - smoothstep(dotR - uvPerPx, dotR, dO);
+        col = mix(col, vec3f(0.92), aa);
+    }
+
+    return col;
 }
 
 

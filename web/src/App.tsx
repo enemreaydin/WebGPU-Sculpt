@@ -168,8 +168,6 @@ export default class App extends React.Component<any, any> {
   _downPos: { x: number; y: number } | null = null;
   _didDrag = false;
   _gizmoDrag = false;                // dragging a gizmo axis
-  _gizmoRaf: number | null = null;   // overlay sync loop
-  _lastGizmoJson = "";               // change-detection for the overlay
 
   state: any = {
     openMenu: null,
@@ -177,9 +175,7 @@ export default class App extends React.Component<any, any> {
     shading: "solid",
     grid: true,
     snap: false,
-    // Screen-space gizmo geometry (render px) for the overlay; null = hidden.
-    gizmo: null as any,
-    // Canvas render dimensions, so the overlay SVG viewBox matches gizmo coords.
+    // Canvas render dimensions (kept in state so a resize re-renders panels).
     vpW: 1,
     vpH: 1,
     rightW: 300,
@@ -266,7 +262,14 @@ export default class App extends React.Component<any, any> {
     window.removeEventListener("keydown", this._kd);
     if (this._pt) clearInterval(this._pt);
     if (this._ro) this._ro.disconnect();
-    if (this._gizmoRaf !== null) cancelAnimationFrame(this._gizmoRaf);
+  }
+
+  // Keep the engine's gizmo visibility in step with the active tool (the gizmo
+  // is drawn by the engine shader; it only shows while the move tool is active).
+  componentDidUpdate(_prevProps: any, prevState: any) {
+    if (this.engine && prevState.tool !== this.state.tool) {
+      this.engine.setGizmoEnabled(this.state.tool === "move");
+    }
   }
 
   // ---- Engine / viewport ---------------------------------------------------
@@ -284,8 +287,8 @@ export default class App extends React.Component<any, any> {
         this._ro.observe(viewport);
         this.log("engine", "WebGPU device acquired — viewport ready");
         engine.setShowGrid(this.state.grid);
+        engine.setGizmoEnabled(this.state.tool === "move");
         this.seedDemo();
-        this.startGizmoLoop();
       })
       .catch((err: unknown) => {
         this.log("error", "engine failed: " + String(err));
@@ -386,26 +389,26 @@ export default class App extends React.Component<any, any> {
     } catch (_) {}
 
     if (wasClick && this.engine && !this._pickInFlight) {
-    const canvas = this.canvasRef.current;
-    if (canvas) {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      // Pick in render (device) pixels — the same space the engine's object-id
+      // target lives in. Using raw CSS coords (clientX - rect.left) mis-picks
+      // whenever the canvas render size differs from its displayed CSS size.
+      const p = this.canvasPoint(e);
       // Ctrl/Shift/Cmd click adds to the selection; captured now since the
       // event may be recycled by the time the pick promise resolves.
       const additive = e.shiftKey || e.ctrlKey || e.metaKey;
       this._pickInFlight = true;
-      this.engine.pickObject(x, y)
+      this.engine.pickObject(p.x, p.y)
         .then((objectId) => this.selectByPick(objectId, additive))
         .finally(() => { this._pickInFlight = false; });
-      }
     }
   };
 
   camMove = (e: React.PointerEvent) => {
     if (!this.engine) return;
 
-    // Active gizmo drag owns the pointer.
+    // Active gizmo drag owns the pointer. The gizmo itself is drawn by the
+    // engine's shader, so moving the object is all we do here — it and the gizmo
+    // are redrawn together in the engine's next frame.
     if (this._gizmoDrag) {
       const p = this.canvasPoint(e);
       this.engine.gizmoDrag(p.x, p.y);
@@ -431,28 +434,6 @@ export default class App extends React.Component<any, any> {
   camWheel = (e: React.WheelEvent) => {
     this.engine?.cameraZoom(-e.deltaY * 0.01);
   };
-
-  // rAF loop that keeps the gizmo overlay in sync with the camera. It only
-  // setStates when the projected geometry actually changes, so a static scene
-  // costs one tiny ccall per frame and no re-render.
-  startGizmoLoop() {
-    const tick = () => {
-      this._gizmoRaf = requestAnimationFrame(tick);
-      const e = this.engine;
-      if (!e) return;
-      let info: any = null;
-      if (this.state.tool === "move" && this.selObj()) {
-        const g = e.gizmoInfo();
-        if (g && g.visible) info = g;
-      }
-      const js = info ? JSON.stringify(info) : "";
-      if (js !== this._lastGizmoJson) {
-        this._lastGizmoJson = js;
-        this.setState({ gizmo: info });
-      }
-    };
-    this._gizmoRaf = requestAnimationFrame(tick);
-  }
 
   // ---- Ported logic --------------------------------------------------------
 
@@ -1458,25 +1439,6 @@ export default class App extends React.Component<any, any> {
       onFilter: (e: any) => this.setState({ filter: e.target.value }),
       treeRows: rows,
 
-      // translate-gizmo overlay: screen-space lines in render px (see gizmoLoop)
-      gizmoW: S.vpW,
-      gizmoH: S.vpH,
-      gizmoLines: (() => {
-        const gz = S.gizmo;
-        if (!gz || !gz.visible || !gz.origin || !gz.axes) return [];
-        const AX: any = { 1: "#d8504a", 2: "#7fae3a", 3: "#4b84d6" };
-        return gz.axes
-          .filter((a: any) => a.valid)
-          .map((a: any) => {
-            const hot = a.axis === gz.active || (!gz.active && a.axis === gz.hovered);
-            return {
-              key: a.axis,
-              x1: gz.origin[0], y1: gz.origin[1], x2: a.end[0], y2: a.end[1],
-              color: hot ? "#f5c542" : AX[a.axis], width: hot ? 4 : 2.5, r: hot ? 6 : 4.5,
-            };
-          });
-      })(),
-
       // properties
       ptObj: tabSt(propsTab === "object"), onPtObj: () => this.setState({ propsTab: "object" }),
       ptMat: tabSt(propsTab === "material"), onPtMat: () => this.setState({ propsTab: "material" }),
@@ -1727,22 +1689,8 @@ export default class App extends React.Component<any, any> {
                 style={css("position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;background:#101010")}
               />
 
-              {/* Translate-gizmo overlay. viewBox is in render px so gizmo
-                  coordinates map straight through; stretched to fill the canvas. */}
-              {V.gizmoLines.length > 0 && (
-                <svg
-                  viewBox={`0 0 ${V.gizmoW} ${V.gizmoH}`}
-                  preserveAspectRatio="none"
-                  style={css("position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6")}
-                >
-                  {V.gizmoLines.map((l: any) => (
-                    <g key={l.key}>
-                      <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} stroke={l.color} strokeWidth={l.width} strokeLinecap="round" />
-                      <circle cx={l.x2} cy={l.y2} r={l.r} fill={l.color} />
-                    </g>
-                  ))}
-                </svg>
-              )}
+              {/* The translate gizmo is drawn by the engine's SDF shader (same
+                  frame as the scene), so there is no HTML/SVG overlay here. */}
 
               <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>User Perspective</span>
 

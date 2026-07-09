@@ -7,7 +7,10 @@ class SelectionState
 {
 public:
     std::vector<int32_t> selectedNodeIds;
-    int32_t primaryNodeId;
+    int32_t primaryNodeId = -1;          // -1 = nothing selected. Must be
+                                         // default-initialized: GetSceneJson()
+                                         // and UpdateHighlightIndex() read it on
+                                         // startup, before any Clear()/Add().
     int32_t selectedObjectIndex = -1;
     
     bool Contains(int32_t nodeId) {

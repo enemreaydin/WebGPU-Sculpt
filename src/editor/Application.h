@@ -17,6 +17,7 @@
 #include "core/ViewportInput.h"
 #include "interaction/SelectionState.h"
 #include "interaction/GizmoState.h"
+#include "interaction/GizmoController.h"
 #include "serialization/SceneSerializer.h"
 #include "editor/EditorObjectStore.h"
 
@@ -94,12 +95,12 @@ public:
     void GizmoBeginDrag(float mouseX, float mouseY);
     void GizmoDrag(float mouseX, float mouseY);
     void GizmoEndDrag();
-    bool IsGizmoDragging() const { return gizmoState.isDragging; }
+    bool IsGizmoDragging() const { return gizmoController.IsDragging(); }
 
-    // Screen-space geometry of the gizmo for the front-end overlay: the selected
-    // object's screen origin + each axis endpoint, plus hovered/active axis.
-    // Non-const because the camera's matrix accessors are non-const.
-    std::string GetGizmoJson();
+    // Whether the translate gizmo should be drawn (the front-end sets this from
+    // its active tool). The gizmo is rendered by the SDF shader, so it stays
+    // perfectly in sync with the scene; there is no screen-space overlay JSON.
+    void SetGizmoEnabled(bool enabled) { gizmoEnabled = enabled; }
 
 private:
     bool running = true;
@@ -120,7 +121,8 @@ private:
 
     SelectionState selectionState;
     EditorObjectStore editorStore;
-    GizmoState gizmoState;
+    GizmoController gizmoController;
+    bool gizmoEnabled = false;   // set true by the front-end when the move tool is active
 
     // Scene / camera state
     GlobalsData globals{};
@@ -135,6 +137,7 @@ private:
     void FindProjectRoot();
     void InitializeRenderer();
     void UpdateCamera();
+    void UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p);  // fill gizmo* in globals
     void RebuildEditorRecords();   // recreate editor records after a scene load
     bool GetSelectedObjectPosition(glm::vec3& outPosition) const;
     TextureView GetNextSurfaceTextureView();
