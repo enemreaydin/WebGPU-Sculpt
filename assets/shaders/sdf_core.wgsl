@@ -19,7 +19,6 @@ struct SceneResult
     object_id: u32,
 };
 
-// GPU-facing RPN command — mirrors the CPU-side CsgCommand (16 bytes).
 struct CsgCommand
 {
     cmd_type : i32,
@@ -67,6 +66,67 @@ fn opIntersection(d1 : f32, d2 : f32) -> f32
     return max(d1, d2);
 }
 
+fn distanceCalc(p : vec3f) -> f32
+{
+    var resultDistance = 100000.0;
+    let count = arrayLength(&csg_program);
+    if (count == 0u)
+    {
+        return resultDistance;
+    }
+    var distanceStack : array<f32, 16>;
+    var sp : i32 = 0;
+
+    for (var i : u32 = 0u; i < count; i = i + 1u)
+    {
+        let cmd = csg_program[i];
+
+        if (cmd.cmd_type == 0)
+        {
+            let obj = scene_objects[cmd.operand];
+            let localPos = p - obj.position.xyz;
+            var dist = 100000.0;
+            switch(obj.obj_type)
+            {
+                case 0: { dist = sdfSphere(localPos, obj.size.x); }
+                case 1: { dist = sdfBox(localPos, obj.size.xyz); }
+                case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
+                case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
+                default: { dist = 100000.0; }
+            }
+            distanceStack[sp] = dist;
+            sp = sp + 1;
+        }
+        else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
+        {
+            let dB = distanceStack[sp - 1];
+            let dA = distanceStack[sp - 2];
+            var d = 100000.0;
+            if (cmd.cmd_type == 1)
+            {
+                d = opUnion(dA, dB);
+            }
+            else if (cmd.cmd_type == 2)
+            {
+                d = opSubtract(dB, dA);
+            }
+            else
+            {
+                d = opIntersection(dA, dB);
+            }
+
+            sp = sp - 1;
+            distanceStack[sp - 1] = d;
+        }
+    }
+     if (sp > 0)
+    {
+        resultDistance = distanceStack[sp - 1];
+    }
+    return resultDistance;
+}
+
+
 fn evaluateScene(p : vec3f) -> SceneResult
 {
     var result : SceneResult;
@@ -79,8 +139,6 @@ fn evaluateScene(p : vec3f) -> SceneResult
         return result;
     }
 
-    // Fixed-size stacks for the RPN evaluator (WGSL has no recursion). One stack for
-    // distances and a parallel one for colors, sharing the stack pointer sp.
     var stack : array<f32, 16>;
     var stackColor : array<vec3f, 16>;
     var stackId : array<u32, 16>;
@@ -92,7 +150,6 @@ fn evaluateScene(p : vec3f) -> SceneResult
 
         if (cmd.cmd_type == 0)
         {
-            // PUSH_OBJECT: evaluate the primitive and push its distance/color.
             let obj = scene_objects[cmd.operand];
             let localPos = p - obj.position.xyz;
             var dist = 100000.0;
@@ -118,8 +175,6 @@ fn evaluateScene(p : vec3f) -> SceneResult
         }
         else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
         {
-            // Binary op: pop the top two entries (A = accumulator below, B = top),
-            // combine, and push the single result back. Net stack effect is -1.
             let dB = stack[sp - 1];
             let cB = stackColor[sp - 1];
             let idB = stackId[sp - 1];
@@ -133,7 +188,6 @@ fn evaluateScene(p : vec3f) -> SceneResult
 
             if (cmd.cmd_type == 1)
             {
-                // Union: closer surface wins the color (matches old behavior).
                 d = opUnion(dA, dB);
                 if (dB < dA)
                 {
@@ -143,13 +197,11 @@ fn evaluateScene(p : vec3f) -> SceneResult
             }
             else if (cmd.cmd_type == 2)
             {
-                // Subtract: opSubtract(dist, result) order; accumulator keeps its color.
                 d = opSubtract(dB, dA);
                 c = cA;
             }
             else
             {
-                // Intersection: opIntersection(result, dist); accumulator keeps its color.
                 d = opIntersection(dA, dB);
                 c = cA;
             }

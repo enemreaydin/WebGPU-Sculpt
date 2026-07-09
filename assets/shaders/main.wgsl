@@ -6,8 +6,6 @@ struct Globals {
     selectedIndex : i32,
     cameraPos : vec4f,
     cameraTarget : vec4f,
-    // Translate gizmo (see GlobalsData). World-space origin + axis endpoints;
-    // the fragment shader projects and draws them so they share this frame.
     gizmoOrigin : vec4f,
     gizmoAxisX : vec4f,
     gizmoAxisY : vec4f,
@@ -69,16 +67,17 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
-        let result = evaluateScene(p);
+        let nearestObjectDistance = distanceCalc(p);
 
-        if (result.distance < 0.001) {
+        if (nearestObjectDistance < 0.001) {
             hit = true;
+            var result = evaluateScene(p);
             final_color = result.color;
-            final_id = result.object_id;   
+            final_id = result.object_id;
             break;
+        }else {
+            t += nearestObjectDistance;
         }
-
-        t += result.distance;
         if (t > 50.0) { break; }
     }
 
@@ -97,9 +96,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         id = 0xffffffffu;
     }
 
-    // Draw the gizmo on top of the scene color, in the SAME frame/camera as the
-    // SDF. object_id (the pick buffer) is left untouched so the gizmo can never
-    // be picked as if it were geometry.
     col = overlayGizmo(col, uv, ro, right, up, forward, focalLength);
 
     var out : FragmentOutput;
@@ -108,16 +104,13 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     return out;
 }
 
-// --- Translate gizmo overlay -------------------------------------------------
 
 fn gizmoAxisColor(axis : i32) -> vec3f {
-    if (axis == 1) { return vec3f(0.85, 0.31, 0.29); }   // X red
-    if (axis == 2) { return vec3f(0.50, 0.68, 0.23); }   // Y green
-    return vec3f(0.29, 0.52, 0.84);                       // Z blue
+    if (axis == 1) { return vec3f(0.85, 0.31, 0.29); }
+    if (axis == 2) { return vec3f(0.50, 0.68, 0.23); }
+    return vec3f(0.29, 0.52, 0.84);
 }
 
-// Project a world point into this fragment's uv space (the exact basis the view
-// rays are built from above). Returns xy = uv, z = validity (<0 = behind camera).
 fn gizmoProject(world : vec3f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
     let rel = world - ro;
     let zc = dot(rel, forward);
@@ -141,11 +134,9 @@ fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec
     let o = gizmoProject(globals.gizmoOrigin.xyz, ro, right, up, forward, focal);
     if (o.z < 0.0) { return baseCol; }
 
-    // uv units per render pixel — uniform in x and y (the uv span is 2 across
-    // resolution.y). Lets us size the gizmo in screen pixels regardless of zoom.
     let uvPerPx = 2.0 / globals.resolution.y;
-    let lineHalf = 2.5 * uvPerPx;   // ~5px-wide axis line
-    let dotR = 5.0 * uvPerPx;       // origin handle radius
+    let lineHalf = 2.5 * uvPerPx;
+    let dotR = 5.0 * uvPerPx;
 
     var col = baseCol;
 
@@ -164,7 +155,6 @@ fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec
         }
     }
 
-    // White origin handle on top.
     let dO = length(uv - o.xy);
     if (dO < dotR) {
         let aa = 1.0 - smoothstep(dotR - uvPerPx, dotR, dO);
