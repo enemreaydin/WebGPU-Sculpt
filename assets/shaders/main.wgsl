@@ -44,6 +44,11 @@ struct FragmentOutput
     @location(1) object_id : u32,
 }
 
+fn toneMapAndEncode(linearColor : vec3f) -> vec3f {
+    let mapped = linearColor / (linearColor + vec3f(1.0));
+    return pow(mapped, vec3f(1.0 / 2.2));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
     let lightDirection = normalize(vec3f(0.5, 0.8, 0.6));
@@ -67,11 +72,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     var t = 0.0;
     var hit = false;
-    var final_color = vec3f(0.0);
-    var final_id : u32 = 0xffffffffu;   
-
-    var col : vec3f;
-    var id : u32;
 
     for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
@@ -79,28 +79,34 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
         if (nearestObjectDistance < 0.001) {
             hit = true;
-            let n = calcNormal(p);
-            let l = normalize(lightDirection);
-            let diff = max(dot(n, l), 0.0);
-            var result = evaluateScene(p);
-            final_color = result.color;
-            col = final_color * (ambient + lightColor * intensity * diff);
-            final_id = result.object_id;
             break;
-        }else {
-            t += nearestObjectDistance;
         }
+        t += nearestObjectDistance;
         if (t > 50.0) { break; }
     }
+
+    var col : vec3f;
+    var id : u32 = 0xffffffffu;
+
     if (hit) {
-        id = final_id;
+        let hitPos = ro + rd * t;
+        let n = calcNormal(hitPos);
+        let result = evaluateScene(hitPos);
+        let diff = max(dot(n, lightDirection), 0.0);
+        let v = normalize(ro - hitPos);
+        let h = normalize(lightDirection + v);
+        let shininess = 48.0;
+        let specularStrength = 0.4;
+        let spec = pow(max(dot(n, h), 0.0), shininess);
+        col = result.color * (ambient + lightColor * intensity * diff) + lightColor * intensity * spec * specularStrength;
+        id = result.object_id;
     } else if (globals.showGrid == 1) {
         col = gridBackground(ro, rd);
-        id = 0xffffffffu;
     } else {
         col = vec3f(0.02, 0.02, 0.02);
-        id = 0xffffffffu;
     }
+
+    col = toneMapAndEncode(col);
 
     col = overlayGizmo(col, uv, ro, right, up, forward, focalLength);
 
