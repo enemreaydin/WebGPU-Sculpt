@@ -46,6 +46,11 @@ struct FragmentOutput
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
+    let lightDirection = normalize(vec3f(0.5, 0.8, 0.6));
+    let lightColor = vec3f(1.0);
+    let intensity = 1.0;
+    let ambient = vec3f(0.12);
+
     let ratio = globals.resolution.x / globals.resolution.y;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
 
@@ -65,14 +70,21 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     var final_color = vec3f(0.0);
     var final_id : u32 = 0xffffffffu;   
 
+    var col : vec3f;
+    var id : u32;
+
     for (var i = 0; i < 100; i++) {
         let p = ro + rd * t;
         let nearestObjectDistance = distanceCalc(p);
 
         if (nearestObjectDistance < 0.001) {
             hit = true;
+            let n = calcNormal(p);
+            let l = normalize(lightDirection);
+            let diff = max(dot(n, l), 0.0);
             var result = evaluateScene(p);
             final_color = result.color;
+            col = final_color * (ambient + lightColor * intensity * diff);
             final_id = result.object_id;
             break;
         }else {
@@ -80,13 +92,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         }
         if (t > 50.0) { break; }
     }
-
-    var col : vec3f;
-    var id : u32;
-
     if (hit) {
-        let depth_shade = 1.0 - (t / 15.0);
-        col = final_color * depth_shade;
         id = final_id;
     } else if (globals.showGrid == 1) {
         col = gridBackground(ro, rd);
