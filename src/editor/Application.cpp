@@ -1,4 +1,5 @@
 #include "Application.h"
+#include <glm/gtc/quaternion.hpp>
 #include "utils/FileHelper.h"
 #include "scene/SdfObjectFactory.h"
 #include "scene/PrimitiveGeometry.h"
@@ -361,8 +362,22 @@ void Application::SetObjectLocked(int index, bool locked) {
 void Application::SetObjectRotation(int index, float x, float y, float z) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
-    if (EditorObject* eo = editorStore.Find(objects[index].objectId))
-        eo->rotationEuler = { x, y, z };  // stored; not yet applied to the SDF
+    EditorObject* eo = editorStore.Find(objects[index].objectId);
+    if (!eo) return;
+    eo->rotationEuler = { x, y, z };
+
+    // Euler degrees -> local-to-world quaternion. Extrinsic X, then Y, then Z:
+    // composition applies right-to-left, so the product is qz * qy * qx. This
+    // order is part of the .sdfo format — changing it re-poses every saved scene.
+    // The shader rotates the query point by the conjugate (rotateInverse).
+    const glm::quat qx = glm::angleAxis(glm::radians(x), glm::vec3(1.0f, 0.0f, 0.0f));
+    const glm::quat qy = glm::angleAxis(glm::radians(y), glm::vec3(0.0f, 1.0f, 0.0f));
+    const glm::quat qz = glm::angleAxis(glm::radians(z), glm::vec3(0.0f, 0.0f, 1.0f));
+    const glm::quat q  = glm::normalize(qz * qy * qx);
+
+    // Component-wise: glm's in-memory quat order is not (x,y,z,w).
+    objects[index].rotation = { q.x, q.y, q.z, q.w };
+    sceneSerializer.RefreshSceneBuffer();
 }
 
 void Application::SetObjectScale(int index, float x, float y, float z) {
