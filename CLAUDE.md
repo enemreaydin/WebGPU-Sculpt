@@ -11,11 +11,14 @@ App.tsx (React) → engine.ts (typed facade) → Module.ccall → WebBindings.cp
 ```
 - UI mirrors the engine via `engine.getScene()` → `GetSceneJson()` (JSON). `App.tsx` state `meta` is a **read-through mirror** rebuilt from that JSON in `refresh()`; setters call `sdf_set_*` then `refresh()`.
 - Rendering: one full-screen quad raymarches the scene in `assets/shaders/main.wgsl` + `sdf_core.wgsl`. `CsgTree::CompileToRPN` turns the tree into an RPN `CsgCommand` program uploaded to a GPU buffer by `SceneSerializer::RefreshSceneBuffer()` (call it after any scene mutation). Camera pos/target go through `globals`; shader `focalLength 2.414` == 45° fovy == `Camera::GetProjectionMatrix`.
-- Object picking: a second R32Uint render target stores each pixel's object **vector index** (`cmd.operand`), read back via `mapAsync`. `0xffffffff` = nothing.
+- Object picking: a second R32Uint render target stores each pixel's object **vector index** (`cmd.operand`), read back via `mapAsync`. `0xffffffff` = nothing. Pick coords are **render (device) pixels** — `App.tsx` must use `canvasPoint(e)`, not raw CSS coords.
+- **Everything the shader needs travels in one uniform, `GlobalsData` → WGSL `Globals`**: camera, selection highlight, gizmo geometry, and all render settings. `Application::MainLoop` rebuilds `globals` every frame (`UpdateCamera`, `UpdateGizmoGlobals`, `SyncRenderGlobals`) — `globals` is a **per-frame mirror, never authoritative storage**.
 
 ## Build & run (Windows; adapt paths elsewhere)
 - **`cmake` is not on PATH** here → `"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"`. Emsdk is bundled at `deps/emsdk` (activate `deps/emsdk/emsdk_env.ps1` / `.sh` first).
 - **WASM engine:** `cmake --build build-web --target main` → emits `web/public/engine/sdf-engine.{js,wasm,data}`. (First time: `emcmake cmake -S . -B build-web`.) Rebuild whenever C++ changes.
+- 🔴 **Shaders are baked into `sdf-engine.data` at link time** (`--preload-file`); the engine reads them from the WASM virtual FS at `/assets`, **not from disk**. Editing a `.wgsl` does nothing until you rebuild the `main` target — `npm run dev` alone will keep running the old shader. Symptom: a WGSL compile error whose reported line doesn't match the file on disk. Verify with `grep -c <newSymbol> web/public/engine/sdf-engine.data` and compare `.data` mtime against the `.wgsl` mtime.
+- If a build silently produces no new `.data`, it probably **aborted during CMake reconfigure** (any `CMakeLists.txt` edit forces one, and reconfigure needs Python on PATH via the emsdk env). A failed reconfigure means nothing relinks.
 - **Web UI:** `cd web && npm run dev` (Vite, :5173). Typecheck: `cd web && npx tsc --noEmit`.
 - **Compile-check one TU without a full link** (e.g. when the link is red pending another dev's method): `em++ -std=c++17 -Isrc -Ideps/glm -Ideps/SDL/include -Ibuild-web/_deps/webgpu-backend-emscripten-src/include -Ibuild-web/deps/SDL/include-config-release/build_config -Ibuild-web/deps/SDL/include-revision -c <file.cpp> -o /tmp/x.o`.
 - To verify a change works, build the WASM + `npm run dev` + drive it in the browser; there is no test suite.
@@ -24,9 +27,30 @@ App.tsx (React) → engine.ts (typed facade) → Module.ccall → WebBindings.cp
 - **Three id spaces — never mix them.** `objectId` (permanent, on `SdfObjectData`), CSG `nodeId` (permanent, on `CsgNode`), and **vector indices** into `m_Objects`/`m_Nodes`. `CsgTree` public methods take **indices**; selection + all JSON speak **nodeId**. Convert with `CsgTree::IndexForNodeId` (must skip `!alive` nodes).
 - **Node vector never shrinks** — `RemoveNode` tombstones (`alive=false`) in place, so node indices are stable. **Object vector erases** → object indices shift; always key on `objectId`.
 - **Pick returns a vector index, not an objectId.** `selectByPick` maps index→object→objectId→nodeId.
-- **Selection is engine-owned** (`SelectionState`: `selectedNodeIds`, `primaryNodeId`, plus `selectedObjectIndex` for the shader highlight). `primaryNodeId` = the Subtract base. UI selection keys: `"scene"` | `String(objectId)` (primitive) | `"g"+nodeId` (CSG group).
+- **Selection is engine-owned** (`SelectionState`: `selectedNodeIds`, `primaryNodeId`, plus `selectedObjectIndex` for the shader highlight). `primaryNodeId` = the **active / last-clicked** node (drives the 3D highlight); it must stay default-initialized to `-1`. UI selection keys: `"scene"` | `String(objectId)` (primitive) | `"g"+nodeId` (CSG group).
+- **The Subtract base is the FIRST-selected node**, *not* the primary. `ApplyOperation` builds children straight from `selectedNodeIds` (click order), so "click A, then B, Subtract" = `A − B`. `selectedNodeIds[0]` becomes `firstChild`, which `CompileNode` folds as the RPN base.
+- **`GlobalsData` (C++) and the WGSL `Globals` struct must match byte-for-byte** (currently 224 bytes, 16-aligned). Store every vec3 as a `vec4` (only `.xyz` used) to dodge the std140 vec3-padding trap; group trailing scalars into 16-byte blocks. A mismatch is silent — it just corrupts every field after the drift. The globals buffer and bind-group entry size come from `sizeof(GlobalsData)`, so the struct can grow without touching `SdfRenderer`.
 - **The root Union node is structural — never deletable.** `SceneManager::RemoveNodeSubtree` guards it; `EnsureRootUnion` self-heals a dead/missing root. Deleting it desyncs `CsgTree::m_Root` from `SceneManager::m_RootNodeIndex` and blanks everything.
 - **Editor attributes** (name/visibility/lock/rotation/scale/shape-params) live in `EditorObjectStore` keyed by objectId; the SDF `size` is **derived** from params+scale via `PrimitiveGeometry::ComputeSize`. Not persisted to `.sdfo` yet (regenerated on load). Color: engine owns RGB; HSV↔RGB stays UI-side (color-picker geometry only).
+
+## Shading pipeline (`sdf_core.wgsl` + `main.wgsl`)
+Two SDF evaluators, deliberately split — **never merge them**:
+- `distanceCalc(p) -> f32` — distance-only RPN eval. Used by the march step, `calcNormal`, `calcSoftShadow`, `calcAO` (called dozens of times per pixel, so it must not do color work).
+- `evaluateScene(p) -> SceneResult` — distance + color + objectId. Called **once**, at the primary hit only.
+
+Shading order in `fs_main`: march → (on hit) `hitPos`, `calcNormal`, `evaluateScene` → Blinn-Phong (`diff`, half-vector `spec`) × `calcSoftShadow` + ambient × `calcAO` → `toneMapAndEncode` (ACES filmic, then `pow(1/2.2)` gamma) → `overlayGizmo`.
+- `calcNormal` = 4-tap tetrahedron gradient of `distanceCalc`. `calcSoftShadow` = IQ penumbra march (`min(res, k*h/t)`). `calcAO` = 5-tap probe along the normal.
+- **Tone map before gamma**, and the swapchain is **non-sRGB** (`getPreferredFormat`), so the shader *must* gamma-encode itself. Gizmo is composited **after** the output transform (its colors are authored in display space).
+- The **translate gizmo is drawn by the fragment shader**, not a React overlay — that's what makes it frame-exact with the scene (an HTML/SVG overlay always trailed the WebGPU canvas by a frame, worst during camera orbit). `Application::UpdateGizmoGlobals` writes world-space origin + axis endpoints into `globals`; `overlayGizmo` projects them with the *same* camera basis the rays use. It writes color only, never `object_id`, so the gizmo is never pickable.
+- Known gaps: the grid floor is drawn analytically in `gridBackground` (not SDF geometry), so **objects cast no shadow on it**. There is **no antialiasing** on SDF silhouettes (one ray/pixel, binary hit; MSAA can't help a full-screen quad), and the canvas renders at **1× DPR**.
+- `.wgsl` files are kept **comment-free** by user preference.
+
+## Render settings chain
+Adding a setting touches five layers, in this order:
+`Settings.h` (field + `RenderSetting` enum id) → `Application::SetRenderSetting(id, value)` (writes `appSettings`) → `Application::SyncRenderGlobals()` (per-frame copy into `globals`) → `sdf_set_render_setting` (WebBindings) → `engine.ts` `setRenderSetting` + `RenderSetting` enum → `App.tsx` render panel.
+- One **parameterized setter** keyed by id, not one binding per setting. The `RenderSetting` enum is duplicated in `Settings.h` and `engine.ts` — **keep them in sync**.
+- `GetSceneJson()` emits a `"render"` object so the UI mirrors engine state (`getScene().render`); the panel never owns the values.
+- `App.tsx`: `RENDER_SETTINGS` (look: light dir/color/intensity, ambient, shadow sharpness, gloss, highlight, AO) and `RENDER_ADVANCED` (quality/perf: ray steps, surface epsilon, view distance, shadow steps/distance, AO samples, behind a checkbox). `rsRow`/`rsSet` render + clamp each row; `rsSet` optimistically mirrors into state (no full `refresh()`).
 
 ## Emscripten gotchas
 - **`webgpu.hpp` async callbacks** (`mapAsync`, `requestDevice`, …) return a `std::unique_ptr<...Callback>` that owns the heap callback the GPU will invoke. **Keep it alive** (store in a member) until it fires, or WASM throws `RuntimeError: table index is out of bounds`.
@@ -40,14 +64,17 @@ App.tsx (React) → engine.ts (typed facade) → Module.ccall → WebBindings.cp
 - `src/scene/SceneManager.{h,cpp}` — objects vector + `CsgTree`; add/remove/group.
 - `src/scene/csg/{CsgTree.cpp,CsgNode.h,CsgCommand.h}` — n-ary CSG tree + RPN compile.
 - `src/scene/PrimitiveGeometry.*` — size derivation. `src/editor/EditorObjectStore.*` — editor attrs + naming.
-- `src/scene/data/{SdfObjectData,EditorObject,SdfEnums,GlobalsData}.h`.
-- `src/interaction/{SelectionState,GizmoState,GizmoMath}.*` — selection + translate gizmo (translate only).
+- `src/scene/data/{SdfObjectData,EditorObject,SdfEnums,GlobalsData}.h`. `GlobalsData.h` = the GPU uniform (camera + gizmo + render settings); mirror of the WGSL `Globals` struct.
+- `src/editor/Settings.h` — `Settings` (camera sensitivities + authoritative render settings) and the `RenderSetting` id enum.
+- `src/interaction/` — `SelectionState.h`; `GizmoMath.*` (pure projection/hit-test math); `GizmoState.h`; **`GizmoController.h`** (header-only: the hover/drag state machine, decoupled from `Application` — takes mouse/origin/view/proj per call, holds no engine refs). Translate only.
 - `src/renderer/SdfRenderer.*` — pipeline, buffers, object-id pick target. `src/serialization/SceneSerializer.*` — `RefreshSceneBuffer`, `.sdfo` I/O. `src/camera/Camera.*`.
-- `assets/shaders/{main,sdf_core}.wgsl` — raymarch + CSG RPN eval + object-id + highlight.
-- `web/src/engine.ts` — typed facade over `ccall`. `web/src/App.tsx` — the entire UI in one ~1800-line class component.
+- `assets/shaders/sdf_core.wgsl` — primitives, CSG ops, `distanceCalc`, `evaluateScene`, `calcNormal`, `calcSoftShadow`, `calcAO`. `assets/shaders/main.wgsl` — `Globals`, raymarch, Blinn-Phong shading, ACES tone map + gamma, gizmo overlay, grid. (`sdf_core` is concatenated **before** `main`; WGSL module scope is order-independent, so `sdf_core` functions may read `globals`.)
+- `web/src/engine.ts` — typed facade over `ccall`. `web/src/App.tsx` — the entire UI in one ~1900-line class component.
 
 ### App.tsx conventions
 One giant class component. Persistent UI state in `this.state`; transient drag scratch in instance fields (`_camDrag`, `_gizmoDrag`, …). `refresh()` re-reads the scene. `renderVals()` builds a big view-model `V` that `render()` consumes. Helpers: `Hv` (hover-style wrapper), `Ico`/`Raw` (`dangerouslySetInnerHTML` SVG). Some comments are Turkish (`YENİ` = "new").
+- There is **no gizmo overlay / rAF sync loop** any more (the engine draws the gizmo). `camDown/camMove/camUp` only forward pointer coords via `gizmoHover/BeginDrag/Drag/EndDrag`; `componentDidUpdate` calls `engine.setGizmoEnabled(tool === "move")` so the engine knows when to draw it.
+- The properties panel's Render tab is the render-settings UI; its content wrapper already has `overflow:auto`.
 
 ## Conventions
 - **Never** add an AI/Claude `Co-Authored-By` trailer to commits. Prefer to let the user run git; they are particular about history.
@@ -55,4 +82,8 @@ One giant class component. Persistent UI state in `this.state`; transient drag s
 - Reference code as `path:line`.
 
 ## Status
-CSG multi-select + boolean operations (Union/Subtract/Intersect) and the editor-attribute model are **done and on main**. The **translate** gizmo is done; rotate/scale gizmos and `.sdfo` persistence of editor attributes are **not** built yet.
+**Done:** CSG multi-select + boolean ops (Union/Subtract/Intersect); the editor-attribute model; the **translate** gizmo (now in `GizmoController` and rendered in-shader); the full lighting stack (normals → Blinn-Phong diffuse/specular → ACES tone map + gamma → soft shadows → AO); and the render-settings panel (general + advanced) wired `Settings.h → globals → GPU`.
+
+**Not built:** rotate/scale gizmos; `.sdfo` persistence of editor attributes **and** of render settings; per-object materials (gloss/specular are still global); antialiasing (candidates: DPR fix, then SSAA as an `aaSamples` setting); shadows on the grid floor (needs a real SDF ground plane); a `map`-sharing refactor between `distanceCalc` and `evaluateScene` (they duplicate the primitive switch + ops — adding a 5th primitive means editing both).
+
+**Working style for this codebase:** the user is learning the graphics side, so for rendering topics explain the concept + math first and let them implement, unless they explicitly say "you do it." They will run builds and git themselves.
