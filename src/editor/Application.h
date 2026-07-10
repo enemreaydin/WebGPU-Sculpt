@@ -94,18 +94,24 @@ public:
     // the GPU uniform each frame.
     void SetRenderSetting(int id, float value);
 
-    // Translate gizmo. Mouse coords are in render (device) pixels, origin
-    // top-left. GizmoHover returns the hit GizmoAxis (0 = none).
+    // Gizmo. Mouse coords are in render (device) pixels, origin top-left.
+    // GizmoHover returns the hit GizmoAxis (0 = none). GizmoDrag translates or
+    // rotates the selection depending on the active mode.
     int  GizmoHover(float mouseX, float mouseY);
     void GizmoBeginDrag(float mouseX, float mouseY);
     void GizmoDrag(float mouseX, float mouseY);
     void GizmoEndDrag();
     bool IsGizmoDragging() const { return gizmoController.IsDragging(); }
 
-    // Whether the translate gizmo should be drawn (the front-end sets this from
-    // its active tool). The gizmo is rendered by the SDF shader, so it stays
-    // perfectly in sync with the scene; there is no screen-space overlay JSON.
+    // Whether the gizmo should be drawn (the front-end sets this from its active
+    // tool). The gizmo is rendered by the SDF shader, so it stays perfectly in
+    // sync with the scene; there is no screen-space overlay JSON.
     void SetGizmoEnabled(bool enabled) { gizmoEnabled = enabled; }
+
+    // `mode` is a GizmoMode (0 translate, 1 rotate), `space` a GizmoSpace
+    // (0 world, 1 local). Both are ignored mid-drag; see GizmoController.
+    void SetGizmoMode(int mode)   { gizmoController.SetMode(static_cast<GizmoMode>(mode)); }
+    void SetGizmoSpace(int space) { gizmoController.SetSpace(static_cast<GizmoSpace>(space)); }
 
 private:
     bool running = true;
@@ -146,6 +152,7 @@ private:
     void SyncRenderGlobals();  // copy appSettings render values into globals each frame
     void RebuildEditorRecords();   // recreate editor records after a scene load
     bool GetSelectedObjectPosition(glm::vec3& outPosition) const;
+    bool GetSelectedObjectRotation(glm::quat& outRotation) const;
     TextureView GetNextSurfaceTextureView();
 
     static const char* TypeName(int32_t type);

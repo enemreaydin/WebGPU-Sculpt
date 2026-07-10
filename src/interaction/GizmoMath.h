@@ -1,6 +1,7 @@
 #pragma once
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include "interaction/GizmoState.h"
 
 namespace GizmoMath
@@ -19,6 +20,10 @@ namespace GizmoMath
 
     glm::vec3 AxisToWorldDir(GizmoAxis axis);
 
+    // The axis' world direction in the requested space: the raw world axis, or
+    // that axis carried into the object's frame by its rotation.
+    glm::vec3 AxisDirInSpace(GizmoAxis axis, const glm::quat& objectRotation, GizmoSpace space);
+
     bool WorldToScreen(
         const glm::vec3& worldPos,
         const glm::mat4& view,
@@ -26,6 +31,43 @@ namespace GizmoMath
         float viewportWidth,
         float viewportHeight,
         glm::vec2& outScreen
+    );
+
+    // Inverse of WorldToScreen: the world-space ray through a render pixel.
+    bool ScreenPointToRay(
+        const glm::vec2& mouse,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        glm::vec3& outRayOrigin,
+        glm::vec3& outRayDir
+    );
+
+    // Ray/plane hit. False when the ray is parallel to the plane (the ring seen
+    // edge-on) or the plane sits behind the camera.
+    bool IntersectRayPlane(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDir,
+        const glm::vec3& planePoint,
+        const glm::vec3& planeNormal,
+        float& outT
+    );
+
+    // Signed angle from `from` to `to` measured about `axis`, in radians.
+    float SignedAngleAround(const glm::vec3& from, const glm::vec3& to, const glm::vec3& axis);
+
+    // Unit vector from the ring centre to where the mouse ray pierces the ring's
+    // plane — the "spoke" the rotate drag tracks.
+    bool ComputeRingSpoke(
+        const glm::vec2& mouse,
+        const glm::vec3& origin,
+        const glm::vec3& axisDir,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        glm::vec3& outSpoke
     );
 
     float DistancePointToSegment(
@@ -43,6 +85,7 @@ namespace GizmoMath
 
     AxisScreenSegment BuildAxisSegment(
         GizmoAxis axis,
+        const glm::vec3& axisDir,
         const glm::vec3& origin,
         const glm::mat4& view,
         const glm::mat4& proj,
@@ -54,6 +97,8 @@ namespace GizmoMath
     GizmoAxis HitTestTranslateAxes(
         const glm::vec2& mouse,
         const glm::vec3& origin,
+        const glm::quat& objectRotation,
+        GizmoSpace space,
         const glm::mat4& view,
         const glm::mat4& proj,
         float viewportWidth,
@@ -62,8 +107,24 @@ namespace GizmoMath
         float hitThresholdPx
     );
 
+    // Same idea for the three rotate rings: the ring whose circumference the
+    // mouse ray passes closest to, within the tolerance. Back-facing halves are
+    // not pickable, matching what the shader draws.
+    GizmoAxis HitTestRotateRings(
+        const glm::vec2& mouse,
+        const glm::vec3& origin,
+        const glm::quat& objectRotation,
+        GizmoSpace space,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        float desiredScreenRadiusPx,
+        float hitThresholdPx
+    );
+
     bool ComputeTranslateDragPosition(
-        GizmoAxis axis,
+        const glm::vec3& axisDir,
         const glm::vec2& dragStartMouse,
         const glm::vec2& currentMouse,
         const glm::vec3& dragStartObjectPosition,

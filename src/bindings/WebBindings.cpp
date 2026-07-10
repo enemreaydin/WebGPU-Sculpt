@@ -179,12 +179,24 @@ void sdf_gizmo_end_drag() {
     if (g_App) g_App->GizmoEndDrag();
 }
 
-// Enable/disable drawing the translate gizmo (the front-end sets this from its
-// active tool). The gizmo itself is rendered by the SDF shader, so there is no
+// Enable/disable drawing the gizmo (the front-end sets this from its active
+// tool). The gizmo itself is rendered by the SDF shader, so there is no
 // screen-space geometry to hand back — it stays in lockstep with the scene.
 EMSCRIPTEN_KEEPALIVE
 void sdf_set_gizmo_enabled(int enabled) {
     if (g_App) g_App->SetGizmoEnabled(enabled != 0);
+}
+
+// mode: GizmoMode (0 = translate arrows, 1 = rotate rings). Mirrored in engine.ts.
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_gizmo_mode(int mode) {
+    if (g_App) g_App->SetGizmoMode(mode);
+}
+
+// space: GizmoSpace (0 = world axes, 1 = the object's own axes).
+EMSCRIPTEN_KEEPALIVE
+void sdf_set_gizmo_space(int space) {
+    if (g_App) g_App->SetGizmoSpace(space);
 }
 
 } // extern "C"

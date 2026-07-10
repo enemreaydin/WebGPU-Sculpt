@@ -13,7 +13,7 @@ struct Globals {
     gizmoVisible : i32,
     gizmoHovered : i32,
     gizmoActive : i32,
-    gizmoPad : i32,
+    gizmoMode : i32,
     lightDirection : vec4f,
     lightColor : vec4f,
     ambientColor : vec4f,
@@ -136,7 +136,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
 
     col = toneMapAndEncode(col);
 
-    col = overlayGizmo(col, uv, ro, right, up, forward, focalLength);
+    col = overlayGizmo(col, uv, ro, rd, right, up, forward, focalLength);
 
     var out : FragmentOutput;
     out.color = vec4f(col, 1.0);
@@ -168,9 +168,13 @@ fn gizmoSegDist(p : vec2f, a : vec2f, b : vec2f) -> f32 {
     return length(p - (a + ab * s));
 }
 
-fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
-    if (globals.gizmoVisible != 1) { return baseCol; }
+fn gizmoTint(axisId : i32) -> vec3f {
+    let hot = (globals.gizmoActive == axisId) || (globals.gizmoActive == 0 && globals.gizmoHovered == axisId);
+    if (hot) { return vec3f(0.96, 0.77, 0.26); }
+    return gizmoAxisColor(axisId);
+}
 
+fn overlayTranslateGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
     let o = gizmoProject(globals.gizmoOrigin.xyz, ro, right, up, forward, focal);
     if (o.z < 0.0) { return baseCol; }
 
@@ -186,12 +190,8 @@ fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec
         if (e.z < 0.0) { continue; }
         let d = gizmoSegDist(uv, o.xy, e.xy);
         if (d < lineHalf) {
-            let axisId = a + 1;
-            let hot = (globals.gizmoActive == axisId) || (globals.gizmoActive == 0 && globals.gizmoHovered == axisId);
-            var c = gizmoAxisColor(axisId);
-            if (hot) { c = vec3f(0.96, 0.77, 0.26); }
             let aa = 1.0 - smoothstep(lineHalf - uvPerPx, lineHalf, d);
-            col = mix(col, c, aa);
+            col = mix(col, gizmoTint(a + 1), aa);
         }
     }
 
@@ -202,6 +202,56 @@ fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec
     }
 
     return col;
+}
+
+fn overlayRotateGizmo(baseCol : vec3f, ro : vec3f, rd : vec3f, forward : vec3f, focal : f32) -> vec3f {
+    let o = globals.gizmoOrigin.xyz;
+    let uvPerPx = 2.0 / globals.resolution.y;
+
+    var col = baseCol;
+
+    var ends = array<vec3f, 3>(globals.gizmoAxisX.xyz, globals.gizmoAxisY.xyz, globals.gizmoAxisZ.xyz);
+    for (var a = 0; a < 3; a++) {
+        let spoke = ends[a] - o;
+        let radius = length(spoke);
+        if (radius < 0.00001) { continue; }
+        let n = spoke / radius;
+
+        let denom = dot(rd, n);
+        if (abs(denom) < 0.0005) { continue; }
+
+        let t = dot(o - ro, n) / denom;
+        if (t <= 0.0) { continue; }
+
+        let p = ro + rd * t;
+
+        if (dot(p - o, forward) > 0.02 * radius) { continue; }
+
+        let zc = dot(p - ro, forward);
+        if (zc <= 0.0001) { continue; }
+
+        let worldPerUv = zc / focal;
+        let halfW = 2.5 * uvPerPx * worldPerUv;
+        let feather = uvPerPx * worldPerUv;
+
+        let radial = abs(length(p - o) - radius);
+        if (radial > halfW) { continue; }
+
+        let aa = 1.0 - smoothstep(halfW - feather, halfW, radial);
+        col = mix(col, gizmoTint(a + 1), aa);
+    }
+
+    return col;
+}
+
+fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, rd : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
+    if (globals.gizmoVisible != 1) { return baseCol; }
+
+    if (globals.gizmoMode == 1) {
+        return overlayRotateGizmo(baseCol, ro, rd, forward, focal);
+    }
+
+    return overlayTranslateGizmo(baseCol, uv, ro, right, up, forward, focal);
 }
 
 

@@ -1,5 +1,5 @@
 import React from "react";
-import { Engine, PrimitiveType, CsgOp, ShapeParam, RenderSetting } from "./engine";
+import { Engine, PrimitiveType, CsgOp, ShapeParam, RenderSetting, GizmoMode, GizmoSpace } from "./engine";
 
 // UI type-name <-> engine PrimitiveType enum.
 const TYPE_ENUM: Record<string, PrimitiveType> = {
@@ -172,6 +172,7 @@ export default class App extends React.Component<any, any> {
   state: any = {
     openMenu: null,
     tool: "select",
+    gizmoSpace: "world",   // "world" | "local" — which axes the gizmo handles follow
     shading: "solid",
     grid: true,
     snap: false,
@@ -270,12 +271,23 @@ export default class App extends React.Component<any, any> {
     if (this._ro) this._ro.disconnect();
   }
 
-  // Keep the engine's gizmo visibility in step with the active tool (the gizmo
-  // is drawn by the engine shader; it only shows while the move tool is active).
+  // Keep the engine's gizmo in step with the active tool and space (the gizmo is
+  // drawn by the engine shader; it only shows for the move and rotate tools).
   componentDidUpdate(_prevProps: any, prevState: any) {
-    if (this.engine && prevState.tool !== this.state.tool) {
-      this.engine.setGizmoEnabled(this.state.tool === "move");
+    if (!this.engine) return;
+    if (prevState.tool !== this.state.tool || prevState.gizmoSpace !== this.state.gizmoSpace) {
+      this.syncGizmo();
     }
+  }
+
+  // Push the whole gizmo configuration down to the engine at once. Mode is sent
+  // even when the gizmo is hidden, so it is already correct the moment it shows.
+  syncGizmo() {
+    if (!this.engine) return;
+    const tool = this.state.tool;
+    this.engine.setGizmoEnabled(tool === "move" || tool === "rotate");
+    this.engine.setGizmoMode(tool === "rotate" ? GizmoMode.Rotate : GizmoMode.Translate);
+    this.engine.setGizmoSpace(this.state.gizmoSpace === "local" ? GizmoSpace.Local : GizmoSpace.World);
   }
 
   // ---- Engine / viewport ---------------------------------------------------
@@ -293,7 +305,7 @@ export default class App extends React.Component<any, any> {
         this._ro.observe(viewport);
         this.log("engine", "WebGPU device acquired — viewport ready");
         engine.setShowGrid(this.state.grid);
-        engine.setGizmoEnabled(this.state.tool === "move");
+        this.syncGizmo();
         this.seedDemo();
       })
       .catch((err: unknown) => {
@@ -347,9 +359,10 @@ export default class App extends React.Component<any, any> {
     return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
   }
 
-  // True when the translate gizmo is applicable: move tool + a primitive selected.
+  // True when the gizmo is applicable: move/rotate tool + a primitive selected.
   gizmoActive(): boolean {
-    return this.state.tool === "move" && !!this.engine && !!this.selObj();
+    const tool = this.state.tool;
+    return (tool === "move" || tool === "rotate") && !!this.engine && !!this.selObj();
   }
 
   camDown = (e: React.PointerEvent) => {
@@ -381,7 +394,7 @@ export default class App extends React.Component<any, any> {
       this._gizmoDrag = false;
       this.engine?.gizmoEndDrag();
       try { (e.target as HTMLElement).releasePointerCapture(e.pointerId); } catch (_) {}
-      this.refresh(); // pull the object's new position into the property panel
+      this.refresh(); // pull the object's new position/rotation into the property panel
       return;
     }
 
@@ -1461,6 +1474,12 @@ export default class App extends React.Component<any, any> {
       tMove: toolSt(S.tool === "move"), setMove: () => this.setState({ tool: "move" }),
       tRot: toolSt(S.tool === "rotate"), setRot: () => this.setState({ tool: "rotate" }),
       tScl: toolSt(S.tool === "scale"), setScl: () => this.setState({ tool: "scale" }),
+
+      // Gizmo space toggle: only meaningful while a gizmo tool is active.
+      gzLabel: S.gizmoSpace === "local" ? "Local" : "World",
+      gzSt: toolSt(S.gizmoSpace === "local"),
+      gzEnabled: S.tool === "move" || S.tool === "rotate",
+      gzToggle: () => this.setState({ gizmoSpace: S.gizmoSpace === "local" ? "world" : "local" }),
       shWire: togSt(S.shading === "wire"), setWire: () => this.setState({ shading: "wire" }),
       shSolid: togSt(S.shading === "solid"), setSolid: () => this.setState({ shading: "solid" }),
       shRend: togSt(S.shading === "rendered"), setRend: () => this.setState({ shading: "rendered" }),
@@ -1679,6 +1698,22 @@ export default class App extends React.Component<any, any> {
     );
   }
 
+  // Text pill for the gizmo space toggle. Dimmed (and inert) unless a gizmo tool
+  // is active, since the world/local distinction means nothing without handles.
+  spaceButton(label: string, onClick: any, tint: any, enabled: boolean) {
+    return (
+      <Hv
+        tag="button"
+        title="Gizmo space: world axes vs the object's own axes"
+        onClick={enabled ? onClick : undefined}
+        s={`height:22px;padding:0 7px;display:flex;align-items:center;border:none;border-radius:2px;font-size:10px;letter-spacing:0.3px;padding-top:1px;cursor:${enabled ? "pointer" : "default"};opacity:${enabled ? 1 : 0.35};background:${tint.bg};color:${tint.fg}`}
+        h={enabled ? "background:#2e2e2e" : ""}
+      >
+        {label}
+      </Hv>
+    );
+  }
+
   toolButton(title: string, onClick: any, tint: any, svg: string) {
     return (
       <Hv
@@ -1789,6 +1824,8 @@ export default class App extends React.Component<any, any> {
                 {this.toolButton("Move (G)", V.setMove, V.tMove, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.5v13 M1.5 8h13 M8 1.5 6.2 3.3 M8 1.5l1.8 1.8 M8 14.5l-1.8-1.8 M8 14.5l1.8-1.8 M1.5 8l1.8-1.8 M1.5 8l1.8 1.8 M14.5 8l-1.8-1.8 M14.5 8l-1.8 1.8" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"></path></svg>`)}
                 {this.toolButton("Rotate (R)", V.setRot, V.tRot, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-2.05-4.28 M11.6 1.7l.25 2.45 2.45-.35" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg>`)}
                 {this.toolButton("Scale (S)", V.setScl, V.tScl, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2.25 9.5v4.25H6.5 M13.75 6.5V2.25H9.5 M13.75 2.25 2.25 13.75" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg>`)}
+                <div style={css("width:1px;height:14px;background:#333333;margin:0 4px")} />
+                {this.spaceButton(V.gzLabel, V.gzToggle, V.gzSt, V.gzEnabled)}
                 <div style={css("width:1px;height:14px;background:#333333;margin:0 4px")} />
                 {this.toolButton("Wireframe", V.setWire, V.shWire, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.9a6.1 6.1 0 1 0 0 12.2A6.1 6.1 0 0 0 8 1.9z M8 1.9v12.2 M1.9 8h12.2 M8 1.9C5.6 3.3 5.6 12.7 8 14.1 M8 1.9c2.4 1.4 2.4 10.8 0 12.2" fill="none" stroke="currentColor" stroke-width="1"></path></svg>`)}
                 {this.toolButton("Solid", V.setSolid, V.shSolid, `<svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5" fill="currentColor" stroke="none"></circle></svg>`)}

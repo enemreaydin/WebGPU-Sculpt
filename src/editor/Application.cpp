@@ -8,6 +8,7 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <cmath>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -288,11 +289,42 @@ void Application::RemoveObject(int index) {
 
 // Rebuild every object's editor record from the current scene — used after a
 // load, where objects come straight off disk with no records yet.
+// Decompose a unit quaternion back into the Euler degrees the properties panel
+// edits. This must invert the composition in SetObjectRotation (R = Rz*Ry*Rx);
+// any other axis order silently re-poses loaded scenes. The derivation is in
+// row-major R[row][col], but glm is column-major, so R[row][col] == m[col][row].
+static std::array<float, 3> QuatToEulerDegrees(const std::array<float, 4>& r) {
+    // A zero quaternion (legacy/uninitialized data) would make normalize() NaN.
+    const float len2 = r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3];
+    if (len2 < 1e-8f) return { 0.0f, 0.0f, 0.0f };
+
+    const glm::quat q = glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));  // ctor is (w,x,y,z)
+    const glm::mat3 m = glm::mat3_cast(q);
+
+    // R[2][0] == -sin(beta); clamp because float drift past 1.0 makes asin NaN.
+    const float sinBeta = std::clamp(-m[0][2], -1.0f, 1.0f);
+    const float beta = std::asin(sinBeta);
+
+    float alpha, gamma;
+    if (std::abs(sinBeta) > 0.9999f) {
+        // Gimbal lock: cos(beta) == 0, so X and Z turn about the same physical
+        // axis and only their sum survives. Pin Z, fold the rest into X.
+        gamma = 0.0f;
+        alpha = std::atan2(sinBeta * m[1][0], m[1][1]);
+    } else {
+        alpha = std::atan2(m[1][2], m[2][2]);
+        gamma = std::atan2(m[0][1], m[0][0]);
+    }
+    return { glm::degrees(alpha), glm::degrees(beta), glm::degrees(gamma) };
+}
+
 void Application::RebuildEditorRecords() {
     editorStore.Clear();
     for (const SdfObjectData& o : sceneManager.GetObjects()) {
-        editorStore.Create(o.objectId, static_cast<SdfObjectType>(o.type),
-                           { o.size[0], o.size[1], o.size[2] });
+        EditorObject& eo = editorStore.Create(o.objectId, static_cast<SdfObjectType>(o.type),
+                                              { o.size[0], o.size[1], o.size[2] });
+        // The quaternion round-trips through .sdfo; the Euler angles do not.
+        eo.rotationEuler = QuatToEulerDegrees(o.rotation);
     }
 }
 
@@ -655,6 +687,22 @@ bool Application::GetSelectedObjectPosition(glm::vec3& outPosition) const {
     return true;
 }
 
+// The selection's rotation as a unit quaternion, for the gizmo's Local space.
+// Degenerate (zero) quaternions fall back to identity rather than NaN.
+bool Application::GetSelectedObjectRotation(glm::quat& outRotation) const {
+    const auto& objects = sceneManager.GetObjects();
+    int index = selectionState.selectedObjectIndex;
+    if (index < 0 || index >= static_cast<int>(objects.size()))
+        return false;
+
+    const auto& r = objects[index].rotation;
+    float len2 = r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3];
+    outRotation = (len2 < 1e-8f)
+        ? glm::quat(1.0f, 0.0f, 0.0f, 0.0f)
+        : glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));  // ctor is (w,x,y,z)
+    return true;
+}
+
 // Current camera view/proj for gizmo hit-testing (matches the render frame).
 static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeight,
                                  glm::mat4& v, glm::mat4& p) {
@@ -666,23 +714,25 @@ static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeig
 
 int Application::GizmoHover(float mouseX, float mouseY) {
     glm::vec3 selectedPos;
-    if (!GetSelectedObjectPosition(selectedPos))
+    glm::quat selectedRot;
+    if (!GetSelectedObjectPosition(selectedPos) || !GetSelectedObjectRotation(selectedRot))
         return 0;
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
-    return gizmoController.Hover(glm::vec2(mouseX, mouseY), selectedPos, v, p,
+    return gizmoController.Hover(glm::vec2(mouseX, mouseY), selectedPos, selectedRot, v, p,
         static_cast<float>(renderWidth), static_cast<float>(renderHeight));
 }
 
 void Application::GizmoBeginDrag(float mouseX, float mouseY) {
     glm::vec3 selectedPos;
-    if (!GetSelectedObjectPosition(selectedPos))
+    glm::quat selectedRot;
+    if (!GetSelectedObjectPosition(selectedPos) || !GetSelectedObjectRotation(selectedRot))
         return;
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
-    gizmoController.BeginDrag(glm::vec2(mouseX, mouseY), selectedPos, v, p,
+    gizmoController.BeginDrag(glm::vec2(mouseX, mouseY), selectedPos, selectedRot, v, p,
         static_cast<float>(renderWidth), static_cast<float>(renderHeight));
 }
 
@@ -694,11 +744,26 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
+    const float w = static_cast<float>(renderWidth);
+    const float h = static_cast<float>(renderHeight);
+
+    if (gizmoController.Mode() == GizmoMode::Rotate) {
+        glm::quat newRotation;
+        if (!gizmoController.DragRotate(glm::vec2(mouseX, mouseY), v, p, w, h, newRotation))
+            return;
+
+        objects[index].rotation = { newRotation.x, newRotation.y, newRotation.z, newRotation.w };
+        // Keep the editor record (and therefore the properties panel) in step
+        // with what the drag just did to the GPU-side quaternion.
+        if (EditorObject* eo = editorStore.Find(objects[index].objectId))
+            eo->rotationEuler = QuatToEulerDegrees(objects[index].rotation);
+
+        sceneSerializer.RefreshSceneBuffer();
+        return;
+    }
 
     glm::vec3 newPosition;
-    if (!gizmoController.Drag(glm::vec2(mouseX, mouseY), v, p,
-            static_cast<float>(renderWidth), static_cast<float>(renderHeight),
-            newPosition))
+    if (!gizmoController.DragTranslate(glm::vec2(mouseX, mouseY), v, p, w, h, newPosition))
         return;
 
     objects[index].position = { newPosition.x, newPosition.y, newPosition.z, 0.0f };
@@ -714,18 +779,23 @@ void Application::GizmoEndDrag() {
 // camera matrices.
 void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
     glm::vec3 origin;
-    bool visible = gizmoEnabled && GetSelectedObjectPosition(origin);
+    glm::quat rotation;
+    bool visible = gizmoEnabled && GetSelectedObjectPosition(origin)
+                                && GetSelectedObjectRotation(rotation);
 
     globals.gizmoVisible = visible ? 1 : 0;
     globals.gizmoHovered = static_cast<int32_t>(gizmoController.HoveredAxis());
     globals.gizmoActive  = static_cast<int32_t>(gizmoController.ActiveAxis());
+    globals.gizmoMode    = static_cast<int32_t>(gizmoController.Mode());
     if (!visible)
         return;
 
+    // The endpoints carry the space (world vs local) into the shader implicitly:
+    // AxisEndWorld already turns each axis by the object's rotation in Local mode.
     float h = static_cast<float>(renderHeight);
-    glm::vec3 ex = gizmoController.AxisEndWorld(GizmoAxis::X, origin, v, p, h);
-    glm::vec3 ey = gizmoController.AxisEndWorld(GizmoAxis::Y, origin, v, p, h);
-    glm::vec3 ez = gizmoController.AxisEndWorld(GizmoAxis::Z, origin, v, p, h);
+    glm::vec3 ex = gizmoController.AxisEndWorld(GizmoAxis::X, origin, rotation, v, p, h);
+    glm::vec3 ey = gizmoController.AxisEndWorld(GizmoAxis::Y, origin, rotation, v, p, h);
+    glm::vec3 ez = gizmoController.AxisEndWorld(GizmoAxis::Z, origin, rotation, v, p, h);
 
     globals.gizmoOrigin[0] = origin.x; globals.gizmoOrigin[1] = origin.y; globals.gizmoOrigin[2] = origin.z; globals.gizmoOrigin[3] = 0.0f;
     globals.gizmoAxisX[0] = ex.x; globals.gizmoAxisX[1] = ex.y; globals.gizmoAxisX[2] = ex.z; globals.gizmoAxisX[3] = 0.0f;

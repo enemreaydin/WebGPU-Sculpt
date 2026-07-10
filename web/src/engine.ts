@@ -65,6 +65,19 @@ export enum CsgOp {
   Intersect = 3,
 }
 
+// What the gizmo edits, and which frame its handles are aligned to. Both mirror
+// the enums in src/interaction/GizmoState.h — keep them in sync.
+export enum GizmoMode {
+  Translate = 0,
+  Rotate = 1,
+  Scale = 2,
+}
+
+export enum GizmoSpace {
+  World = 0,
+  Local = 1,
+}
+
 // Render-setting ids for Engine.setRenderSetting — mirror RenderSetting in
 // src/editor/Settings.h. Vector components are individual ids.
 export enum RenderSetting {
@@ -385,10 +398,20 @@ export class Engine {
     this.call("sdf_gizmo_end_drag", null, [], []);
   }
 
-  // Enable/disable drawing the translate gizmo (drive this from the active
-  // tool). The gizmo is rendered by the engine's SDF shader — in the same frame
-  // as the scene — so there is no overlay geometry to read back.
+  // Enable/disable drawing the gizmo (drive this from the active tool). The
+  // gizmo is rendered by the engine's SDF shader — in the same frame as the
+  // scene — so there is no overlay geometry to read back.
   setGizmoEnabled(enabled: boolean): void {
     this.call("sdf_set_gizmo_enabled", null, ["number"], [enabled ? 1 : 0]);
+  }
+
+  // Translate (arrows) or rotate (rings). Ignored by the engine mid-drag.
+  setGizmoMode(mode: GizmoMode): void {
+    this.call("sdf_set_gizmo_mode", null, ["number"], [mode]);
+  }
+
+  // Align the handles to the world axes, or to the selected object's own axes.
+  setGizmoSpace(space: GizmoSpace): void {
+    this.call("sdf_set_gizmo_space", null, ["number"], [space]);
   }
 }

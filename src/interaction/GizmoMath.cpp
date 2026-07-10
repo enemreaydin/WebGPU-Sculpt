@@ -7,6 +7,24 @@
 namespace
 {
     constexpr float EPSILON = 0.00001f;
+
+    // Below this |dot(rayDir, planeNormal)| the ray is grazing the plane and the
+    // intersection point runs off to infinity — that is a ring seen edge-on.
+    constexpr float PLANE_PARALLEL_EPSILON = 0.0005f;
+
+    // A ring point counts as "back half" once it is this far behind the ring
+    // centre along the view direction, as a fraction of the ring radius. A plain
+    // `> 0` test would speckle a ring viewed face-on, where the whole
+    // circumference sits at depth ~0 and float noise decides each pixel.
+    constexpr float RING_BACK_FACE_TOLERANCE = 0.02f;
+
+    // World-space camera forward. The view matrix maps world into camera space,
+    // where the camera looks down -Z; its rotation block is orthonormal, so the
+    // inverse is the transpose and the world forward is minus the third row.
+    glm::vec3 CameraForward(const glm::mat4& view)
+    {
+        return -glm::vec3(view[0][2], view[1][2], view[2][2]);
+    }
 }
 
 namespace GizmoMath
@@ -20,6 +38,23 @@ namespace GizmoMath
         case GizmoAxis::Z: return glm::vec3(0.0f, 0.0f, 1.0f);
         default:           return glm::vec3(0.0f);
         }
+    }
+
+    glm::vec3 AxisDirInSpace(GizmoAxis axis, const glm::quat& objectRotation, GizmoSpace space)
+    {
+        glm::vec3 dir = AxisToWorldDir(axis);
+
+        if (space == GizmoSpace::World || axis == GizmoAxis::None)
+            return dir;
+
+        // The object's rotation is local-to-world, so it carries a local axis
+        // straight into world space. Renormalize: the stored quaternion may have
+        // drifted a hair off unit length.
+        glm::vec3 rotated = objectRotation * dir;
+        float len = glm::length(rotated);
+        if (len < EPSILON)
+            return dir;
+        return rotated / len;
     }
 
     bool WorldToScreen(
@@ -47,6 +82,105 @@ namespace GizmoMath
         outScreen.x = (ndc.x * 0.5f + 0.5f) * viewportWidth;
         outScreen.y = (1.0f - (ndc.y * 0.5f + 0.5f)) * viewportHeight;
 
+        return true;
+    }
+
+    bool ScreenPointToRay(
+        const glm::vec2& mouse,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        glm::vec3& outRayOrigin,
+        glm::vec3& outRayDir
+    )
+    {
+        if (viewportWidth <= 0.0f || viewportHeight <= 0.0f)
+            return false;
+
+        // Undo WorldToScreen: pixels -> NDC. The Y flip is reinstated here, and
+        // NDC depth runs [0,1] (WebGPU convention, GLM_FORCE_DEPTH_ZERO_TO_ONE),
+        // so z=0 is the near plane and z=1 the far plane.
+        float ndcX = (2.0f * mouse.x / viewportWidth) - 1.0f;
+        float ndcY = 1.0f - (2.0f * mouse.y / viewportHeight);
+
+        glm::mat4 invViewProj = glm::inverse(proj * view);
+
+        glm::vec4 nearH = invViewProj * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+        glm::vec4 farH  = invViewProj * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+
+        if (std::abs(nearH.w) < EPSILON || std::abs(farH.w) < EPSILON)
+            return false;
+
+        glm::vec3 nearPoint = glm::vec3(nearH) / nearH.w;
+        glm::vec3 farPoint  = glm::vec3(farH) / farH.w;
+
+        glm::vec3 dir = farPoint - nearPoint;
+        if (glm::dot(dir, dir) < EPSILON)
+            return false;
+
+        outRayOrigin = nearPoint;
+        outRayDir = glm::normalize(dir);
+        return true;
+    }
+
+    bool IntersectRayPlane(
+        const glm::vec3& rayOrigin,
+        const glm::vec3& rayDir,
+        const glm::vec3& planePoint,
+        const glm::vec3& planeNormal,
+        float& outT
+    )
+    {
+        float denom = glm::dot(rayDir, planeNormal);
+        if (std::abs(denom) < PLANE_PARALLEL_EPSILON)
+            return false;
+
+        float t = glm::dot(planePoint - rayOrigin, planeNormal) / denom;
+        if (t <= 0.0f)
+            return false;
+
+        outT = t;
+        return true;
+    }
+
+    float SignedAngleAround(const glm::vec3& from, const glm::vec3& to, const glm::vec3& axis)
+    {
+        // atan2 of (the component of from x to along the axis) against (from . to)
+        // recovers the full [-pi, pi] sweep, including the sign. acos(dot) alone
+        // could not tell clockwise from counter-clockwise.
+        float sine = glm::dot(glm::cross(from, to), axis);
+        float cosine = glm::dot(from, to);
+        return std::atan2(sine, cosine);
+    }
+
+    bool ComputeRingSpoke(
+        const glm::vec2& mouse,
+        const glm::vec3& origin,
+        const glm::vec3& axisDir,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        glm::vec3& outSpoke
+    )
+    {
+        glm::vec3 rayOrigin, rayDir;
+        if (!ScreenPointToRay(mouse, view, proj, viewportWidth, viewportHeight, rayOrigin, rayDir))
+            return false;
+
+        float t;
+        if (!IntersectRayPlane(rayOrigin, rayDir, origin, axisDir, t))
+            return false;
+
+        glm::vec3 hit = rayOrigin + rayDir * t;
+        glm::vec3 spoke = hit - origin;
+
+        float len = glm::length(spoke);
+        if (len < EPSILON)   // mouse exactly on the ring centre: no angle defined
+            return false;
+
+        outSpoke = spoke / len;
         return true;
     }
 
@@ -95,6 +229,7 @@ namespace GizmoMath
 
     AxisScreenSegment BuildAxisSegment(
         GizmoAxis axis,
+        const glm::vec3& axisDir,
         const glm::vec3& origin,
         const glm::mat4& view,
         const glm::mat4& proj,
@@ -105,7 +240,7 @@ namespace GizmoMath
     {
         AxisScreenSegment result{};
         result.axis = axis;
-        result.worldDir = AxisToWorldDir(axis);
+        result.worldDir = axisDir;
 
         if (axis == GizmoAxis::None)
             return result;
@@ -133,6 +268,8 @@ namespace GizmoMath
     GizmoAxis HitTestTranslateAxes(
         const glm::vec2& mouse,
         const glm::vec3& origin,
+        const glm::quat& objectRotation,
+        GizmoSpace space,
         const glm::mat4& view,
         const glm::mat4& proj,
         float viewportWidth,
@@ -154,6 +291,7 @@ namespace GizmoMath
         {
             AxisScreenSegment seg = BuildAxisSegment(
                 axis,
+                AxisDirInSpace(axis, objectRotation, space),
                 origin,
                 view,
                 proj,
@@ -180,8 +318,70 @@ namespace GizmoMath
         return GizmoAxis::None;
     }
 
+    GizmoAxis HitTestRotateRings(
+        const glm::vec2& mouse,
+        const glm::vec3& origin,
+        const glm::quat& objectRotation,
+        GizmoSpace space,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        float desiredScreenRadiusPx,
+        float hitThresholdPx
+    )
+    {
+        glm::vec3 rayOrigin, rayDir;
+        if (!ScreenPointToRay(mouse, view, proj, viewportWidth, viewportHeight, rayOrigin, rayDir))
+            return GizmoAxis::None;
+
+        float unitsPerPixel = WorldUnitsPerPixelAt(origin, view, proj, viewportHeight);
+        float radius = std::max(unitsPerPixel * desiredScreenRadiusPx, 0.001f);
+        float worldThreshold = unitsPerPixel * hitThresholdPx;
+
+        glm::vec3 forward = CameraForward(view);
+
+        GizmoAxis bestAxis = GizmoAxis::None;
+        float bestRadial = std::numeric_limits<float>::max();
+
+        const GizmoAxis axes[3] = {
+            GizmoAxis::X,
+            GizmoAxis::Y,
+            GizmoAxis::Z
+        };
+
+        for (GizmoAxis axis : axes)
+        {
+            glm::vec3 normal = AxisDirInSpace(axis, objectRotation, space);
+
+            float t;
+            if (!IntersectRayPlane(rayOrigin, rayDir, origin, normal, t))
+                continue;   // edge-on ring, or behind the camera
+
+            glm::vec3 hit = rayOrigin + rayDir * t;
+
+            // Only the visible (near) half is grabbable — the shader hides the
+            // other half, and picking what you cannot see is disorienting.
+            if (glm::dot(hit - origin, forward) > RING_BACK_FACE_TOLERANCE * radius)
+                continue;
+
+            float radial = std::abs(glm::length(hit - origin) - radius);
+
+            if (radial < bestRadial)
+            {
+                bestRadial = radial;
+                bestAxis = axis;
+            }
+        }
+
+        if (bestRadial <= worldThreshold)
+            return bestAxis;
+
+        return GizmoAxis::None;
+    }
+
     bool ComputeTranslateDragPosition(
-        GizmoAxis axis,
+        const glm::vec3& axisDir,
         const glm::vec2& dragStartMouse,
         const glm::vec2& currentMouse,
         const glm::vec3& dragStartObjectPosition,
@@ -193,11 +393,12 @@ namespace GizmoMath
         glm::vec3& outPosition
     )
     {
-        if (axis == GizmoAxis::None)
+        if (glm::dot(axisDir, axisDir) < EPSILON)
             return false;
 
         AxisScreenSegment seg = BuildAxisSegment(
-            axis,
+            GizmoAxis::X,   // only the direction matters here, not the label
+            axisDir,
             dragStartObjectPosition,
             view,
             proj,

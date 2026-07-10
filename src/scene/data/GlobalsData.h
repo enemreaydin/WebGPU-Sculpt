@@ -12,18 +12,24 @@ struct alignas(16) GlobalsData
     float cameraPos[4];
     float cameraTarget[4];
 
-    // Translate gizmo, drawn by the SDF fragment shader so it shares the exact
-    // same frame (and camera) as the scene — no cross-surface lag. Origin and
-    // axis endpoints are world-space; the shader projects them itself. The
-    // endpoints already sit at the constant on-screen axis length.
+    // Gizmo, drawn by the SDF fragment shader so it shares the exact same frame
+    // (and camera) as the scene — no cross-surface lag. Origin and axis endpoints
+    // are world-space; the shader projects them itself. The endpoints already sit
+    // at the constant on-screen axis length, and they already point along the
+    // handle directions for the active GizmoSpace — so the shader needs to know
+    // nothing about world vs local.
+    //
+    // In rotate mode the same three endpoints do double duty: each ring's plane
+    // normal is normalize(gizmoAxis* - gizmoOrigin) and its radius is the length
+    // of that same vector. That is why adding rotate cost no new uniform data.
     float gizmoOrigin[4];  // xyz = selected object's world position
-    float gizmoAxisX[4];   // xyz = world endpoint of the +X axis handle
-    float gizmoAxisY[4];   // xyz = world endpoint of the +Y axis handle
-    float gizmoAxisZ[4];   // xyz = world endpoint of the +Z axis handle
+    float gizmoAxisX[4];   // xyz = world endpoint of the X axis handle / X ring
+    float gizmoAxisY[4];   // xyz = world endpoint of the Y axis handle / Y ring
+    float gizmoAxisZ[4];   // xyz = world endpoint of the Z axis handle / Z ring
     int32_t gizmoVisible;  // 1 = draw the gizmo
     int32_t gizmoHovered;  // hovered GizmoAxis (0 none, 1 X, 2 Y, 3 Z)
     int32_t gizmoActive;   // active/dragged GizmoAxis (0..3)
-    int32_t gizmoPad;
+    int32_t gizmoMode;     // GizmoMode: 0 = translate (arrows), 1 = rotate (rings)
 
     // Lighting / render settings consumed by the SDF shader (assets/shaders).
     // One directional light plus material and shadow/AO "look" controls. The
