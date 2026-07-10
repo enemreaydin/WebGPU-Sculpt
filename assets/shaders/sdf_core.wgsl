@@ -27,6 +27,14 @@ struct CsgCommand
     pad0 : i32,
 }
 
+fn rotateInverse(v: vec3f, q: vec4f) -> vec3f
+{
+    let u = -q.xyz;
+    let w = q.w;
+    return v + 2*cross(u, cross(u, v) + w*v);
+}
+
+
 fn sdfSphere(p : vec3f, radius : f32) -> f32
 {
     return length(p) - radius;
@@ -84,7 +92,7 @@ fn distanceCalc(p : vec3f) -> f32
         if (cmd.cmd_type == 0)
         {
             let obj = scene_objects[cmd.operand];
-            let localPos = p - obj.position.xyz;
+            let localPos = rotateInverse(p - obj.position.xyz, obj.rotation);
             var dist = 100000.0;
             switch(obj.obj_type)
             {
@@ -207,7 +215,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
         if (cmd.cmd_type == 0)
         {
             let obj = scene_objects[cmd.operand];
-            let localPos = p - obj.position.xyz;
+            let localPos = rotateInverse(p - obj.position.xyz, obj.rotation);
             var dist = 100000.0;
             switch(obj.obj_type)
             {
