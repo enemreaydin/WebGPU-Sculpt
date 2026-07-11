@@ -59,6 +59,75 @@ fn sdfTorus(p: vec3f, majorRadius: f32, minorRadius: f32) -> f32
     return length(q) - minorRadius;
 }
 
+fn sdfLink(p: vec3f, le: f32, r1: f32, r2: f32) -> f32
+{
+    let q = vec3f(p.x, max(abs(p.y) - le, 0.0), p.z);
+    return length(vec2f(length(q.xy) - r1, q.z)) - r2;
+}
+
+fn sdfCone(p: vec3f, h: f32, angle: f32) -> f32
+{
+    let c = vec2f(sin(angle), cos(angle));
+    let q = h * vec2f(c.x / c.y, -1.0);
+    let w = vec2f(length(p.xz), p.y);
+    let a = w - q * clamp(dot(w, q) / dot(q, q), 0.0, 1.0);
+    let b = w - q * vec2f(clamp(w.x / q.x, 0.0, 1.0), 1.0);
+    let k = sign(q.y);
+    let d = min(dot(a, a), dot(b, b));
+    let s = max(k * (w.x * q.y - w.y * q.x), k * (w.y - q.y));
+    return sqrt(d) * sign(s);
+}
+
+fn sdfCapsule(p: vec3f, a: vec3f, b: vec3f, r: f32) -> f32
+{
+    let pa = p - a;
+    let ba = b - a;
+    let h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h) - r;
+}
+
+fn sdfSolidAngle(p: vec3f, ra: f32, angle: f32) -> f32
+{
+    let c = vec2f(sin(angle), cos(angle));
+    let q = vec2f(length(p.xz), p.y);
+    let l = length(q) - ra;
+    let m = length(q - c * clamp(dot(q, c), 0.0, ra));
+    return max(l, m * sign(c.y * q.x - c.x * q.y));
+}
+
+fn sdfPyramid(pIn: vec3f, h: f32) -> f32
+{
+    let m2 = h * h + 0.25;
+
+    var px = abs(pIn.x);
+    var pz = abs(pIn.z);
+    let py = pIn.y;
+    if (pz > px)
+    {
+        let tmp = px;
+        px = pz;
+        pz = tmp;
+    }
+    px = px - 0.5;
+    pz = pz - 0.5;
+
+    let qx = pz;
+    let qy = h * py - 0.5 * px;
+    let qz = h * px + 0.5 * py;
+
+    let s = max(-qx, 0.0);
+    let t = clamp((qy - 0.5 * pz) / (m2 + 0.25), 0.0, 1.0);
+    let a = m2 * (qx + s) * (qx + s) + qy * qy;
+    let b = m2 * (qx + 0.5 * t) * (qx + 0.5 * t) + (qy - m2 * t) * (qy - m2 * t);
+
+    var d2 = 0.0;
+    if (min(qy, -qx * m2 - qy * 0.5) <= 0.0)
+    {
+        d2 = min(a, b);
+    }
+    return sqrt((d2 + qz * qz) / m2) * sign(max(qz, -py));
+}
+
 fn opUnion(d1 : f32, d2 : f32) -> f32
 {
     return min(d1, d2);
@@ -100,6 +169,11 @@ fn distanceCalc(p : vec3f) -> f32
                 case 1: { dist = sdfBox(localPos, obj.size.xyz); }
                 case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
                 case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
+                case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
+                case 5: { dist = sdfCone(localPos, obj.size.x, obj.size.y); }
+                case 6: { dist = sdfCapsule(localPos, vec3f(0.0, -obj.size.y, 0.0), vec3f(0.0, obj.size.y, 0.0), obj.size.x); }
+                case 7: { dist = sdfSolidAngle(localPos, obj.size.x, obj.size.y); }
+                case 8: { dist = sdfPyramid(localPos, obj.size.x); }
                 default: { dist = 100000.0; }
             }
             distanceStack[sp] = dist;
@@ -223,6 +297,11 @@ fn evaluateScene(p : vec3f) -> SceneResult
                 case 1: { dist = sdfBox(localPos, obj.size.xyz); }
                 case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
                 case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
+                case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
+                case 5: { dist = sdfCone(localPos, obj.size.x, obj.size.y); }
+                case 6: { dist = sdfCapsule(localPos, vec3f(0.0, -obj.size.y, 0.0), vec3f(0.0, obj.size.y, 0.0), obj.size.x); }
+                case 7: { dist = sdfSolidAngle(localPos, obj.size.x, obj.size.y); }
+                case 8: { dist = sdfPyramid(localPos, obj.size.x); }
                 default: { dist = 100000.0; }
             }
 

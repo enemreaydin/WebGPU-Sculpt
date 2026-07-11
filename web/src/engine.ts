@@ -5,6 +5,11 @@ export enum PrimitiveType {
   Box = 1,
   Cylinder = 2,
   Torus = 3,
+  Link = 4,
+  Cone = 5,
+  Capsule = 6,
+  SolidAngle = 7,
+  Pyramid = 8,
 }
 
 // Shape parameters interpreted per primitive type (mirrors PrimitiveParams).
@@ -13,6 +18,8 @@ export interface SdfParams {
   height: number;
   thickness: number;
   roundness: number;
+  length: number;
+  angle: number;
 }
 
 // Identifies one shape parameter for setObjectParam (mirrors PrimitiveParam).
@@ -21,6 +28,8 @@ export enum ShapeParam {
   Height = 1,
   Thickness = 2,
   Roundness = 3,
+  Length = 4,
+  Angle = 5,
 }
 
 export interface SdfObject {

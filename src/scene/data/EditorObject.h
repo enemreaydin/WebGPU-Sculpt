@@ -14,6 +14,10 @@ struct PrimitiveParams
     float height    = 1.0f;
     float thickness = 0.25f;
     float roundness = 0.02f;
+    // Link: straight-segment half-length. Angle (radians): half-angle for cone /
+    // solid-angle. Neither is multiplied by scale (see PrimitiveGeometry).
+    float length    = 0.5f;
+    float angle     = 0.6f;
 };
 
 // Identifies a single shape parameter, so the control API can address one field
@@ -23,7 +27,9 @@ enum class PrimitiveParam : int32_t
     Radius    = 0,
     Height    = 1,
     Thickness = 2,
-    Roundness = 3
+    Roundness = 3,
+    Length    = 4,
+    Angle     = 5
 };
 
 // Editor-facing attributes for one scene object. These live only in the engine

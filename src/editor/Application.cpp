@@ -251,6 +251,11 @@ int Application::AddPrimitive(SdfObjectType type) {
     case SdfObjectType::Box:      object = SdfObjectFactory::CreateBox(1.0f, 1.0f, 1.0f); break;
     case SdfObjectType::Cylinder: object = SdfObjectFactory::CreateCylinder(0.7f, 1.5f); break;
     case SdfObjectType::Torus:    object = SdfObjectFactory::CreateTorus(1.0f, 0.25f); break;
+    case SdfObjectType::Link:       object = SdfObjectFactory::CreateLink(0.5f, 0.4f, 0.15f); break;
+    case SdfObjectType::Cone:       object = SdfObjectFactory::CreateCone(1.5f, 0.5f); break;
+    case SdfObjectType::Capsule:    object = SdfObjectFactory::CreateCapsule(0.4f, 0.7f); break;
+    case SdfObjectType::SolidAngle: object = SdfObjectFactory::CreateSolidAngle(1.2f, 0.8f); break;
+    case SdfObjectType::Pyramid:    object = SdfObjectFactory::CreatePyramid(1.2f); break;
     default: return -1;
     }
 
@@ -434,6 +439,8 @@ void Application::SetObjectParam(int index, int paramId, float value) {
     case PrimitiveParam::Height:    eo->params.height = value; break;
     case PrimitiveParam::Thickness: eo->params.thickness = value; break;
     case PrimitiveParam::Roundness: eo->params.roundness = value; break;
+    case PrimitiveParam::Length:    eo->params.length = value; break;
+    case PrimitiveParam::Angle:     eo->params.angle = value; break;
     default: return;
     }
     auto size = PrimitiveGeometry::ComputeSize(
@@ -526,6 +533,11 @@ const char* Application::TypeName(int32_t type) {
     case SdfObjectType::Box:      return "Box";
     case SdfObjectType::Cylinder: return "Cylinder";
     case SdfObjectType::Torus:    return "Torus";
+    case SdfObjectType::Link:       return "Link";
+    case SdfObjectType::Cone:       return "Cone";
+    case SdfObjectType::Capsule:    return "Capsule";
+    case SdfObjectType::SolidAngle: return "SolidAngle";
+    case SdfObjectType::Pyramid:    return "Pyramid";
     default:                      return "Object";
     }
 }
@@ -576,7 +588,9 @@ std::string Application::GetSceneJson() const {
             << ",\"params\":{\"radius\":" << e.params.radius
             << ",\"height\":" << e.params.height
             << ",\"thickness\":" << e.params.thickness
-            << ",\"roundness\":" << e.params.roundness << "}"
+            << ",\"roundness\":" << e.params.roundness
+            << ",\"length\":" << e.params.length
+            << ",\"angle\":" << e.params.angle << "}"
             << "}";
     }
     out << "]";

@@ -15,6 +15,11 @@ namespace
         case SdfObjectType::Box:      return "Box";
         case SdfObjectType::Cylinder: return "Cylinder";
         case SdfObjectType::Torus:    return "Torus";
+        case SdfObjectType::Link:       return "Link";
+        case SdfObjectType::Cone:       return "Cone";
+        case SdfObjectType::Capsule:    return "Capsule";
+        case SdfObjectType::SolidAngle: return "SolidAngle";
+        case SdfObjectType::Pyramid:    return "Pyramid";
         }
         return "Object";
     }

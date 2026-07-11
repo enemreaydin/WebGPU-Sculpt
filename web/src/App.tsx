@@ -7,8 +7,16 @@ const TYPE_ENUM: Record<string, PrimitiveType> = {
   box: PrimitiveType.Box,
   cylinder: PrimitiveType.Cylinder,
   torus: PrimitiveType.Torus,
+  link: PrimitiveType.Link,
+  cone: PrimitiveType.Cone,
+  capsule: PrimitiveType.Capsule,
+  solidAngle: PrimitiveType.SolidAngle,
+  pyramid: PrimitiveType.Pyramid,
 };
-const TYPE_NAME: Record<number, string> = { 0: "sphere", 1: "box", 2: "cylinder", 3: "torus" };
+const TYPE_NAME: Record<number, string> = {
+  0: "sphere", 1: "box", 2: "cylinder", 3: "torus",
+  4: "link", 5: "cone", 6: "capsule", 7: "solidAngle", 8: "pyramid",
+};
 
 /* ============================================================================
  * SDF Editor UI — faithful port of the root SDFEditorUI.html design mockup.
@@ -118,6 +126,11 @@ export default class App extends React.Component<any, any> {
     box: "M8 1.75 14 4.9v6.2L8 14.25 2 11.1V4.9L8 1.75z M2 4.9l6 3.1 6-3.1 M8 8v6.25",
     cylinder: "M3.75 4.2C3.75 3 5.65 2 8 2s4.25 1 4.25 2.2v7.6C12.25 13 10.35 14 8 14s-4.25-1-4.25-2.2V4.2z M3.75 4.2C3.75 5.4 5.65 6.4 8 6.4s4.25-1 4.25-2.2",
     torus: "M8 4.25c3.7 0 6.75 1.7 6.75 3.75S11.7 11.75 8 11.75 1.25 10.05 1.25 8 4.3 4.25 8 4.25z M5.75 8c0-.7 1-1.25 2.25-1.25S10.25 7.3 10.25 8 9.25 9.25 8 9.25 5.75 8.7 5.75 8z",
+    link: "M6 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M10 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+    cone: "M8 2 14 13H2L8 2z M2 13c0 .8 2.7 1.5 6 1.5s6-.7 6-1.5",
+    capsule: "M8 2.25c-1.8 0-3.25 1.45-3.25 3.25v5c0 1.8 1.45 3.25 3.25 3.25s3.25-1.45 3.25-3.25v-5C11.25 3.7 9.8 2.25 8 2.25z",
+    solidAngle: "M8 8 8 2A6 6 0 0 1 13.2 5z M8 8 2.8 5A6 6 0 0 1 8 2",
+    pyramid: "M8 2 14.5 12.5H1.5L8 2z M1.5 12.5 8 9.5l6.5 3 M8 2v7.5",
     eye: "M1.5 8s2.4-4.25 6.5-4.25S14.5 8 14.5 8s-2.4 4.25-6.5 4.25S1.5 8 1.5 8z M8 9.9a1.9 1.9 0 1 0 0-3.8 1.9 1.9 0 0 0 0 3.8z",
     eyeOff: "M2.7 8.9C1.95 8.4 1.5 8 1.5 8s2.4-4.25 6.5-4.25c.9 0 1.75.2 2.5.55 M13.3 7.1c.75.5 1.2.9 1.2.9s-2.4 4.25-6.5 4.25c-.9 0-1.75-.2-2.5-.55 M3 13.5 13 2.5",
     lock: "M5 7.25V5a3 3 0 0 1 6 0v2.25 M3.75 7.25h8.5v6h-8.5v-6z",
@@ -132,12 +145,22 @@ export default class App extends React.Component<any, any> {
     box: { round: 0.02 },
     cylinder: { radius: 0.4, height: 2 },
     torus: { radius: 0.8, thickness: 0.25 },
+    link: { radius: 0.4, length: 0.5, thickness: 0.15 },
+    cone: { height: 1.5, angle: 0.5 },
+    capsule: { radius: 0.4, height: 0.7 },
+    solidAngle: { radius: 1.2, angle: 0.8 },
+    pyramid: { height: 1.2 },
   };
   PRM_ROWS: any = {
     sphere: [["Radius", "radius", 0.01]],
     box: [["Round", "round", 0.005]],
     cylinder: [["Radius", "radius", 0.01], ["Height", "height", 0.01]],
     torus: [["Radius", "radius", 0.01], ["Thickness", "thickness", 0.005]],
+    link: [["Radius", "radius", 0.01], ["Length", "length", 0.01], ["Thickness", "thickness", 0.005]],
+    cone: [["Height", "height", 0.01], ["Angle", "angle", 0.01]],
+    capsule: [["Radius", "radius", 0.01], ["Height", "height", 0.01]],
+    solidAngle: [["Radius", "radius", 0.01], ["Angle", "angle", 0.01]],
+    pyramid: [["Height", "height", 0.01]],
   };
 
   // Property-row param name -> engine ShapeParam id (see engine.ts).
@@ -146,6 +169,8 @@ export default class App extends React.Component<any, any> {
     height: ShapeParam.Height,
     thickness: ShapeParam.Thickness,
     round: ShapeParam.Roundness,
+    length: ShapeParam.Length,
+    angle: ShapeParam.Angle,
   };
 
   // Transient (non-render) scratch handles used by drag helpers.
@@ -496,6 +521,11 @@ export default class App extends React.Component<any, any> {
     if (typeName === "sphere") prm = { radius: p.radius };
     else if (typeName === "cylinder") prm = { radius: p.radius, height: p.height };
     else if (typeName === "torus") prm = { radius: p.radius, thickness: p.thickness };
+    else if (typeName === "link") prm = { radius: p.radius, length: p.length, thickness: p.thickness };
+    else if (typeName === "cone") prm = { height: p.height, angle: p.angle };
+    else if (typeName === "capsule") prm = { radius: p.radius, height: p.height };
+    else if (typeName === "solidAngle") prm = { radius: p.radius, angle: p.angle };
+    else if (typeName === "pyramid") prm = { height: p.height };
     else prm = { round: p.roundness };
     const c = o.color.map((v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255));
     return {
@@ -960,6 +990,8 @@ export default class App extends React.Component<any, any> {
     e.setObjectParam(idx, ShapeParam.Height, o.params.height);
     e.setObjectParam(idx, ShapeParam.Thickness, o.params.thickness);
     e.setObjectParam(idx, ShapeParam.Roundness, o.params.roundness);
+    e.setObjectParam(idx, ShapeParam.Length, o.params.length);
+    e.setObjectParam(idx, ShapeParam.Angle, o.params.angle);
     e.setObjectRotation(idx, o.rotation[0], o.rotation[1], o.rotation[2]);
     e.setObjectColor(idx, o.color[0], o.color[1], o.color[2]);
     e.setObjectName(idx, (o.name || typeName) + " copy");
@@ -1383,6 +1415,11 @@ export default class App extends React.Component<any, any> {
           mi("Add Box", "", () => this.addPrimitive("box")),
           mi("Add Cylinder", "", () => this.addPrimitive("cylinder")),
           mi("Add Torus", "", () => this.addPrimitive("torus")),
+          mi("Add Link", "", () => this.addPrimitive("link")),
+          mi("Add Cone", "", () => this.addPrimitive("cone")),
+          mi("Add Capsule", "", () => this.addPrimitive("capsule")),
+          mi("Add Solid Angle", "", () => this.addPrimitive("solidAngle")),
+          mi("Add Pyramid", "", () => this.addPrimitive("pyramid")),
           sep,
           mi("Frame Selected", ".", () => this.status("Frame Selected — camera op (engine)")),
           mi("Frame All", "Home", () => this.status("Frame All — camera op (engine)")),
@@ -1426,6 +1463,11 @@ export default class App extends React.Component<any, any> {
         mi("Add Box", "", () => this.addPrimitive("box")),
         mi("Add Cylinder", "", () => this.addPrimitive("cylinder")),
         mi("Add Torus", "", () => this.addPrimitive("torus")),
+        mi("Add Link", "", () => this.addPrimitive("link")),
+        mi("Add Cone", "", () => this.addPrimitive("cone")),
+        mi("Add Capsule", "", () => this.addPrimitive("capsule")),
+        mi("Add Solid Angle", "", () => this.addPrimitive("solidAngle")),
+        mi("Add Pyramid", "", () => this.addPrimitive("pyramid")),
         sep,
         mi("Duplicate", "⇧D", () => this.duplicateSel(), !isObj),
         mi("Delete", "X", () => this.deleteSel(), !isObj),
@@ -1460,6 +1502,11 @@ export default class App extends React.Component<any, any> {
       addBox: () => this.addPrimitive("box"),
       addCyl: () => this.addPrimitive("cylinder"),
       addTor: () => this.addPrimitive("torus"),
+      addLink: () => this.addPrimitive("link"),
+      addCone: () => this.addPrimitive("cone"),
+      addCaps: () => this.addPrimitive("capsule"),
+      addSolid: () => this.addPrimitive("solidAngle"),
+      addPyr: () => this.addPrimitive("pyramid"),
       csgUnion: () => this.csg("Union"),
       csgSub: () => this.csg("Subtract"),
       csgInt: () => this.csg("Intersect"),
@@ -1568,7 +1615,7 @@ export default class App extends React.Component<any, any> {
         this.setState((s: any) => ({ dd: !s.dd, opDd: false, openMenu: null }));
       },
       ddOpen: S.dd,
-      typeOptions: ["sphere", "box", "cylinder", "torus"].map((t) => ({ label: this.cap(t), fg: isObj && selTypeName === t ? "#e8912d" : "#d6d6d6", onClick: typeSet(t) })),
+      typeOptions: ["sphere", "box", "cylinder", "torus", "link", "cone", "capsule", "solidAngle", "pyramid"].map((t) => ({ label: this.cap(t), fg: isObj && selTypeName === t ? "#e8912d" : "#d6d6d6", onClick: typeSet(t) })),
       opName: d ? d.op : "",
       opToggle: (e: any) => {
         e.stopPropagation();
@@ -1763,6 +1810,11 @@ export default class App extends React.Component<any, any> {
               ["Add Box", V.addBox, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75 14 4.9v6.2L8 14.25 2 11.1V4.9L8 1.75z M2 4.9l6 3.1 6-3.1 M8 8v6.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
               ["Add Cylinder", V.addCyl, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3.75 4.2C3.75 3 5.65 2 8 2s4.25 1 4.25 2.2v7.6C12.25 13 10.35 14 8 14s-4.25-1-4.25-2.2V4.2z M3.75 4.2C3.75 5.4 5.65 6.4 8 6.4s4.25-1 4.25-2.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
               ["Add Torus", V.addTor, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 4.25c3.7 0 6.75 1.7 6.75 3.75S11.7 11.75 8 11.75 1.25 10.05 1.25 8 4.3 4.25 8 4.25z M5.75 8c0-.7 1-1.25 2.25-1.25S10.25 7.3 10.25 8 9.25 9.25 8 9.25 5.75 8.7 5.75 8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
+              ["Add Link", V.addLink, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M10 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
+              ["Add Cone", V.addCone, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2 14 13H2L8 2z M2 13c0 .8 2.7 1.5 6 1.5s6-.7 6-1.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
+              ["Add Capsule", V.addCaps, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2.25c-1.8 0-3.25 1.45-3.25 3.25v5c0 1.8 1.45 3.25 3.25 3.25s3.25-1.45 3.25-3.25v-5C11.25 3.7 9.8 2.25 8 2.25z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
+              ["Add Solid Angle", V.addSolid, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 8 8 2A6 6 0 0 1 13.2 5z M8 8 2.8 5A6 6 0 0 1 8 2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
+              ["Add Pyramid", V.addPyr, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2 14.5 12.5H1.5L8 2z M1.5 12.5 8 9.5l6.5 3 M8 2v7.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
             ].map(([title, onClick, svg]: any, i) => (
               <Hv
                 key={i}
