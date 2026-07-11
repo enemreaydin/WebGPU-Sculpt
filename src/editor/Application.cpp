@@ -1,6 +1,7 @@
 #include "Application.h"
 #include <glm/gtc/quaternion.hpp>
 #include "utils/FileHelper.h"
+#include "editor/command/SceneEditCommand.h"
 #include "scene/SdfObjectFactory.h"
 #include "scene/PrimitiveGeometry.h"
 #include "interaction/GizmoMath.h"
@@ -9,10 +10,14 @@
 #include <filesystem>
 #include <algorithm>
 #include <cmath>
+#include <array>
+#include <memory>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
+
+static std::array<float, 3> QuatToEulerDegrees(const std::array<float, 4>& r);
 
 bool Application::Initialize() {
     FindProjectRoot();
@@ -51,7 +56,7 @@ void Application::MainLoop() {
     }
 
     if (!renderer.GetObjectIdTargetView()) {
-    return; 
+        return;
     }
 
     UpdateCamera();
@@ -96,9 +101,9 @@ void Application::MainLoop() {
     RenderPassColorAttachment objectIdAttachment = {};
     objectIdAttachment.view = renderer.GetObjectIdTargetView();
     objectIdAttachment.resolveTarget = nullptr;
-    #ifdef __EMSCRIPTEN__
-        objectIdAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-    #endif
+#ifdef __EMSCRIPTEN__
+    objectIdAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
     objectIdAttachment.loadOp = LoadOp::Clear;
     objectIdAttachment.storeOp = StoreOp::Store;
     objectIdAttachment.clearValue = WGPUColor{ 4294967295.0, 0.0, 0.0, 0.0 };  // 0xffffffff sentinel: "nothing"
@@ -220,6 +225,135 @@ void Application::UpdateCamera() {
     globals.cameraTarget[2] = camTargetPos.z;
 }
 
+
+// ---------------------------------------------------------------------------
+// Undo / Redo
+// ---------------------------------------------------------------------------
+
+void Application::OnSceneChanged()
+{
+    const auto& objects = sceneManager.GetObjects();
+
+    for (const SdfObjectData& object : objects)
+    {
+        if (EditorObject* editorObject = editorStore.Find(object.objectId))
+        {
+            editorObject->rotationEuler = QuatToEulerDegrees(object.rotation);
+        }
+    }
+
+    sceneSerializer.RefreshSceneBuffer();
+}
+
+SceneEditSnapshot Application::CaptureSceneEditSnapshot() const
+{
+    SceneEditSnapshot snapshot;
+    snapshot.scene = sceneManager.CaptureState();
+    snapshot.editorObjects = editorStore.CaptureState();
+    snapshot.selection = selectionState;
+    snapshot.settings = appSettings;
+    return snapshot;
+}
+
+bool Application::ShouldRecordSceneEdit() const
+{
+    return !m_UndoStack.IsApplyingHistory() && m_SceneEditDepth == 0;
+}
+
+void Application::FinishSceneEdit(const char* name, const SceneEditSnapshot& before)
+{
+    if (m_UndoStack.IsApplyingHistory())
+        return;
+
+    auto command = std::make_unique<SceneEditCommand>(
+        name ? name : "Scene Edit",
+        before,
+        CaptureSceneEditSnapshot(),
+        editorStore,
+        selectionState,
+        appSettings
+    );
+    m_UndoStack.PushAlreadyExecuted(std::move(command));
+}
+
+void Application::BeginSceneEdit(const char* name)
+{
+    if (m_UndoStack.IsApplyingHistory())
+        return;
+
+    if (m_SceneEditDepth == 0)
+    {
+        m_SceneEditName = name ? name : "Scene Edit";
+        m_SceneEditBefore = CaptureSceneEditSnapshot();
+    }
+    ++m_SceneEditDepth;
+}
+
+void Application::CommitSceneEdit()
+{
+    if (m_SceneEditDepth <= 0)
+        return;
+
+    --m_SceneEditDepth;
+    if (m_SceneEditDepth == 0)
+    {
+        FinishSceneEdit(m_SceneEditName.c_str(), m_SceneEditBefore);
+        m_SceneEditName.clear();
+    }
+}
+
+void Application::CancelSceneEdit()
+{
+    if (m_SceneEditDepth <= 0)
+        return;
+
+    m_SceneEditDepth = 0;
+    sceneManager.RestoreState(m_SceneEditBefore.scene);
+    editorStore.RestoreState(m_SceneEditBefore.editorObjects);
+    selectionState = m_SceneEditBefore.selection;
+    appSettings = m_SceneEditBefore.settings;
+    m_SceneEditName.clear();
+    OnSceneChanged();
+}
+
+void Application::Undo() {
+    if (!m_UndoStack.CanUndo())
+        return;
+
+    m_UndoStack.Undo(sceneManager);
+    UpdateHighlightIndex();
+    OnSceneChanged();
+}
+
+void Application::Redo() {
+    if (!m_UndoStack.CanRedo())
+        return;
+
+    m_UndoStack.Redo(sceneManager);
+    UpdateHighlightIndex();
+    OnSceneChanged();
+}
+
+bool Application::CanUndo() const {
+    return m_UndoStack.CanUndo();
+}
+
+bool Application::CanRedo() const {
+    return m_UndoStack.CanRedo();
+}
+
+void Application::ClearUndoStack() {
+    m_UndoStack.Clear();
+}
+
+UndoStack& Application::GetUndoStack() {
+    return m_UndoStack;
+}
+
+const UndoStack& Application::GetUndoStack() const {
+    return m_UndoStack;
+}
+
 // ---------------------------------------------------------------------------
 // Control API
 // ---------------------------------------------------------------------------
@@ -254,6 +388,10 @@ int Application::AddPrimitive(SdfObjectType type) {
     default: return -1;
     }
 
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+
     sceneManager.AddObject(object);
     int index = static_cast<int>(sceneManager.GetObjects().size()) - 1;
 
@@ -261,20 +399,25 @@ int Application::AddPrimitive(SdfObjectType type) {
     // from the factory size).
     const SdfObjectData& created = sceneManager.GetObjects()[index];
     editorStore.Create(created.objectId, type,
-                       { created.size[0], created.size[1], created.size[2] });
+        { created.size[0], created.size[1], created.size[2] });
 
     int32_t newNodeId = sceneManager.NodeIdForObject(created.objectId);
     selectionState.Clear();
     if (newNodeId != -1) { selectionState.Add(newNodeId); selectionState.primaryNodeId = newNodeId; }
     UpdateHighlightIndex();
 
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Add Object", before);
     return index;
 }
 
 void Application::RemoveObject(int index) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
 
     editorStore.Remove(objects[index].objectId);
     sceneManager.RemoveObjectAt(index);
@@ -284,7 +427,8 @@ void Application::RemoveObject(int index) {
     else if (selectionState.selectedObjectIndex >= static_cast<int>(objects.size()))
         selectionState.selectedObjectIndex = static_cast<int>(objects.size()) - 1;
 
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Delete Object", before);
 }
 
 // Rebuild every object's editor record from the current scene — used after a
@@ -295,7 +439,7 @@ void Application::RemoveObject(int index) {
 // row-major R[row][col], but glm is column-major, so R[row][col] == m[col][row].
 static std::array<float, 3> QuatToEulerDegrees(const std::array<float, 4>& r) {
     // A zero quaternion (legacy/uninitialized data) would make normalize() NaN.
-    const float len2 = r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3];
+    const float len2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
     if (len2 < 1e-8f) return { 0.0f, 0.0f, 0.0f };
 
     const glm::quat q = glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));  // ctor is (w,x,y,z)
@@ -311,7 +455,8 @@ static std::array<float, 3> QuatToEulerDegrees(const std::array<float, 4>& r) {
         // axis and only their sum survives. Pin Z, fold the rest into X.
         gamma = 0.0f;
         alpha = std::atan2(sinBeta * m[1][0], m[1][1]);
-    } else {
+    }
+    else {
         alpha = std::atan2(m[1][2], m[2][2]);
         gamma = std::atan2(m[0][1], m[0][0]);
     }
@@ -322,7 +467,7 @@ void Application::RebuildEditorRecords() {
     editorStore.Clear();
     for (const SdfObjectData& o : sceneManager.GetObjects()) {
         EditorObject& eo = editorStore.Create(o.objectId, static_cast<SdfObjectType>(o.type),
-                                              { o.size[0], o.size[1], o.size[2] });
+            { o.size[0], o.size[1], o.size[2] });
         // The quaternion round-trips through .sdfo; the Euler angles do not.
         eo.rotationEuler = QuatToEulerDegrees(o.rotation);
     }
@@ -333,6 +478,10 @@ void Application::SelectObject(int index) {
     selectionState.selectedObjectIndex = index;
 }
 void Application::DeleteSelection() {
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+
     // IndexForNodeId returns -1 for a node already killed as part of an earlier
     // subtree in this same loop, so overlapping selections are handled safely.
     for (int32_t nodeId : selectionState.selectedNodeIds) {
@@ -341,29 +490,42 @@ void Application::DeleteSelection() {
     }
     selectionState.Clear();
     selectionState.selectedObjectIndex = -1;
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Delete Selection", before);
 }
 
 
 void Application::SetObjectPosition(int index, float x, float y, float z) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     objects[index].position = { x, y, z, 0.0f };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Move Object", before);
 }
 
 void Application::SetObjectSize(int index, float x, float y, float z) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     objects[index].size = { x, y, z, 0.0f };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Resize Object", before);
 }
 
 void Application::SetObjectColor(int index, float r, float g, float b) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     objects[index].color = { r, g, b, 1.0f };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Change Color", before);
 }
 
 // --- Editor attribute setters -----------------------------------------------
@@ -373,22 +535,34 @@ void Application::SetObjectColor(int index, float r, float g, float b) {
 void Application::SetObjectName(int index, const char* name) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     if (EditorObject* eo = editorStore.Find(objects[index].objectId))
         eo->name = name ? name : "";
+    if (record) FinishSceneEdit("Rename Object", before);
 }
 
 void Application::SetObjectVisible(int index, bool visible) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     if (EditorObject* eo = editorStore.Find(objects[index].objectId))
         eo->visible = visible;
+    if (record) FinishSceneEdit("Set Visibility", before);
 }
 
 void Application::SetObjectLocked(int index, bool locked) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     if (EditorObject* eo = editorStore.Find(objects[index].objectId))
         eo->locked = locked;
+    if (record) FinishSceneEdit("Set Lock", before);
 }
 
 void Application::SetObjectRotation(int index, float x, float y, float z) {
@@ -396,6 +570,9 @@ void Application::SetObjectRotation(int index, float x, float y, float z) {
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
     EditorObject* eo = editorStore.Find(objects[index].objectId);
     if (!eo) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     eo->rotationEuler = { x, y, z };
 
     // Euler degrees -> local-to-world quaternion. Extrinsic X, then Y, then Z:
@@ -405,11 +582,12 @@ void Application::SetObjectRotation(int index, float x, float y, float z) {
     const glm::quat qx = glm::angleAxis(glm::radians(x), glm::vec3(1.0f, 0.0f, 0.0f));
     const glm::quat qy = glm::angleAxis(glm::radians(y), glm::vec3(0.0f, 1.0f, 0.0f));
     const glm::quat qz = glm::angleAxis(glm::radians(z), glm::vec3(0.0f, 0.0f, 1.0f));
-    const glm::quat q  = glm::normalize(qz * qy * qx);
+    const glm::quat q = glm::normalize(qz * qy * qx);
 
     // Component-wise: glm's in-memory quat order is not (x,y,z,w).
     objects[index].rotation = { q.x, q.y, q.z, q.w };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Rotate Object", before);
 }
 
 void Application::SetObjectScale(int index, float x, float y, float z) {
@@ -417,11 +595,15 @@ void Application::SetObjectScale(int index, float x, float y, float z) {
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
     EditorObject* eo = editorStore.Find(objects[index].objectId);
     if (!eo) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     eo->scale = { x, y, z };
     auto size = PrimitiveGeometry::ComputeSize(
         static_cast<SdfObjectType>(objects[index].type), eo->params, eo->scale);
     objects[index].size = { size[0], size[1], size[2], 0.0f };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Scale Object", before);
 }
 
 void Application::SetObjectParam(int index, int paramId, float value) {
@@ -429,6 +611,9 @@ void Application::SetObjectParam(int index, int paramId, float value) {
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
     EditorObject* eo = editorStore.Find(objects[index].objectId);
     if (!eo) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
     switch (static_cast<PrimitiveParam>(paramId)) {
     case PrimitiveParam::Radius:    eo->params.radius = value; break;
     case PrimitiveParam::Height:    eo->params.height = value; break;
@@ -439,10 +624,11 @@ void Application::SetObjectParam(int index, int paramId, float value) {
     auto size = PrimitiveGeometry::ComputeSize(
         static_cast<SdfObjectType>(objects[index].type), eo->params, eo->scale);
     objects[index].size = { size[0], size[1], size[2], 0.0f };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Change Shape Parameter", before);
 }
 
-void Application::ClearSelection(){
+void Application::ClearSelection() {
     selectionState.selectedObjectIndex = -1;
     selectionState.Clear();
 }
@@ -472,12 +658,14 @@ void Application::SelectNode(int nodeId, int mode) {
             selectionState.Remove(nodeId);
             if (selectionState.primaryNodeId == nodeId)
                 selectionState.primaryNodeId =
-                    selectionState.selectedNodeIds.empty() ? -1 : selectionState.selectedNodeIds.back();
-        } else {
+                selectionState.selectedNodeIds.empty() ? -1 : selectionState.selectedNodeIds.back();
+        }
+        else {
             selectionState.Add(nodeId);
             selectionState.primaryNodeId = nodeId;
         }
-    } else {                            // replace
+    }
+    else {                            // replace
         selectionState.Clear();
         selectionState.Add(nodeId);
         selectionState.primaryNodeId = nodeId;
@@ -487,10 +675,10 @@ void Application::SelectNode(int nodeId, int mode) {
 int Application::ApplyOperation(int opType) {
     CsgNodeType t;
     switch (opType) {
-        case 1: t = CsgNodeType::Union;        break;
-        case 2: t = CsgNodeType::Subtract;     break;
-        case 3: t = CsgNodeType::Intersection; break;
-        default: return -1;
+    case 1: t = CsgNodeType::Union;        break;
+    case 2: t = CsgNodeType::Subtract;     break;
+    case 3: t = CsgNodeType::Intersection; break;
+    default: return -1;
     }
 
     // Order children by SELECTION order: the first-selected node is the base
@@ -507,6 +695,10 @@ int Application::ApplyOperation(int opType) {
     }
     if (indices.size() < 2) return -1;
 
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+
     int32_t newNodeId = sceneManager.GroupNodes(indices, t);
     if (newNodeId != -1) {
         selectionState.Clear();
@@ -514,7 +706,8 @@ int Application::ApplyOperation(int opType) {
         selectionState.primaryNodeId = newNodeId;
         UpdateHighlightIndex();
     }
-    sceneSerializer.RefreshSceneBuffer();   // recompile RPN + upload
+    OnSceneChanged();   // recompile RPN + upload
+    if (record) FinishSceneEdit("Apply CSG Operation", before);
     return newNodeId;
 }
 
@@ -599,7 +792,7 @@ std::string Application::GetSceneJson() const {
     const auto& nodes = tree.GetNodes();
     int32_t rootIdx = tree.GetRoot();
     int32_t rootNodeId = (rootIdx >= 0 && rootIdx < static_cast<int32_t>(nodes.size()))
-                       ? nodes[rootIdx].nodeId : -1;
+        ? nodes[rootIdx].nodeId : -1;
 
     out << ",\"tree\":{\"root\":" << rootNodeId << ",\"nodes\":[";
     bool firstNode = true;
@@ -649,8 +842,24 @@ std::string Application::GetSceneJson() const {
     return out.str();
 }
 
-void Application::NewScene()  { sceneSerializer.NewScene();  editorStore.Clear(); selectionState.selectedObjectIndex = -1; }
-void Application::OpenScene() { sceneSerializer.OpenSceneFromSDFO(); RebuildEditorRecords(); selectionState.selectedObjectIndex = -1; }
+void Application::NewScene() {
+    sceneSerializer.NewScene();
+    editorStore.Clear();
+    selectionState.Clear();
+    selectionState.selectedObjectIndex = -1;
+    m_UndoStack.Clear();
+    OnSceneChanged();
+}
+
+void Application::OpenScene() {
+    sceneSerializer.OpenSceneFromSDFO();
+    RebuildEditorRecords();
+    selectionState.Clear();
+    selectionState.selectedObjectIndex = -1;
+    m_UndoStack.Clear();
+    OnSceneChanged();
+}
+
 void Application::SaveScene() { sceneSerializer.SaveSceneToSDFO(); }
 
 void Application::CameraOrbit(float dx, float dy) {
@@ -696,7 +905,7 @@ bool Application::GetSelectedObjectRotation(glm::quat& outRotation) const {
         return false;
 
     const auto& r = objects[index].rotation;
-    float len2 = r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3];
+    float len2 = r[0] * r[0] + r[1] * r[1] + r[2] * r[2] + r[3] * r[3];
     outRotation = (len2 < 1e-8f)
         ? glm::quat(1.0f, 0.0f, 0.0f, 0.0f)
         : glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));  // ctor is (w,x,y,z)
@@ -705,7 +914,7 @@ bool Application::GetSelectedObjectRotation(glm::quat& outRotation) const {
 
 // Current camera view/proj for gizmo hit-testing (matches the render frame).
 static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeight,
-                                 glm::mat4& v, glm::mat4& p) {
+    glm::mat4& v, glm::mat4& p) {
     float aspect = (renderHeight > 0)
         ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight) : 1.0f;
     v = camera.GetViewMatrix();
@@ -725,6 +934,12 @@ int Application::GizmoHover(float mouseX, float mouseY) {
 }
 
 void Application::GizmoBeginDrag(float mouseX, float mouseY) {
+    auto& objects = sceneManager.GetObjects();
+    int index = selectionState.selectedObjectIndex;
+
+    if (index < 0 || index >= static_cast<int>(objects.size()))
+        return;
+
     glm::vec3 selectedPos;
     glm::quat selectedRot;
     if (!GetSelectedObjectPosition(selectedPos) || !GetSelectedObjectRotation(selectedRot))
@@ -732,8 +947,20 @@ void Application::GizmoBeginDrag(float mouseX, float mouseY) {
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
-    gizmoController.BeginDrag(glm::vec2(mouseX, mouseY), selectedPos, selectedRot, v, p,
-        static_cast<float>(renderWidth), static_cast<float>(renderHeight));
+
+    gizmoController.BeginDrag(
+        glm::vec2(mouseX, mouseY),
+        selectedPos,
+        selectedRot,
+        v,
+        p,
+        static_cast<float>(renderWidth),
+        static_cast<float>(renderHeight)
+    );
+
+    const int32_t objectId = objects[index].objectId;
+
+    m_TransformTransaction.Begin(sceneManager, { objectId });
 }
 
 void Application::GizmoDrag(float mouseX, float mouseY) {
@@ -758,7 +985,7 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
         if (EditorObject* eo = editorStore.Find(objects[index].objectId))
             eo->rotationEuler = QuatToEulerDegrees(objects[index].rotation);
 
-        sceneSerializer.RefreshSceneBuffer();
+        OnSceneChanged();
         return;
     }
 
@@ -767,11 +994,23 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
         return;
 
     objects[index].position = { newPosition.x, newPosition.y, newPosition.z, 0.0f };
-    sceneSerializer.RefreshSceneBuffer();
+    OnSceneChanged();
 }
 
 void Application::GizmoEndDrag() {
     gizmoController.EndDrag();
+
+    m_TransformTransaction.Commit(sceneManager, m_UndoStack);
+
+    OnSceneChanged();
+}
+
+void Application::GizmoCancelDrag() {
+    gizmoController.EndDrag();
+
+    m_TransformTransaction.Cancel(sceneManager);
+
+    OnSceneChanged();
 }
 
 // Fill the gizmo* fields of `globals` so the SDF shader can draw the gizmo in
@@ -781,12 +1020,12 @@ void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
     glm::vec3 origin;
     glm::quat rotation;
     bool visible = gizmoEnabled && GetSelectedObjectPosition(origin)
-                                && GetSelectedObjectRotation(rotation);
+        && GetSelectedObjectRotation(rotation);
 
     globals.gizmoVisible = visible ? 1 : 0;
     globals.gizmoHovered = static_cast<int32_t>(gizmoController.HoveredAxis());
-    globals.gizmoActive  = static_cast<int32_t>(gizmoController.ActiveAxis());
-    globals.gizmoMode    = static_cast<int32_t>(gizmoController.Mode());
+    globals.gizmoActive = static_cast<int32_t>(gizmoController.ActiveAxis());
+    globals.gizmoMode = static_cast<int32_t>(gizmoController.Mode());
     if (!visible)
         return;
 
@@ -817,23 +1056,27 @@ void Application::SyncRenderGlobals() {
     globals.ambientColor[0] = s.ambientStrength;
     globals.ambientColor[1] = s.ambientStrength;
     globals.ambientColor[2] = s.ambientStrength;
-    globals.lightIntensity    = s.lightIntensity;
+    globals.lightIntensity = s.lightIntensity;
     globals.specularShininess = s.specularGloss;
-    globals.specularStrength  = s.specularStrength;
-    globals.shadowSoftness    = s.shadowSharpness;
-    globals.aoStrength        = s.aoStrength;
-    globals.maxSteps          = s.maxSteps;
-    globals.hitEpsilon        = s.hitEpsilon;
-    globals.maxDistance       = s.maxDistance;
-    globals.shadowMaxSteps    = s.shadowSteps;
+    globals.specularStrength = s.specularStrength;
+    globals.shadowSoftness = s.shadowSharpness;
+    globals.aoStrength = s.aoStrength;
+    globals.maxSteps = s.maxSteps;
+    globals.hitEpsilon = s.hitEpsilon;
+    globals.maxDistance = s.maxDistance;
+    globals.shadowMaxSteps = s.shadowSteps;
     globals.shadowMaxDistance = s.shadowDistance;
-    globals.aoSamples         = s.aoSamples;
+    globals.aoSamples = s.aoSamples;
 }
 
 // Update one render setting by RenderSetting id (see Settings.h). Ints arrive as
 // float and are rounded. Values are assumed pre-clamped by the UI, but the int
 // counts are floored to sane minimums here as a safety net.
 void Application::SetRenderSetting(int id, float value) {
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+
     switch (static_cast<RenderSetting>(id)) {
     case RenderSetting::LightDirX:        appSettings.lightDirection[0] = value; break;
     case RenderSetting::LightDirY:        appSettings.lightDirection[1] = value; break;
@@ -855,4 +1098,6 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::AoSamples:        appSettings.aoSamples = std::max(2, static_cast<int>(value + 0.5f)); break;
     default: break;
     }
+
+    if (record) FinishSceneEdit("Change Render Setting", before);
 }

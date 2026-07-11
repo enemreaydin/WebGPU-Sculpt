@@ -10,6 +10,13 @@
 class CsgTree
 {
 public:
+    struct State
+    {
+        std::vector<CsgNode> nodes;
+        int32_t root = -1;
+        int32_t nextNodeId = 0;
+    };
+
     int32_t AddPrimitiveNode(int32_t objectId, int32_t parent = -1);
     int32_t AddOperationNode(CsgNodeType opType, int32_t parent = -1);
     void AttachChild(int32_t parentIndex, int32_t childIndex);
@@ -39,6 +46,8 @@ public:
     const std::vector<CsgNode>& GetNodes() const { return m_Nodes; }
 
     void Clear();
+    State CaptureState() const;
+    void RestoreState(const State& state);
     int32_t IndexForNodeId(int32_t nodeId) const;   // vector index of a live node, or -1
     void Detach(int32_t index);                     // unlink from parent, node stays alive
     void Reparent(int32_t childIndex, int32_t newParentIndex);
