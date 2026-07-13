@@ -50,7 +50,7 @@ export interface SdfObject {
 }
 
 // One node of the engine's CSG tree. `type` is CsgNodeType
-// (0 = Primitive, 1 = Union, 2 = Subtract, 3 = Intersection). `objectId` is
+// (0 = Primitive, 1 = Union, 2 = Subtract, 3 = Intersection, 4 = Group). `objectId` is
 // valid only for primitive nodes (-1 otherwise); `children` lists child nodeIds
 // in evaluation order (for Subtract, children[0] is the base that the rest are
 // subtracted from).
@@ -72,6 +72,7 @@ export enum CsgOp {
   Union = 1,
   Subtract = 2,
   Intersect = 3,
+  Group = 4, // pure container: groups the selection with no boolean effect (compiles as Union)
 }
 
 // What the gizmo edits, and which frame its handles are aligned to. Both mirror

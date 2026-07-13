@@ -889,7 +889,7 @@ export default class App extends React.Component<any, any> {
 
   // Default UI meta for a CSG operation (group) node the UI hasn't named yet.
   defaultGroupMeta(nodeType: number, counts: any): any {
-    const opName = nodeType === 2 ? "Subtract" : nodeType === 3 ? "Intersect" : "Union";
+    const opName = nodeType === 2 ? "Subtract" : nodeType === 3 ? "Intersect" : nodeType === 4 ? "Group" : "Union";
     const ck = "group" + opName;
     const n = (counts[ck] || 0) + 1;
     counts[ck] = n;
@@ -1250,6 +1250,7 @@ export default class App extends React.Component<any, any> {
       Union: CsgOp.Union,
       Subtract: CsgOp.Subtract,
       Intersect: CsgOp.Intersect,
+      Group: CsgOp.Group,
     };
     const code = codeMap[op];
     if (!code) {
@@ -1386,7 +1387,7 @@ export default class App extends React.Component<any, any> {
       const gnid = this.nodeIdForKey(S.sel);
       const gnode = gnid >= 0 ? S.tree.nodes.find((n: any) => n.nodeId === gnid) : null;
       if (gnode) {
-        const opName = gnode.type === 2 ? "Subtract" : gnode.type === 3 ? "Intersect" : "Union";
+        const opName = gnode.type === 2 ? "Subtract" : gnode.type === 3 ? "Intersect" : gnode.type === 4 ? "Group" : "Union";
         const gm = S.meta[S.sel];
         groupSel = { name: (gm && gm.name) || opName, op: opName, count: this.groupPrimitiveCount(gnid) };
       }
@@ -1766,6 +1767,7 @@ export default class App extends React.Component<any, any> {
       addCaps: () => this.addPrimitive("capsule"),
       addSolid: () => this.addPrimitive("solidAngle"),
       addPyr: () => this.addPrimitive("pyramid"),
+      csgGroup: () => this.csg("Group"),
       csgUnion: () => this.csg("Union"),
       csgSub: () => this.csg("Subtract"),
       csgInt: () => this.csg("Intersect"),
@@ -2093,6 +2095,7 @@ export default class App extends React.Component<any, any> {
             ))}
             <div style={css("width:18px;height:1px;background:#333333;margin:4px 0")} />
             {[
+              ["Group Selection", V.csgGroup, `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2.75" width="12" height="10.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.6"></rect><circle cx="6.2" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.1"></circle><circle cx="9.8" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.1"></circle></svg>`],
               ["Boolean Union", V.csgUnion, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
               ["Boolean Subtract", V.csgSub, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path><path d="M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"></path></svg>`],
               ["Boolean Intersect", V.csgInt, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.55"></path><path d="M8 4.83A3.75 3.75 0 0 1 8 11.17A3.75 3.75 0 0 1 8 4.83z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],

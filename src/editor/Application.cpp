@@ -725,6 +725,7 @@ int Application::ApplyOperation(int opType) {
         case 1: t = CsgNodeType::Union;        break;
         case 2: t = CsgNodeType::Subtract;     break;
         case 3: t = CsgNodeType::Intersection; break;
+        case 4: t = CsgNodeType::Group;        break;   // pure container (no boolean effect)
         default: return -1;
     }
 
@@ -754,7 +755,7 @@ int Application::ApplyOperation(int opType) {
         UpdateSelectionHighlight();
     }
     OnSceneChanged();   // recompile RPN + upload
-    if (record) FinishSceneEdit("Apply CSG Operation", before);
+    if (record) FinishSceneEdit(t == CsgNodeType::Group ? "Group Objects" : "Apply CSG Operation", before);
     return newNodeId;
 }
 

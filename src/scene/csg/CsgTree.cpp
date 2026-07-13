@@ -14,6 +14,7 @@ namespace
             case CsgNodeType::Union:        return CsgCmdType::OP_UNION;
             case CsgNodeType::Subtract:     return CsgCmdType::OP_SUBTRACT;
             case CsgNodeType::Intersection: return CsgCmdType::OP_INTERSECTION;
+            case CsgNodeType::Group:        return CsgCmdType::OP_UNION;   // pure container == union
             default:                        return CsgCmdType::OP_UNION;
         }
     }

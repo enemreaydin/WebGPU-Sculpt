@@ -6,7 +6,12 @@ enum class CsgNodeType
     Primitive,
     Union,
     Subtract,
-    Intersection
+    Intersection,
+    Group          // Pure container: groups children with no boolean effect. Compiles
+                   // exactly like Union (children combined with min), but is a distinct
+                   // type so the UI can label it "Group" rather than a boolean op. Kept
+                   // last so the existing 1/2/3 values (used in JSON, ApplyOperation, and
+                   // the shader command mapping) never shift.
 };
 
 // Array-based n-ary tree node using the "first child / next sibling" technique
