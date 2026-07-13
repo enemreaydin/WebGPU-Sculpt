@@ -599,6 +599,24 @@ export default class App extends React.Component<any, any> {
     return this.state.objects.length;
   }
 
+  // Number of primitive leaves under a CSG node (recursively), for the group
+  // properties panel. Reads the engine-emitted tree; 0 if the tree isn't ready.
+  groupPrimitiveCount(nodeId: number): number {
+    const t = this.state.tree;
+    if (!t) return 0;
+    const byId: Record<number, any> = {};
+    for (const n of t.nodes) byId[n.nodeId] = n;
+    let count = 0;
+    const walk = (id: number) => {
+      const n = byId[id];
+      if (!n) return;
+      if (n.type === 0) count++; // primitive leaf
+      for (const c of n.children || []) walk(c);
+    };
+    walk(nodeId);
+    return count;
+  }
+
   // Engine object for a selection id ("scene" and null resolve to no object).
   objById(id: any): any {
     if (id == null || id === "scene") return null;
@@ -1360,6 +1378,20 @@ export default class App extends React.Component<any, any> {
     const d = selObj ? S.meta[selId!] : null;
     const selTypeName = selObj ? TYPE_NAME[selObj.type] || "box" : "";
 
+    // A CSG group (operation node) is selected: build a compact panel model so the
+    // group reads like a first-class object (its op + how many primitives it holds).
+    const isGroupSel = this.isGroupKey(S.sel);
+    let groupSel: any = null;
+    if (isGroupSel && S.tree) {
+      const gnid = this.nodeIdForKey(S.sel);
+      const gnode = gnid >= 0 ? S.tree.nodes.find((n: any) => n.nodeId === gnid) : null;
+      if (gnode) {
+        const opName = gnode.type === 2 ? "Subtract" : gnode.type === 3 ? "Intersect" : "Union";
+        const gm = S.meta[S.sel];
+        groupSel = { name: (gm && gm.name) || opName, op: opName, count: this.groupPrimitiveCount(gnid) };
+      }
+    }
+
     const rgb = d ? this.hsv2rgb(d.hsv.h, d.hsv.s, d.hsv.v) : [128, 128, 128];
     const colorCss = "rgb(" + rgb.join(",") + ")";
     const colorHex = this.hex(rgb);
@@ -1827,7 +1859,8 @@ export default class App extends React.Component<any, any> {
       ptMod: tabSt(propsTab === "modifiers"), onPtMod: () => this.setState({ propsTab: "modifiers" }),
       ptRen: tabSt(propsTab === "render"), onPtRen: () => this.setState({ propsTab: "render" }),
       isObjTab: propsTab === "object", isMatTab: propsTab === "material", isModTab: propsTab === "modifiers", isRenTab: propsTab === "render",
-      hasObj: isObj, isCollSel: isColl, noSel: S.sel == null,
+      hasObj: isObj, isCollSel: isColl, isGroupSel: isGroupSel && !!groupSel, groupSel,
+      noSel: S.sel == null || (isGroupSel && !groupSel),
       objIconPath: isObj ? this.IC[selTypeName] : "",
       objName: isObj ? (d?.name || selObj.typeName) : "",
       objTypeChip: isObj ? "SDF " + this.cap(selTypeName) : "",
@@ -2408,6 +2441,18 @@ export default class App extends React.Component<any, any> {
                           <span style={css("font-size:12px;font-weight:600")}>{V.collName}</span>
                         </div>
                         <span style={css("font-size:11px;color:#7a7a7a")}>{V.collCount}</span>
+                      </div>
+                    )}
+
+                    {V.isGroupSel && (
+                      <div style={css("padding:12px 10px;display:flex;flex-direction:column;gap:8px")}>
+                        <div style={css("display:flex;align-items:center;gap:7px")}>
+                          <Ico d={`<svg width="15" height="15" viewBox="0 0 16 16"><path d="M1.75 3.25h4.5l1.5 1.9h6.5v7.6H1.75V3.25z" fill="none" stroke="#e8912d" stroke-width="1.2" stroke-linejoin="round"></path></svg>`} />
+                          <span style={css("font-size:12px;font-weight:600")}>{V.groupSel.name}</span>
+                          <span style={css("margin-left:auto;font-size:10px;color:#7a7a7a;font-family:'IBM Plex Mono',monospace")}>{V.groupSel.op}</span>
+                        </div>
+                        <span style={css("font-size:11px;color:#7a7a7a")}>{V.groupSel.count} objects grouped</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#616161")}>Moving or rotating this group transforms all its objects together, about their shared centre. Pick an individual object from the outliner above to edit it on its own.</span>
                       </div>
                     )}
 
