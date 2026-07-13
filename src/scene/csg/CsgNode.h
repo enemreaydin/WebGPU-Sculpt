@@ -7,12 +7,16 @@ enum class CsgNodeType
     Union,
     Subtract,
     Intersection,
-    Group          // Pure container: groups children with no boolean effect. Compiles
+    Group,         // Pure container: groups children with no boolean effect. Compiles
                    // exactly like Union (children combined with min), but is a distinct
                    // type so the UI can label it "Group" rather than a boolean op. Kept
                    // last so the existing 1/2/3 values (used in JSON, ApplyOperation, and
                    // the shader command mapping) never shift.
+    Modifier
 };
+
+enum class BlendMode : int32_t { Hard = 0, Smooth = 1 };
+enum class ModifierType : int32_t { None = 0, Roundness = 1 };
 
 // Array-based n-ary tree node using the "first child / next sibling" technique
 // (allows any number of children per operation node without variable-size fields,
@@ -30,6 +34,11 @@ struct CsgNode
     int32_t nextSibling = -1;
     int32_t firstChild = -1;
     int32_t lastChild = -1;
+    BlendMode blendMode = BlendMode::Hard;
+    float blendRadius = 0.0f;
+    ModifierType modifierType = ModifierType::None;
+    float modifierAmount = 0.0f;
+    bool modifierEnabled = true;
     bool alive = true;           // Tombstone flag — removed nodes are marked dead in
                                  // place, never physically erased from the vector, so
                                  // indices never shift and other nodes' parent/child/

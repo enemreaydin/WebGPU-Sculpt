@@ -24,7 +24,7 @@ struct CsgCommand
     cmd_type : i32,
     operand : i32,
     node_id : i32,
-    pad0 : i32,
+    parameter : f32,
 }
 
 fn rotateInverse(v: vec3f, q: vec4f) -> vec3f
@@ -119,6 +119,29 @@ fn opIntersection(d1 : f32, d2 : f32) -> f32
     return max(d1, d2);
 }
 
+const CSG_EPSILON : f32 = 0.000001;
+
+fn opSmoothUnion(dA: f32, dB: f32, radius: f32) -> f32
+{
+    let k = max(radius, 0.0);
+    if (k <= CSG_EPSILON) { return opUnion(dA, dB); }
+    let h = clamp(0.5 + 0.5 * (dB - dA) / k, 0.0, 1.0);
+    return mix(dB, dA, h) - k * h * (1.0 - h);
+}
+
+fn opSmoothIntersection(dA: f32, dB: f32, radius: f32) -> f32
+{
+    let k = max(radius, 0.0);
+    if (k <= CSG_EPSILON) { return opIntersection(dA, dB); }
+    let h = clamp(0.5 + 0.5 * (dA - dB) / k, 0.0, 1.0);
+    return mix(dB, dA, h) + k * h * (1.0 - h);
+}
+
+fn opSmoothSubtract(dA: f32, dB: f32, radius: f32) -> f32
+{
+    return opSmoothIntersection(dA, -dB, radius);
+}
+
 fn distanceCalc(p : vec3f) -> f32
 {
     var resultDistance = 100000.0;
@@ -155,7 +178,7 @@ fn distanceCalc(p : vec3f) -> f32
             distanceStack[sp] = dist;
             sp = sp + 1;
         }
-        else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
+        else if (cmd.cmd_type >= 1 && cmd.cmd_type <= 6)
         {
             let dB = distanceStack[sp - 1];
             let dA = distanceStack[sp - 2];
@@ -173,8 +196,16 @@ fn distanceCalc(p : vec3f) -> f32
                 d = opIntersection(dA, dB);
             }
 
+            if (cmd.cmd_type == 4) { d = opSmoothUnion(dA, dB, cmd.parameter); }
+            else if (cmd.cmd_type == 5) { d = opSmoothSubtract(dA, dB, cmd.parameter); }
+            else if (cmd.cmd_type == 6) { d = opSmoothIntersection(dA, dB, cmd.parameter); }
+
             sp = sp - 1;
             distanceStack[sp - 1] = d;
+        }
+        else if (cmd.cmd_type == 7 && sp > 0)
+        {
+            distanceStack[sp - 1] = distanceStack[sp - 1] - max(cmd.parameter, 0.0);
         }
     }
      if (sp > 0)
@@ -292,7 +323,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             stackId[sp] = u32(cmd.operand);
             sp = sp + 1;
         }
-        else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
+        else if (cmd.cmd_type >= 1 && cmd.cmd_type <= 6)
         {
             let dB = stack[sp - 1];
             let cB = stackColor[sp - 1];
@@ -325,10 +356,35 @@ fn evaluateScene(p : vec3f) -> SceneResult
                 c = cA;
             }
 
+            if (cmd.cmd_type >= 4 && cmd.cmd_type <= 6)
+            {
+                let k = max(cmd.parameter, 0.0);
+                var h = 0.0;
+                if (cmd.cmd_type == 4)
+                {
+                    d = opSmoothUnion(dA, dB, k);
+                    h = select(0.0, 1.0, dA <= dB);
+                    if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dB - dA) / k, 0.0, 1.0); }
+                }
+                else
+                {
+                    let comparedB = select(dB, -dB, cmd.cmd_type == 5);
+                    d = opSmoothIntersection(dA, comparedB, k);
+                    h = select(0.0, 1.0, dA >= comparedB);
+                    if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dA - comparedB) / k, 0.0, 1.0); }
+                }
+                c = mix(cB, cA, h);
+                id = select(idB, idA, h >= 0.5);
+            }
+
             sp = sp - 1;
             stack[sp - 1] = d;
             stackColor[sp - 1] = c;
             stackId[sp - 1] = id;
+        }
+        else if (cmd.cmd_type == 7 && sp > 0)
+        {
+            stack[sp - 1] = stack[sp - 1] - max(cmd.parameter, 0.0);
         }
     }
 

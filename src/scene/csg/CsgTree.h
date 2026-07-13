@@ -19,6 +19,8 @@ public:
 
     int32_t AddPrimitiveNode(int32_t objectId, int32_t parent = -1);
     int32_t AddOperationNode(CsgNodeType opType, int32_t parent = -1);
+    int32_t AddRoundnessModifier(int32_t targetIndex, float amount = 0.0f);
+    bool RemoveModifierNode(int32_t modifierIndex);
     void AttachChild(int32_t parentIndex, int32_t childIndex);
     void RemoveNode(int32_t index); // Recursively tombstones the entire subtree; detaches
                                     // from the parent's sibling chain using
@@ -51,6 +53,8 @@ public:
     int32_t IndexForNodeId(int32_t nodeId) const;   // vector index of a live node, or -1
     void Detach(int32_t index);                     // unlink from parent, node stays alive
     void Reparent(int32_t childIndex, int32_t newParentIndex);
+    CsgNode* FindNodeById(int32_t nodeId);
+    const CsgNode* FindNodeById(int32_t nodeId) const;
 
 
 private:

@@ -232,6 +232,7 @@ void Application::UpdateCamera() {
 
 void Application::OnSceneChanged()
 {
+    if (m_SceneEditDepth > 0) m_SceneEditChanged = true;
     const auto& objects = sceneManager.GetObjects();
 
     for (const SdfObjectData& object : objects)
@@ -243,6 +244,12 @@ void Application::OnSceneChanged()
     }
 
     sceneSerializer.RefreshSceneBuffer();
+}
+
+void Application::OnCsgChanged()
+{
+    if (m_SceneEditDepth > 0) m_SceneEditChanged = true;
+    sceneSerializer.RefreshCsgBuffer();
 }
 
 SceneEditSnapshot Application::CaptureSceneEditSnapshot() const
@@ -285,6 +292,7 @@ void Application::BeginSceneEdit(const char* name)
     {
         m_SceneEditName = name ? name : "Scene Edit";
         m_SceneEditBefore = CaptureSceneEditSnapshot();
+        m_SceneEditChanged = false;
     }
     ++m_SceneEditDepth;
 }
@@ -297,8 +305,9 @@ void Application::CommitSceneEdit()
     --m_SceneEditDepth;
     if (m_SceneEditDepth == 0)
     {
-        FinishSceneEdit(m_SceneEditName.c_str(), m_SceneEditBefore);
+        if (m_SceneEditChanged) FinishSceneEdit(m_SceneEditName.c_str(), m_SceneEditBefore);
         m_SceneEditName.clear();
+        m_SceneEditChanged = false;
     }
 }
 
@@ -313,6 +322,7 @@ void Application::CancelSceneEdit()
     selectionState = m_SceneEditBefore.selection;
     appSettings = m_SceneEditBefore.settings;
     m_SceneEditName.clear();
+    m_SceneEditChanged = false;
     OnSceneChanged();
 }
 
@@ -759,6 +769,99 @@ int Application::ApplyOperation(int opType) {
     return newNodeId;
 }
 
+void Application::SetOperationType(int nodeId, int opType)
+{
+    CsgNodeType type;
+    if (opType == 1) type = CsgNodeType::Union;
+    else if (opType == 2) type = CsgNodeType::Subtract;
+    else if (opType == 3) type = CsgNodeType::Intersection;
+    else return;
+    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(nodeId);
+    if (!node || (node->type != CsgNodeType::Union && node->type != CsgNodeType::Subtract && node->type != CsgNodeType::Intersection) || node->type == type) return;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    node->type = type;
+    OnCsgChanged();
+    if (record) FinishSceneEdit("Change CSG Operation", before);
+}
+
+void Application::SetBlendMode(int nodeId, int mode)
+{
+    if (mode != 0 && mode != 1) return;
+    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(nodeId);
+    const BlendMode value = static_cast<BlendMode>(mode);
+    if (!node || (node->type != CsgNodeType::Union && node->type != CsgNodeType::Subtract && node->type != CsgNodeType::Intersection) || node->blendMode == value) return;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    node->blendMode = value;
+    OnCsgChanged();
+    if (record) FinishSceneEdit("Change Blend Mode", before);
+}
+
+void Application::SetBlendRadius(int nodeId, float value)
+{
+    if (!std::isfinite(value) || value < 0.0f) return;
+    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(nodeId);
+    if (!node || (node->type != CsgNodeType::Union && node->type != CsgNodeType::Subtract && node->type != CsgNodeType::Intersection) || node->blendRadius == value) return;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    node->blendRadius = value;
+    OnCsgChanged();
+    if (record) FinishSceneEdit("Change Blend Radius", before);
+}
+
+int Application::AddRoundnessModifier(int targetNodeId)
+{
+    CsgTree& tree = sceneManager.GetCsgTree();
+    const int32_t targetIndex = tree.IndexForNodeId(targetNodeId);
+    if (targetIndex == -1 || targetIndex == tree.GetRoot()) return -1;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    const int32_t modifierId = tree.AddRoundnessModifier(targetIndex);
+    if (modifierId == -1) return -1;
+    selectionState.Clear(); selectionState.Add(modifierId); selectionState.primaryNodeId = modifierId;
+    UpdateSelectionHighlight(); OnCsgChanged();
+    if (record) FinishSceneEdit("Add Roundness Modifier", before);
+    return modifierId;
+}
+
+void Application::SetRoundnessEnabled(int modifierNodeId, bool enabled)
+{
+    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(modifierNodeId);
+    if (!node || node->type != CsgNodeType::Modifier || node->modifierType != ModifierType::Roundness || node->modifierEnabled == enabled) return;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    node->modifierEnabled = enabled; OnCsgChanged();
+    if (record) FinishSceneEdit("Toggle Roundness Modifier", before);
+}
+
+void Application::SetRoundnessAmount(int modifierNodeId, float value)
+{
+    if (!std::isfinite(value) || value < 0.0f) return;
+    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(modifierNodeId);
+    if (!node || node->type != CsgNodeType::Modifier || node->modifierType != ModifierType::Roundness || node->modifierAmount == value) return;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    node->modifierAmount = value; OnCsgChanged();
+    if (record) FinishSceneEdit("Change Roundness Amount", before);
+}
+
+void Application::RemoveRoundnessModifier(int modifierNodeId)
+{
+    CsgTree& tree = sceneManager.GetCsgTree();
+    const int32_t index = tree.IndexForNodeId(modifierNodeId);
+    if (index == -1) return;
+    const CsgNode& modifier = tree.GetNodes()[index];
+    if (modifier.type != CsgNodeType::Modifier || modifier.firstChild == -1) return;
+    const int32_t childId = tree.GetNodes()[modifier.firstChild].nodeId;
+    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    if (!tree.RemoveModifierNode(index)) return;
+    selectionState.Clear(); selectionState.Add(childId); selectionState.primaryNodeId = childId;
+    UpdateSelectionHighlight(); OnCsgChanged();
+    if (record) FinishSceneEdit("Remove Roundness Modifier", before);
+}
+
 
 
 const char* Application::TypeName(int32_t type) {
@@ -856,8 +959,13 @@ std::string Application::GetSceneJson() const {
         if (!firstNode) out << ",";
         firstNode = false;
         out << "{\"nodeId\":" << n.nodeId
-            << ",\"type\":" << static_cast<int>(n.type)   // 0=prim 1=union 2=sub 3=intersect
+            << ",\"type\":" << static_cast<int>(n.type)
             << ",\"objectId\":" << (n.type == CsgNodeType::Primitive ? n.objectId : -1)
+            << ",\"blendMode\":" << static_cast<int>(n.blendMode)
+            << ",\"blendRadius\":" << n.blendRadius
+            << ",\"modifierType\":" << static_cast<int>(n.modifierType)
+            << ",\"modifierAmount\":" << n.modifierAmount
+            << ",\"modifierEnabled\":" << (n.modifierEnabled ? "true" : "false")
             << ",\"children\":[";
         bool firstChild = true;
         for (int32_t c = n.firstChild; c != -1; c = nodes[c].nextSibling) {

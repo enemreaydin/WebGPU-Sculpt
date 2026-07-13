@@ -9,7 +9,19 @@ void SceneSerializer::RefreshSceneBuffer()
     auto objectIdMap = SceneManager::BuildObjectIdMap(sceneManager.GetObjects());
     std::vector<CsgCommand> program = sceneManager.GetCsgTree().CompileToRPN(objectIdMap);
 
-    renderer.CreateSceneBuffer(
+    renderer.UpdateSceneBuffer(
+        graphics.device,
+        graphics.queue,
+        sceneManager.GetObjects(),
+        program
+    );
+}
+
+void SceneSerializer::RefreshCsgBuffer()
+{
+    auto objectIdMap = SceneManager::BuildObjectIdMap(sceneManager.GetObjects());
+    std::vector<CsgCommand> program = sceneManager.GetCsgTree().CompileToRPN(objectIdMap);
+    renderer.UpdateCsgProgramBuffer(
         graphics.device,
         graphics.queue,
         sceneManager.GetObjects(),

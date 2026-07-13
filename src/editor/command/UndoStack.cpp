@@ -9,7 +9,10 @@ void UndoStack::Execute(std::unique_ptr<IEditorCommand> command, SceneManager& s
 
     command->Execute(scene);
 
+    if (m_MaxEntries == 0) { m_RedoStack.clear(); return; }
+
     m_UndoStack.push_back(std::move(command));
+    Trim(m_UndoStack);
 
     m_RedoStack.clear();
 }
@@ -19,7 +22,10 @@ void UndoStack::PushAlreadyExecuted(std::unique_ptr<IEditorCommand> command)
     if (!command)
         return;
 
+    if (m_MaxEntries == 0) { m_RedoStack.clear(); return; }
+
     m_UndoStack.push_back(std::move(command));
+    Trim(m_UndoStack);
 
     m_RedoStack.clear();
 }
@@ -37,6 +43,7 @@ void UndoStack::Undo(SceneManager& scene)
     m_IsApplyingHistory = false;
 
     m_RedoStack.push_back(std::move(command));
+    Trim(m_RedoStack);
 }
 
 void UndoStack::Redo(SceneManager& scene)
@@ -52,6 +59,7 @@ void UndoStack::Redo(SceneManager& scene)
     m_IsApplyingHistory = false;
 
     m_UndoStack.push_back(std::move(command));
+    Trim(m_UndoStack);
 }
 
 bool UndoStack::CanUndo() const
@@ -74,4 +82,9 @@ void UndoStack::Clear()
     m_UndoStack.clear();
     m_RedoStack.clear();
     m_IsApplyingHistory = false;
+}
+
+void UndoStack::Trim(std::deque<std::unique_ptr<IEditorCommand>>& stack)
+{
+    while (stack.size() > m_MaxEntries) stack.pop_front();
 }
