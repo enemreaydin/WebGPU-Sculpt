@@ -104,6 +104,31 @@ int32_t SceneManager::NodeIdForObject(int32_t objectId) const{
     return m_CsgTree.GetNodes()[it->second].nodeId;
 }
 
+int32_t SceneManager::TopLevelNodeIdForObject(int32_t objectId) const
+{
+    auto it = m_ObjectNodeIndex.find(objectId);
+    if (it == m_ObjectNodeIndex.end()) return -1;
+
+    const auto& nodes = m_CsgTree.GetNodes();
+    const int32_t rootIndex = m_CsgTree.GetRoot();
+
+    int32_t cur = it->second;
+    if (cur < 0 || cur >= static_cast<int32_t>(nodes.size()) || !nodes[cur].alive)
+        return -1;
+
+    // Climb until the parent is the structural root (or there is no parent). The
+    // node whose parent is the root is the top-level group/primitive; that is what
+    // a viewport click selects. Individual children are reachable via the outliner.
+    while (true)
+    {
+        int32_t parent = nodes[cur].parent;
+        if (parent == -1 || parent == rootIndex)
+            break;
+        cur = parent;
+    }
+    return nodes[cur].nodeId;
+}
+
 int32_t SceneManager::GroupNodes(const std::vector<int32_t>& indices, CsgNodeType opType)
 {
     if (indices.size() < 2) return -1;

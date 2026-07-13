@@ -321,7 +321,7 @@ void Application::Undo() {
         return;
 
     m_UndoStack.Undo(sceneManager);
-    UpdateHighlightIndex();
+    UpdateSelectionHighlight();
     OnSceneChanged();
 }
 
@@ -330,7 +330,7 @@ void Application::Redo() {
         return;
 
     m_UndoStack.Redo(sceneManager);
-    UpdateHighlightIndex();
+    UpdateSelectionHighlight();
     OnSceneChanged();
 }
 
@@ -409,7 +409,7 @@ int Application::AddPrimitive(SdfObjectType type) {
     int32_t newNodeId = sceneManager.NodeIdForObject(created.objectId);
     selectionState.Clear();
     if (newNodeId != -1) { selectionState.Add(newNodeId); selectionState.primaryNodeId = newNodeId; }
-    UpdateHighlightIndex();
+    UpdateSelectionHighlight();
 
     OnSceneChanged();
     if (record) FinishSceneEdit("Add Object", before);
@@ -427,10 +427,9 @@ void Application::RemoveObject(int index) {
     editorStore.Remove(objects[index].objectId);
     sceneManager.RemoveObjectAt(index);
 
-    if (objects.empty())
-        selectionState.selectedObjectIndex = -1;
-    else if (selectionState.selectedObjectIndex >= static_cast<int>(objects.size()))
-        selectionState.selectedObjectIndex = static_cast<int>(objects.size()) - 1;
+    // The removed primitive's node is now dead; recompute the highlight so any
+    // stale per-object flag / primary index is dropped.
+    UpdateSelectionHighlight();
 
     OnSceneChanged();
     if (record) FinishSceneEdit("Delete Object", before);
@@ -494,7 +493,7 @@ void Application::DeleteSelection() {
         if (idx != -1) sceneManager.RemoveNodeSubtree(idx);
     }
     selectionState.Clear();
-    selectionState.selectedObjectIndex = -1;
+    UpdateSelectionHighlight();
     OnSceneChanged();
     if (record) FinishSceneEdit("Delete Selection", before);
 }
@@ -636,24 +635,65 @@ void Application::SetObjectParam(int index, int paramId, float value) {
 }
 
 void Application::ClearSelection(){
-    selectionState.selectedObjectIndex = -1;
     selectionState.Clear();
+    UpdateSelectionHighlight();
 }
 
-// Primary primitive -> its object vector index (for the shader highlight).
-void Application::UpdateHighlightIndex() {
-    selectionState.selectedObjectIndex = -1;
-    if (selectionState.primaryNodeId == -1) return;
+// Viewport pick -> selection. Selects the whole top-level group containing the
+// picked primitive (Blender-style); individual nodes stay selectable from the
+// outliner. -1 / out-of-range = empty space: a plain click clears, additive keeps.
+void Application::SelectByPick(int pickIndex, int mode) {
+    const auto& objects = sceneManager.GetObjects();
+    if (pickIndex < 0 || pickIndex >= static_cast<int>(objects.size())) {
+        if (mode == 0) {
+            selectionState.Clear();
+            UpdateSelectionHighlight();
+        }
+        return;
+    }
 
+    int32_t objectId = objects[pickIndex].objectId;
+    int32_t nodeId = sceneManager.TopLevelNodeIdForObject(objectId);
+    if (nodeId == -1) return;
+    SelectNode(nodeId, mode);   // handles replace/toggle + UpdateSelectionHighlight
+}
+
+// Recompute the selection highlight after any selection change:
+//  (1) selectedObjectIndex = the primary node's primitive vector index (or -1 if
+//      the primary is a group) — still used by the single-object gizmo/properties
+//      path; and
+//  (2) the per-object `selected` flag on every primitive under ANY selected node,
+//      so a whole group lights up. The flag lives in the scene buffer, so we
+//      re-upload it here (selection is user-driven, not per-frame, so this is cheap).
+void Application::UpdateSelectionHighlight() {
     const CsgTree& tree = sceneManager.GetCsgTree();
-    int32_t idx = tree.IndexForNodeId(selectionState.primaryNodeId);
-    if (idx == -1) return;
-    const CsgNode& n = tree.GetNodes()[idx];
-    if (n.type != CsgNodeType::Primitive) return;   // groups don't highlight in 3D
+    auto& objects = sceneManager.GetObjects();
 
-    const auto& objs = sceneManager.GetObjects();
-    for (int32_t i = 0; i < static_cast<int32_t>(objs.size()); ++i)
-        if (objs[i].objectId == n.objectId) { selectionState.selectedObjectIndex = i; return; }
+    // (1) primary primitive index
+    selectionState.selectedObjectIndex = -1;
+    if (selectionState.primaryNodeId != -1) {
+        int32_t idx = tree.IndexForNodeId(selectionState.primaryNodeId);
+        if (idx != -1 && tree.GetNodes()[idx].type == CsgNodeType::Primitive) {
+            int32_t oid = tree.GetNodes()[idx].objectId;
+            for (int32_t i = 0; i < static_cast<int32_t>(objects.size()); ++i)
+                if (objects[i].objectId == oid) { selectionState.selectedObjectIndex = i; break; }
+        }
+    }
+
+    // (2) per-object highlight flags for the whole selection
+    for (SdfObjectData& o : objects) o.selected = 0;
+
+    std::vector<int32_t> subtreeIds;
+    for (int32_t nodeId : selectionState.selectedNodeIds) {
+        int32_t idx = tree.IndexForNodeId(nodeId);
+        if (idx == -1) continue;
+        subtreeIds.clear();
+        sceneManager.CollectSubtreeObjectIds(idx, subtreeIds);
+        for (int32_t oid : subtreeIds)
+            if (SdfObjectData* o = sceneManager.FindObjectById(oid)) o->selected = 1;
+    }
+
+    sceneSerializer.RefreshSceneBuffer();
 }
 
 
@@ -677,7 +717,7 @@ void Application::SelectNode(int nodeId, int mode) {
         selectionState.Add(nodeId);
         selectionState.primaryNodeId = nodeId;
     }
-    UpdateHighlightIndex();
+    UpdateSelectionHighlight();
 }
 int Application::ApplyOperation(int opType) {
     CsgNodeType t;
@@ -711,7 +751,7 @@ int Application::ApplyOperation(int opType) {
         selectionState.Clear();
         selectionState.Add(newNodeId);
         selectionState.primaryNodeId = newNodeId;
-        UpdateHighlightIndex();
+        UpdateSelectionHighlight();
     }
     OnSceneChanged();   // recompile RPN + upload
     if (record) FinishSceneEdit("Apply CSG Operation", before);

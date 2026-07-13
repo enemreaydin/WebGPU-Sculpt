@@ -45,6 +45,14 @@ extern "C" {
         if (g_App) g_App->ClearSelection();
     }
 
+    // Viewport pick -> selection. pickIndex is the object vector index from the
+    // pick buffer (-1 = empty space); mode 0 = replace, 1 = toggle. Selects the
+    // whole top-level group containing the picked primitive (Blender-style).
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_select_by_pick(int pickIndex, int mode) {
+        if (g_App) g_App->SelectByPick(pickIndex, mode);
+    }
+
     // Groups the current selection under a new operation node of the given
     // CsgNodeType (1=Union, 2=Subtract, 3=Intersection); the primary node is the
     // base for Subtract. Returns the new node's id, or -1 on failure.

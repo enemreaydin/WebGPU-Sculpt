@@ -54,6 +54,12 @@ public:
     void RemoveObject(int index);
     void SelectObject(int index);
     uint32_t PickObjectAt(int x, int y);
+
+    // Viewport pick -> selection. `pickIndex` is the object vector index the pick
+    // buffer returned (-1 = empty space); `mode` is 0 = replace, 1 = toggle. Unlike
+    // SelectNode, this selects the whole top-level group containing the picked
+    // primitive (see SceneManager::TopLevelNodeIdForObject) — Blender-style.
+    void SelectByPick(int pickIndex, int mode);
     int  GetSelectedIndex() const { return selectionState.selectedObjectIndex; }
 
     void SetObjectPosition(int index, float x, float y, float z);
@@ -162,7 +168,9 @@ private:
     glm::mat4 proj{};
 
     // Initializers / helpers
-    void UpdateHighlightIndex();  // recompute selectedObjectIndex from primaryNodeId
+    void UpdateSelectionHighlight();  // recompute selectedObjectIndex (primary primitive)
+                                      // + per-object highlight flags for the whole
+                                      // selection, then re-upload the scene buffer
     void FindProjectRoot();
     void InitializeRenderer();
     void UpdateCamera();

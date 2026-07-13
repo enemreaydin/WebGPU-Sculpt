@@ -4,7 +4,7 @@ struct SdfObject
     object_id : i32,
 
     parent_id : i32,
-    pad0 : i32,
+    selected : i32,
 
     position : vec4f,
     rotation : vec4f,
@@ -282,7 +282,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             }
 
             var objColor = obj.color.xyz;
-            if (cmd.operand == globals.selectedIndex)
+            if (obj.selected == 1)
             {
                 objColor = mix(objColor, vec3f(1.0), 0.4);
             }

@@ -242,6 +242,14 @@ export class Engine {
     this.call("sdf_clear_selection", null, [], []);
   }
 
+  // Viewport pick -> selection. `pickIndex` is the object vector index the pick
+  // buffer returned (-1 = empty space); `mode` 0 = replace, 1 = toggle. The engine
+  // selects the whole top-level group containing the picked primitive (Blender-
+  // style); individual nodes stay selectable from the outliner.
+  selectByPick(pickIndex: number, mode: number): void {
+    this.call("sdf_select_by_pick", null, ["number", "number"], [pickIndex, mode]);
+  }
+
   // Groups the engine's current selection under a new operation node and returns
   // the new node's id (-1 on failure, e.g. fewer than two nodes selected). The
   // primary node is the base for Subtract.

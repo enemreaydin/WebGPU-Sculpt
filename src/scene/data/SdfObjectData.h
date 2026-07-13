@@ -12,7 +12,10 @@ struct alignas(16) SdfObjectData
                          // to the array index.
     int32_t parentId;    // Reserved for a future transform hierarchy (NOT the CSG tree).
                          // -1 = no parent. No hierarchy logic yet, field is reserved.
-    int32_t pad0;
+    int32_t selected;    // 1 = this primitive is part of the current selection and
+                         // should be highlighted in the shader; 0 = not. Written by
+                         // Application::UpdateSelectionHighlight() for every primitive
+                         // under any selected CSG node (so a whole group highlights).
 
     std::array<float, 4> position;   // xyz used, w = 0
 

@@ -735,17 +735,21 @@ export default class App extends React.Component<any, any> {
     this.selectKey(id, false);
   }
 
-  // Viewport pick result -> selection. The pick buffer stores the object's
-  // vector index (the CSG compile writes the array index into the id target),
-  // not its objectId; -1 means empty space.
+  // Viewport pick result -> selection. The pick buffer stores the object's vector
+  // index (-1 = empty space). The engine maps that to the whole top-level group
+  // containing the picked primitive (Blender-style) and updates the engine-owned
+  // selection; we just forward the raw index and re-read the result via refresh().
   selectByPick(pickIndex: number, additive: boolean) {
-    if (pickIndex === -1) {
-      if (!additive) this.selectKey("scene");
+    const e = this.engine;
+    if (!e) return;
+    try {
+      e.selectByPick(pickIndex, additive ? 1 : 0);
+    } catch (err) {
+      this.status("Selection needs the engine bridge");
+      this.log("error", "select: " + String(err));
       return;
     }
-    const o = this.state.objects.find((x: any) => x.index === pickIndex);
-    if (!o) return;
-    this.selectKey(String(o.id), additive);
+    this.afterSelect();
   }
 
   // ---- Render settings panel ----------------------------------------------
