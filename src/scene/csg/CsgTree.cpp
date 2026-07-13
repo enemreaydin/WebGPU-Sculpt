@@ -76,43 +76,7 @@ int32_t CsgTree::AddOperationNode(CsgNodeType opType, int32_t parent)
     return index;
 }
 
-int32_t CsgTree::AddRoundnessModifier(int32_t targetIndex, float amount)
-{
-    if (targetIndex < 0 || targetIndex >= static_cast<int32_t>(m_Nodes.size()) ||
-        !m_Nodes[targetIndex].alive || !std::isfinite(amount) || amount < 0.0f)
-        return -1;
-
-    const int32_t oldParent = m_Nodes[targetIndex].parent;
-    const int32_t oldPrev = m_Nodes[targetIndex].previousSibling;
-    const int32_t oldNext = m_Nodes[targetIndex].nextSibling;
-    CsgNode modifier{};
-    modifier.type = CsgNodeType::Modifier;
-    modifier.nodeId = m_NextNodeId++;
-    modifier.modifierType = ModifierType::Roundness;
-    modifier.modifierAmount = amount;
-    m_Nodes.push_back(modifier);
-    const int32_t modifierIndex = static_cast<int32_t>(m_Nodes.size()) - 1;
-
-    if (oldParent != -1)
-    {
-        CsgNode& parent = m_Nodes[oldParent];
-        if (oldPrev != -1) m_Nodes[oldPrev].nextSibling = modifierIndex; else parent.firstChild = modifierIndex;
-        if (oldNext != -1) m_Nodes[oldNext].previousSibling = modifierIndex; else parent.lastChild = modifierIndex;
-        m_Nodes[modifierIndex].parent = oldParent;
-        m_Nodes[modifierIndex].previousSibling = oldPrev;
-        m_Nodes[modifierIndex].nextSibling = oldNext;
-    }
-    else m_Root = modifierIndex;
-
-    m_Nodes[targetIndex].parent = modifierIndex;
-    m_Nodes[targetIndex].previousSibling = -1;
-    m_Nodes[targetIndex].nextSibling = -1;
-    m_Nodes[modifierIndex].firstChild = targetIndex;
-    m_Nodes[modifierIndex].lastChild = targetIndex;
-    return m_Nodes[modifierIndex].nodeId;
-}
-
-bool CsgTree::RemoveModifierNode(int32_t modifierIndex)
+bool CsgTree::RemoveLegacyModifierNode(int32_t modifierIndex)
 {
     if (modifierIndex < 0 || modifierIndex >= static_cast<int32_t>(m_Nodes.size())) return false;
     CsgNode& modifier = m_Nodes[modifierIndex];
@@ -142,9 +106,6 @@ void CsgTree::AttachChild(int32_t parentIndex, int32_t childIndex)
 {
     CsgNode& parent = m_Nodes[parentIndex];
     CsgNode& child = m_Nodes[childIndex];
-
-    if (parent.type == CsgNodeType::Modifier && parent.firstChild != -1)
-        return;
 
     child.parent = parentIndex;
     child.nextSibling = -1;
@@ -227,23 +188,9 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
         cmd.cmdType = CsgCmdType::PUSH_OBJECT;
         cmd.operand = objectIdToIndex.at(node.objectId);
         cmd.nodeId = node.nodeId;
-        cmd.parameter = 0.0f;
+        cmd.parameter = node.modifierEnabled && node.modifierType == ModifierType::Roundness
+            ? std::max(node.modifierAmount, 0.0f) : 0.0f;
         outProgram.push_back(cmd);
-        return;
-    }
-
-    if (node.type == CsgNodeType::Modifier)
-    {
-        if (node.firstChild == -1) return;
-        CompileNode(node.firstChild, objectIdToIndex, outProgram);
-        if (node.modifierEnabled && node.modifierType == ModifierType::Roundness)
-        {
-            CsgCommand cmd{};
-            cmd.cmdType = CsgCmdType::MOD_ROUNDNESS;
-            cmd.nodeId = node.nodeId;
-            cmd.parameter = std::max(node.modifierAmount, 0.0f);
-            outProgram.push_back(cmd);
-        }
         return;
     }
 
@@ -380,6 +327,24 @@ void CsgTree::ReadFromStream(std::istream& in)
     {
         // Truncated/partial section — fall back to an empty tree.
         Clear();
+    }
+    else
+    {
+        NormalizeLegacyModifierNodes();
+    }
+}
+
+void CsgTree::NormalizeLegacyModifierNodes()
+{
+    for (int32_t i = 0; i < static_cast<int32_t>(m_Nodes.size()); ++i)
+    {
+        CsgNode& legacy = m_Nodes[i];
+        if (!legacy.alive || legacy.type != CsgNodeType::Modifier || legacy.firstChild == -1) continue;
+        CsgNode& target = m_Nodes[legacy.firstChild];
+        target.modifierType = legacy.modifierType;
+        target.modifierAmount = legacy.modifierAmount;
+        target.modifierEnabled = legacy.modifierEnabled;
+        RemoveLegacyModifierNode(i);
     }
 }
 

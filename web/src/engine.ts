@@ -63,6 +63,7 @@ export interface CsgNodeJson {
   blendMode: number;
   blendRadius: number;
   modifierType: number;
+  modifierId: number;
   modifierAmount: number;
   modifierEnabled: boolean;
 }
@@ -264,7 +265,6 @@ export class Engine {
     return this.call("sdf_apply_operation", "number", ["number"], [op]) as number;
   }
 
-  setOperationType(nodeId: number, op: CsgOp): void { this.call("sdf_set_operation_type", null, ["number", "number"], [nodeId, op]); }
   setBlendMode(nodeId: number, mode: number): void { this.call("sdf_set_blend_mode", null, ["number", "number"], [nodeId, mode]); }
   setBlendRadius(nodeId: number, value: number): void { this.call("sdf_set_blend_radius", null, ["number", "number"], [nodeId, value]); }
   addRoundnessModifier(nodeId: number): number { return this.call("sdf_add_roundness_modifier", "number", ["number"], [nodeId]) as number; }

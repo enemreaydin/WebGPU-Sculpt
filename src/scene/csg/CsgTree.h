@@ -19,8 +19,6 @@ public:
 
     int32_t AddPrimitiveNode(int32_t objectId, int32_t parent = -1);
     int32_t AddOperationNode(CsgNodeType opType, int32_t parent = -1);
-    int32_t AddRoundnessModifier(int32_t targetIndex, float amount = 0.0f);
-    bool RemoveModifierNode(int32_t modifierIndex);
     void AttachChild(int32_t parentIndex, int32_t childIndex);
     void RemoveNode(int32_t index); // Recursively tombstones the entire subtree; detaches
                                     // from the parent's sibling chain using
@@ -59,6 +57,8 @@ public:
 
 private:
     void CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, std::vector<CsgCommand>& outProgram) const;
+    void NormalizeLegacyModifierNodes();
+    bool RemoveLegacyModifierNode(int32_t modifierIndex);
 
     std::vector<CsgNode> m_Nodes;
     int32_t m_Root = -1;

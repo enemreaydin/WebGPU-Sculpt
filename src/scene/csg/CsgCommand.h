@@ -9,8 +9,7 @@ enum class CsgCmdType : int32_t
     OP_INTERSECTION = 3,
     OP_SMOOTH_UNION = 4,
     OP_SMOOTH_SUBTRACT = 5,
-    OP_SMOOTH_INTERSECTION = 6,
-    MOD_ROUNDNESS = 7
+    OP_SMOOTH_INTERSECTION = 6
 };
 
 // GPU-facing RPN command — must match the WGSL layout exactly (16 bytes).

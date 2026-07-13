@@ -12,7 +12,7 @@ enum class CsgNodeType
                    // type so the UI can label it "Group" rather than a boolean op. Kept
                    // last so the existing 1/2/3 values (used in JSON, ApplyOperation, and
                    // the shader command mapping) never shift.
-    Modifier
+    Modifier       // Legacy on-disk value only; new modifiers are node metadata.
 };
 
 enum class BlendMode : int32_t { Hard = 0, Smooth = 1 };

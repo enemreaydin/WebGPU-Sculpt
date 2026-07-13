@@ -119,6 +119,18 @@ fn opIntersection(d1 : f32, d2 : f32) -> f32
     return max(d1, d2);
 }
 
+fn sdfRoundedBoxPreserveBounds(p: vec3f, boxHalfExtents: vec3f, requestedRadius: f32) -> f32
+{
+    let halfExtents = max(boxHalfExtents, vec3f(0.0));
+    let epsilon = 0.00001;
+    let maxRadius = max(min(halfExtents.x, min(halfExtents.y, halfExtents.z)) - epsilon, 0.0);
+    let r = clamp(requestedRadius, 0.0, maxRadius);
+    let innerHalfSize = halfExtents - vec3f(r);
+    let q = abs(p) - innerHalfSize;
+    return length(max(q, vec3f(0.0)))
+        + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
 const CSG_EPSILON : f32 = 0.000001;
 
 fn opSmoothUnion(dA: f32, dB: f32, radius: f32) -> f32
@@ -165,7 +177,7 @@ fn distanceCalc(p : vec3f) -> f32
             switch(obj.obj_type)
             {
                 case 0: { dist = sdfSphere(localPos, obj.size.x); }
-                case 1: { dist = sdfBox(localPos, obj.size.xyz); }
+                case 1: { dist = sdfRoundedBoxPreserveBounds(localPos, obj.size.xyz, cmd.parameter); }
                 case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
                 case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
                 case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
@@ -202,10 +214,6 @@ fn distanceCalc(p : vec3f) -> f32
 
             sp = sp - 1;
             distanceStack[sp - 1] = d;
-        }
-        else if (cmd.cmd_type == 7 && sp > 0)
-        {
-            distanceStack[sp - 1] = distanceStack[sp - 1] - max(cmd.parameter, 0.0);
         }
     }
      if (sp > 0)
@@ -301,7 +309,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             switch(obj.obj_type)
             {
                 case 0: { dist = sdfSphere(localPos, obj.size.x); }
-                case 1: { dist = sdfBox(localPos, obj.size.xyz); }
+                case 1: { dist = sdfRoundedBoxPreserveBounds(localPos, obj.size.xyz, cmd.parameter); }
                 case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
                 case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
                 case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
@@ -381,10 +389,6 @@ fn evaluateScene(p : vec3f) -> SceneResult
             stack[sp - 1] = d;
             stackColor[sp - 1] = c;
             stackId[sp - 1] = id;
-        }
-        else if (cmd.cmd_type == 7 && sp > 0)
-        {
-            stack[sp - 1] = stack[sp - 1] - max(cmd.parameter, 0.0);
         }
     }
 

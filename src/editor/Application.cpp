@@ -769,22 +769,6 @@ int Application::ApplyOperation(int opType) {
     return newNodeId;
 }
 
-void Application::SetOperationType(int nodeId, int opType)
-{
-    CsgNodeType type;
-    if (opType == 1) type = CsgNodeType::Union;
-    else if (opType == 2) type = CsgNodeType::Subtract;
-    else if (opType == 3) type = CsgNodeType::Intersection;
-    else return;
-    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(nodeId);
-    if (!node || (node->type != CsgNodeType::Union && node->type != CsgNodeType::Subtract && node->type != CsgNodeType::Intersection) || node->type == type) return;
-    const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
-    if (record) before = CaptureSceneEditSnapshot();
-    node->type = type;
-    OnCsgChanged();
-    if (record) FinishSceneEdit("Change CSG Operation", before);
-}
-
 void Application::SetBlendMode(int nodeId, int mode)
 {
     if (mode != 0 && mode != 1) return;
@@ -813,22 +797,25 @@ void Application::SetBlendRadius(int nodeId, float value)
 int Application::AddRoundnessModifier(int targetNodeId)
 {
     CsgTree& tree = sceneManager.GetCsgTree();
-    const int32_t targetIndex = tree.IndexForNodeId(targetNodeId);
-    if (targetIndex == -1 || targetIndex == tree.GetRoot()) return -1;
+    CsgNode* node = tree.FindNodeById(targetNodeId);
+    if (!node || node->type != CsgNodeType::Primitive) return -1;
+    const SdfObjectData* object = sceneManager.FindObjectById(node->objectId);
+    if (!object || object->type != static_cast<int32_t>(SdfObjectType::Box) ||
+        node->modifierType == ModifierType::Roundness) return -1;
     const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
     if (record) before = CaptureSceneEditSnapshot();
-    const int32_t modifierId = tree.AddRoundnessModifier(targetIndex);
-    if (modifierId == -1) return -1;
-    selectionState.Clear(); selectionState.Add(modifierId); selectionState.primaryNodeId = modifierId;
-    UpdateSelectionHighlight(); OnCsgChanged();
+    node->modifierType = ModifierType::Roundness;
+    node->modifierEnabled = true;
+    node->modifierAmount = 0.0f;
+    OnCsgChanged();
     if (record) FinishSceneEdit("Add Roundness Modifier", before);
-    return modifierId;
+    return targetNodeId;
 }
 
 void Application::SetRoundnessEnabled(int modifierNodeId, bool enabled)
 {
     CsgNode* node = sceneManager.GetCsgTree().FindNodeById(modifierNodeId);
-    if (!node || node->type != CsgNodeType::Modifier || node->modifierType != ModifierType::Roundness || node->modifierEnabled == enabled) return;
+    if (!node || node->type != CsgNodeType::Primitive || node->modifierType != ModifierType::Roundness || node->modifierEnabled == enabled) return;
     const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
     if (record) before = CaptureSceneEditSnapshot();
     node->modifierEnabled = enabled; OnCsgChanged();
@@ -839,7 +826,12 @@ void Application::SetRoundnessAmount(int modifierNodeId, float value)
 {
     if (!std::isfinite(value) || value < 0.0f) return;
     CsgNode* node = sceneManager.GetCsgTree().FindNodeById(modifierNodeId);
-    if (!node || node->type != CsgNodeType::Modifier || node->modifierType != ModifierType::Roundness || node->modifierAmount == value) return;
+    if (!node || node->type != CsgNodeType::Primitive || node->modifierType != ModifierType::Roundness) return;
+    const SdfObjectData* object = sceneManager.FindObjectById(node->objectId);
+    if (!object || object->type != static_cast<int32_t>(SdfObjectType::Box)) return;
+    const float maxRadius = std::max(0.0f, std::min({ object->size[0], object->size[1], object->size[2] }) - 0.00001f);
+    value = std::min(value, maxRadius);
+    if (node->modifierAmount == value) return;
     const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
     if (record) before = CaptureSceneEditSnapshot();
     node->modifierAmount = value; OnCsgChanged();
@@ -848,17 +840,14 @@ void Application::SetRoundnessAmount(int modifierNodeId, float value)
 
 void Application::RemoveRoundnessModifier(int modifierNodeId)
 {
-    CsgTree& tree = sceneManager.GetCsgTree();
-    const int32_t index = tree.IndexForNodeId(modifierNodeId);
-    if (index == -1) return;
-    const CsgNode& modifier = tree.GetNodes()[index];
-    if (modifier.type != CsgNodeType::Modifier || modifier.firstChild == -1) return;
-    const int32_t childId = tree.GetNodes()[modifier.firstChild].nodeId;
+    CsgNode* node = sceneManager.GetCsgTree().FindNodeById(modifierNodeId);
+    if (!node || node->type != CsgNodeType::Primitive || node->modifierType != ModifierType::Roundness) return;
     const bool record = ShouldRecordSceneEdit(); SceneEditSnapshot before;
     if (record) before = CaptureSceneEditSnapshot();
-    if (!tree.RemoveModifierNode(index)) return;
-    selectionState.Clear(); selectionState.Add(childId); selectionState.primaryNodeId = childId;
-    UpdateSelectionHighlight(); OnCsgChanged();
+    node->modifierType = ModifierType::None;
+    node->modifierAmount = 0.0f;
+    node->modifierEnabled = false;
+    OnCsgChanged();
     if (record) FinishSceneEdit("Remove Roundness Modifier", before);
 }
 
@@ -963,8 +952,9 @@ std::string Application::GetSceneJson() const {
             << ",\"objectId\":" << (n.type == CsgNodeType::Primitive ? n.objectId : -1)
             << ",\"blendMode\":" << static_cast<int>(n.blendMode)
             << ",\"blendRadius\":" << n.blendRadius
-            << ",\"modifierType\":" << static_cast<int>(n.modifierType)
-            << ",\"modifierAmount\":" << n.modifierAmount
+             << ",\"modifierType\":" << static_cast<int>(n.modifierType)
+             << ",\"modifierId\":" << ((n.modifierType != ModifierType::None) ? n.nodeId : -1)
+             << ",\"modifierAmount\":" << n.modifierAmount
             << ",\"modifierEnabled\":" << (n.modifierEnabled ? "true" : "false")
             << ",\"children\":[";
         bool firstChild = true;

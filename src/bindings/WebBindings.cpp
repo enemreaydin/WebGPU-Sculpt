@@ -62,7 +62,6 @@ extern "C" {
         return g_App->ApplyOperation(opType);
     }
 
-    EMSCRIPTEN_KEEPALIVE void sdf_set_operation_type(int nodeId, int opType) { if (g_App) g_App->SetOperationType(nodeId, opType); }
     EMSCRIPTEN_KEEPALIVE void sdf_set_blend_mode(int nodeId, int mode) { if (g_App) g_App->SetBlendMode(nodeId, mode); }
     EMSCRIPTEN_KEEPALIVE void sdf_set_blend_radius(int nodeId, float value) { if (g_App) g_App->SetBlendRadius(nodeId, value); }
     EMSCRIPTEN_KEEPALIVE int sdf_add_roundness_modifier(int targetNodeId) { return g_App ? g_App->AddRoundnessModifier(targetNodeId) : -1; }

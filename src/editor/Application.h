@@ -77,7 +77,6 @@ public:
     void SelectNode(int nodeId, int mode);   // mode 0 = replace, 1 = toggle
     void ClearSelection();
     int  ApplyOperation(int opType);        
-    void SetOperationType(int nodeId, int opType);
     void SetBlendMode(int nodeId, int mode);
     void SetBlendRadius(int nodeId, float value);
     int  AddRoundnessModifier(int targetNodeId);
