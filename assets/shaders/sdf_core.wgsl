@@ -95,37 +95,13 @@ fn sdfSolidAngle(p: vec3f, ra: f32, angle: f32) -> f32
     return max(l, m * sign(c.y * q.x - c.x * q.y));
 }
 
-fn sdfPyramid(pIn: vec3f, h: f32) -> f32
+fn sdfPyramid(p: vec3f, halfBase: f32, h: f32) -> f32
 {
-    let m2 = h * h + 0.25;
-
-    var px = abs(pIn.x);
-    var pz = abs(pIn.z);
-    let py = pIn.y;
-    if (pz > px)
-    {
-        let tmp = px;
-        px = pz;
-        pz = tmp;
-    }
-    px = px - 0.5;
-    pz = pz - 0.5;
-
-    let qx = pz;
-    let qy = h * py - 0.5 * px;
-    let qz = h * px + 0.5 * py;
-
-    let s = max(-qx, 0.0);
-    let t = clamp((qy - 0.5 * pz) / (m2 + 0.25), 0.0, 1.0);
-    let a = m2 * (qx + s) * (qx + s) + qy * qy;
-    let b = m2 * (qx + 0.5 * t) * (qx + 0.5 * t) + (qy - m2 * t) * (qy - m2 * t);
-
-    var d2 = 0.0;
-    if (min(qy, -qx * m2 - qy * 0.5) <= 0.0)
-    {
-        d2 = min(a, b);
-    }
-    return sqrt((d2 + qz * qz) / m2) * sign(max(qz, -py));
+    let m = sqrt(h * h + halfBase * halfBase);
+    let px = abs(p.x);
+    let pz = abs(p.z);
+    let dSlant = (h * max(px, pz) + halfBase * p.y - halfBase * h) / m;
+    return max(dSlant, -p.y);
 }
 
 fn opUnion(d1 : f32, d2 : f32) -> f32
@@ -173,7 +149,7 @@ fn distanceCalc(p : vec3f) -> f32
                 case 5: { dist = sdfCone(localPos, obj.size.x, obj.size.y); }
                 case 6: { dist = sdfCapsule(localPos, vec3f(0.0, -obj.size.y, 0.0), vec3f(0.0, obj.size.y, 0.0), obj.size.x); }
                 case 7: { dist = sdfSolidAngle(localPos, obj.size.x, obj.size.y); }
-                case 8: { dist = sdfPyramid(localPos, obj.size.x); }
+                case 8: { dist = sdfPyramid(localPos, obj.size.x, obj.size.y); }
                 default: { dist = 100000.0; }
             }
             distanceStack[sp] = dist;
@@ -301,7 +277,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
                 case 5: { dist = sdfCone(localPos, obj.size.x, obj.size.y); }
                 case 6: { dist = sdfCapsule(localPos, vec3f(0.0, -obj.size.y, 0.0), vec3f(0.0, obj.size.y, 0.0), obj.size.x); }
                 case 7: { dist = sdfSolidAngle(localPos, obj.size.x, obj.size.y); }
-                case 8: { dist = sdfPyramid(localPos, obj.size.x); }
+                case 8: { dist = sdfPyramid(localPos, obj.size.x, obj.size.y); }
                 default: { dist = 100000.0; }
             }
 

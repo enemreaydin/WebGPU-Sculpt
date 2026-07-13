@@ -127,7 +127,7 @@ SdfObjectData SdfObjectFactory::CreateSolidAngle(float radius, float angle)
     return obj;
 }
 
-SdfObjectData SdfObjectFactory::CreatePyramid(float height)
+SdfObjectData SdfObjectFactory::CreatePyramid(float halfBase, float height)
 {
     SdfObjectData obj{};
 
@@ -136,8 +136,8 @@ SdfObjectData SdfObjectFactory::CreatePyramid(float height)
 
     obj.position = { 0.0f, 0.0f, 0.0f, 0.0f };
     obj.rotation = { 0.0f, 0.0f, 0.0f, 1.0f };
-    // size.x = height; base is a fixed unit (1x1) square in the SDF
-    obj.size = { height, 0.0f, 0.0f, 0.0f };
+    // size.x = base half-width (square base), size.y = height
+    obj.size = { halfBase, height, 0.0f, 0.0f };
     obj.color = { 0.6f, 0.75f, 0.25f, 0.0f };
 
     return obj;

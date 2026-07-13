@@ -45,7 +45,8 @@ namespace PrimitiveGeometry
             p.angle  = s[1];
             break;
         case SdfObjectType::Pyramid:
-            p.height = s[0];
+            p.radius = s[0];   // base half-width
+            p.height = s[1];
             break;
         }
     }
@@ -66,7 +67,7 @@ namespace PrimitiveGeometry
         case SdfObjectType::Cone:     return { p.height * scale[1], p.angle, 0.0f };
         case SdfObjectType::Capsule:  return { p.radius * scale[0], p.height * scale[1], 0.0f };
         case SdfObjectType::SolidAngle: return { p.radius * scale[0], p.angle, 0.0f };
-        case SdfObjectType::Pyramid:  return { p.height * scale[1], 0.0f, 0.0f };
+        case SdfObjectType::Pyramid:  return { p.radius * scale[0], p.height * scale[1], 0.0f };
         }
         return { scale[0], scale[1], scale[2] };
     }

@@ -98,8 +98,18 @@ const SHORTCUTS_GRID_HTML = `<div style="display:grid;grid-template-columns:repe
 // Small helper: render an editable/drag numeric field control (transform axis,
 // shape param, demo field) from a mockup `field()` descriptor.
 function FieldCtl({ f, wrapS, editS, showS, prefix }: any) {
+  const dis = !!f.disabled;
+  // When disabled, drop the resize cursor + interactivity and dim the control.
+  const wrap = dis ? wrapS.replace("cursor:ew-resize", "cursor:default") + ";opacity:0.4" : wrapS;
+  const show = dis ? showS.replace(/color:#[0-9a-fA-F]+/, "color:#8a8a8a") : showS;
   return (
-    <div onPointerDown={f.down} onPointerMove={f.move} onPointerUp={f.up} style={css(wrapS)}>
+    <div
+      onPointerDown={dis ? undefined : f.down}
+      onPointerMove={dis ? undefined : f.move}
+      onPointerUp={dis ? undefined : f.up}
+      title={dis ? "Not applicable for this shape" : undefined}
+      style={css(wrap)}
+    >
       {prefix}
       {f.editing && (
         <input
@@ -111,7 +121,7 @@ function FieldCtl({ f, wrapS, editS, showS, prefix }: any) {
           style={css(editS)}
         />
       )}
-      {f.show && <span style={css(showS)}>{f.text}</span>}
+      {f.show && <span style={css(show)}>{f.text}</span>}
     </div>
   );
 }
@@ -149,7 +159,7 @@ export default class App extends React.Component<any, any> {
     cone: { height: 1.5, angle: 0.5 },
     capsule: { radius: 0.4, height: 0.7 },
     solidAngle: { radius: 1.2, angle: 0.8 },
-    pyramid: { height: 1.2 },
+    pyramid: { radius: 0.6, height: 1.2 },
   };
   PRM_ROWS: any = {
     sphere: [["Radius", "radius", 0.01]],
@@ -160,7 +170,21 @@ export default class App extends React.Component<any, any> {
     cone: [["Height", "height", 0.01], ["Angle", "angle", 0.01]],
     capsule: [["Radius", "radius", 0.01], ["Height", "height", 0.01]],
     solidAngle: [["Radius", "radius", 0.01], ["Angle", "angle", 0.01]],
-    pyramid: [["Height", "height", 0.01]],
+    pyramid: [["Base", "radius", 0.01], ["Height", "height", 0.01]],
+  };
+
+  // Which scale axes (X, Y, Z) actually affect each primitive's SDF `size`.
+  // Inactive axes are greyed out in the properties panel (see PrimitiveGeometry).
+  SCALE_AXES: Record<string, boolean[]> = {
+    sphere:     [true, false, false],
+    box:        [true, true, true],
+    cylinder:   [true, true, false],
+    torus:      [true, false, false],
+    link:       [true, true, false],
+    cone:       [false, true, false],
+    capsule:    [true, true, false],
+    solidAngle: [true, false, false],
+    pyramid:    [true, true, false],
   };
 
   // Property-row param name -> engine ShapeParam id (see engine.ts).
@@ -525,7 +549,7 @@ export default class App extends React.Component<any, any> {
     else if (typeName === "cone") prm = { height: p.height, angle: p.angle };
     else if (typeName === "capsule") prm = { radius: p.radius, height: p.height };
     else if (typeName === "solidAngle") prm = { radius: p.radius, angle: p.angle };
-    else if (typeName === "pyramid") prm = { height: p.height };
+    else if (typeName === "pyramid") prm = { radius: p.radius, height: p.height };
     else prm = { round: p.roundness };
     const c = o.color.map((v: number) => Math.round(Math.max(0, Math.min(1, v)) * 255));
     return {
@@ -855,9 +879,26 @@ export default class App extends React.Component<any, any> {
     if (!isNaN(v)) this.sf(k, v);
     this.setState({ editing: null });
   }
-  field(key: string, step: number): any {
-    const editing = this.state.editing === key;
+  field(key: string, step: number, disabled?: boolean): any {
     const v = this.gf(key);
+    if (disabled) {
+      // Non-interactive: still shows the value, but greyed and inert. Used for
+      // scale axes a shape ignores and for params not yet wired to the SDF.
+      return {
+        disabled: true,
+        editing: false,
+        show: true,
+        text: (Math.round(v * 1000) / 1000).toFixed(2),
+        editText: "",
+        down: () => {},
+        move: () => {},
+        up: () => {},
+        onInput: () => {},
+        onKey: () => {},
+        onBlur: () => {},
+      };
+    }
+    const editing = this.state.editing === key;
     return {
       editing,
       show: !editing,
@@ -1316,12 +1357,14 @@ export default class App extends React.Component<any, any> {
     // properties
     const axisColors = ["#d8504a", "#7fae3a", "#4b84d6"];
     const axisNames = ["X", "Y", "Z"];
-    const trRow = (label: string, base: string, step: number) => ({
+    const trRow = (label: string, base: string, step: number, mask?: boolean[]) => ({
       label,
-      axes: [0, 1, 2].map((i) => ({ axis: axisNames[i], color: axisColors[i], ...this.field(base + "." + i, step) })),
+      axes: [0, 1, 2].map((i) => ({ axis: axisNames[i], color: axisColors[i], ...this.field(base + "." + i, step, mask ? !mask[i] : false) })),
     });
-    const transformRows = isObj ? [trRow("Position", "pos", 0.02), trRow("Rotation", "rot", 0.5), trRow("Scale", "scl", 0.01)] : [];
-    const paramRows = isObj ? (this.PRM_ROWS[selTypeName] || []).map(([label, k, step]: any) => ({ label, ...this.field("prm." + k, step) })) : [];
+    const scaleMask = this.SCALE_AXES[selTypeName] || [true, true, true];
+    const transformRows = isObj ? [trRow("Position", "pos", 0.02), trRow("Rotation", "rot", 0.5), trRow("Scale", "scl", 0.01, scaleMask)] : [];
+    // `round` (box corner rounding) is stored but not yet applied to the SDF — greyed out.
+    const paramRows = isObj ? (this.PRM_ROWS[selTypeName] || []).map(([label, k, step]: any) => ({ label, disabled: k === "round", ...this.field("prm." + k, step, k === "round") })) : [];
 
     // Changing type is done via delete + re-create (no in-place type binding).
     // Carry over the engine-owned attributes that still make sense; shape params
@@ -2116,7 +2159,7 @@ export default class App extends React.Component<any, any> {
                             </div>
                             {V.paramRows.map((p: any, pi: number) => (
                               <div key={pi} style={css("display:flex;align-items:center;gap:8px")}>
-                                <span style={css("flex:0 0 64px;font-size:11px;color:#a0a0a0")}>{p.label}</span>
+                                <span style={css(`flex:0 0 64px;font-size:11px;color:${p.disabled ? "#5c5c5c" : "#a0a0a0"}`)} title={p.disabled ? "Not implemented yet" : undefined}>{p.label}</span>
                                 <FieldCtl
                                   f={p}
                                   wrapS="flex:1;min-width:0;height:22px;display:flex;align-items:center;background:#151515;border:1px solid #303030;border-radius:2px;cursor:ew-resize;overflow:hidden"
@@ -2134,30 +2177,24 @@ export default class App extends React.Component<any, any> {
                           <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Blend</span>
                         </div>
                         {V.secBOpen && (
-                          <div style={css("display:flex;flex-direction:column;gap:6px;padding:8px 10px 10px")}>
-                            <div style={css("display:flex;align-items:center;gap:8px")}>
-                              <span style={css("flex:0 0 64px;font-size:11px;color:#a0a0a0")}>Operation</span>
+                          <div style={css("display:flex;flex-direction:column;gap:6px;padding:8px 10px 10px")} title="Per-object blend — planned, not implemented yet">
+                            <div style={css("display:flex;align-items:center;gap:8px;opacity:0.4")}>
+                              <span style={css("flex:0 0 64px;font-size:11px;color:#8a8a8a")}>Operation</span>
                               <div style={css("flex:1;position:relative")}>
-                                <Hv onClick={V.opToggle} s="height:22px;display:flex;align-items:center;justify-content:space-between;background:#2a2a2a;border:1px solid #363636;border-radius:2px;padding:0 8px;font-size:11px;color:#dedede;cursor:default" h="background:#333333">
+                                <div style={css("height:22px;display:flex;align-items:center;justify-content:space-between;background:#2a2a2a;border:1px solid #363636;border-radius:2px;padding:0 8px;font-size:11px;color:#8a8a8a;cursor:default")}>
                                   <span>{V.opName}</span>
-                                  <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="#a0a0a0" stroke-width="1.4"></path></svg>`} />
-                                </Hv>
-                                {V.opOpen && (
-                                  <div style={css("position:absolute;top:100%;left:0;right:0;margin-top:2px;background:#232323;border:1px solid #3a3a3a;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,0.55);padding:3px 0;z-index:400")}>
-                                    {V.opOptions.map((o: any, oi: number) => (
-                                      <Hv key={oi} onClick={o.onClick} s={`padding:4px 10px;font-size:11px;color:${o.fg};cursor:default`} h="background:#2e2e2e">{o.label}</Hv>
-                                    ))}
-                                  </div>
-                                )}
+                                  <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="#8a8a8a" stroke-width="1.4"></path></svg>`} />
+                                </div>
                               </div>
                             </div>
-                            <div style={css("display:flex;align-items:center;gap:8px")}>
-                              <span style={css("flex:0 0 64px;font-size:11px;color:#a0a0a0")}>Smooth</span>
-                              <div onPointerDown={V.smDown} onPointerMove={V.smMove} onPointerUp={V.smUp} style={css("flex:1;height:22px;position:relative;background:#151515;border:1px solid #303030;border-radius:2px;overflow:hidden;cursor:ew-resize")}>
-                                <div style={css(`position:absolute;left:0;top:0;bottom:0;width:${V.smoothPct};background:rgba(232,145,45,0.4)`)} />
-                                <span style={css("position:absolute;right:8px;top:0;bottom:0;display:flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#dedede")}>{V.smoothText}</span>
+                            <div style={css("display:flex;align-items:center;gap:8px;opacity:0.4")}>
+                              <span style={css("flex:0 0 64px;font-size:11px;color:#8a8a8a")}>Smooth</span>
+                              <div style={css("flex:1;height:22px;position:relative;background:#151515;border:1px solid #303030;border-radius:2px;overflow:hidden;cursor:default")}>
+                                <div style={css(`position:absolute;left:0;top:0;bottom:0;width:${V.smoothPct};background:rgba(232,145,45,0.25)`)} />
+                                <span style={css("position:absolute;right:8px;top:0;bottom:0;display:flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a8a")}>{V.smoothText}</span>
                               </div>
                             </div>
+                            <span style={css("font-size:10px;color:#5c5c5c;padding-top:2px")}>Planned — not implemented yet.</span>
                           </div>
                         )}
 

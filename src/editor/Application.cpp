@@ -255,7 +255,7 @@ int Application::AddPrimitive(SdfObjectType type) {
     case SdfObjectType::Cone:       object = SdfObjectFactory::CreateCone(1.5f, 0.5f); break;
     case SdfObjectType::Capsule:    object = SdfObjectFactory::CreateCapsule(0.4f, 0.7f); break;
     case SdfObjectType::SolidAngle: object = SdfObjectFactory::CreateSolidAngle(1.2f, 0.8f); break;
-    case SdfObjectType::Pyramid:    object = SdfObjectFactory::CreatePyramid(1.2f); break;
+    case SdfObjectType::Pyramid:    object = SdfObjectFactory::CreatePyramid(0.6f, 1.2f); break;
     default: return -1;
     }
 

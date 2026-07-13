@@ -13,5 +13,5 @@ public:
     static SdfObjectData CreateCone(float height, float angle);
     static SdfObjectData CreateCapsule(float radius, float halfHeight);
     static SdfObjectData CreateSolidAngle(float radius, float angle);
-    static SdfObjectData CreatePyramid(float height);
+    static SdfObjectData CreatePyramid(float halfBase, float height);
 };
