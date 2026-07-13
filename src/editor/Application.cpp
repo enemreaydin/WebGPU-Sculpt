@@ -940,30 +940,57 @@ void Application::CameraZoom(float delta) {
 // the SDF fragment shader (see UpdateGizmoGlobals + main.wgsl), not as a
 // front-end overlay, so it never trails the scene.
 
-bool Application::GetSelectedObjectPosition(glm::vec3& outPosition) const {
-    const auto& objects = sceneManager.GetObjects();
-    int index = selectionState.selectedObjectIndex;
-    if (index < 0 || index >= static_cast<int>(objects.size()))
-        return false;
-    const auto& p = objects[index].position;
-    outPosition = glm::vec3(p[0], p[1], p[2]);
-    return true;
+// A stored (x,y,z,w) rotation array as a unit quaternion. Degenerate (zero)
+// quaternions — legacy/uninitialized data — fall back to identity, not NaN.
+static glm::quat QuatFromArray(const std::array<float, 4>& r) {
+    const float len2 = r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3];
+    if (len2 < 1e-8f) return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+    return glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));  // ctor is (w,x,y,z)
 }
 
-// The selection's rotation as a unit quaternion, for the gizmo's Local space.
-// Degenerate (zero) quaternions fall back to identity rather than NaN.
-bool Application::GetSelectedObjectRotation(glm::quat& outRotation) const {
-    const auto& objects = sceneManager.GetObjects();
-    int index = selectionState.selectedObjectIndex;
-    if (index < 0 || index >= static_cast<int>(objects.size()))
-        return false;
+// Resolve the primary selected node into a gizmo target. A primitive transforms
+// about its own centre/axes (unchanged behaviour); a group/operation node
+// transforms every descendant primitive together about their centroid ("median
+// point"), world-aligned. Returns valid=false when nothing usable is selected.
+Application::GizmoTarget Application::ComputeGizmoTarget() const {
+    GizmoTarget t;
+    if (selectionState.primaryNodeId == -1) return t;
 
-    const auto& r = objects[index].rotation;
-    float len2 = r[0]*r[0] + r[1]*r[1] + r[2]*r[2] + r[3]*r[3];
-    outRotation = (len2 < 1e-8f)
-        ? glm::quat(1.0f, 0.0f, 0.0f, 0.0f)
-        : glm::normalize(glm::quat(r[3], r[0], r[1], r[2]));  // ctor is (w,x,y,z)
-    return true;
+    const CsgTree& tree = sceneManager.GetCsgTree();
+    int32_t idx = tree.IndexForNodeId(selectionState.primaryNodeId);
+    if (idx == -1) return t;
+    const CsgNode& n = tree.GetNodes()[idx];
+
+    if (n.type == CsgNodeType::Primitive) {
+        const SdfObjectData* o = sceneManager.FindObjectById(n.objectId);
+        if (!o) return t;
+        t.valid    = true;
+        t.isGroup  = false;
+        t.origin   = glm::vec3(o->position[0], o->position[1], o->position[2]);
+        t.rotation = QuatFromArray(o->rotation);
+        t.objectIds.push_back(n.objectId);
+        return t;
+    }
+
+    // Group node: pivot on the centroid of its descendant primitives' positions.
+    std::vector<int32_t> ids;
+    sceneManager.CollectSubtreeObjectIds(idx, ids);
+    glm::vec3 sum(0.0f);
+    int count = 0;
+    for (int32_t oid : ids) {
+        const SdfObjectData* o = sceneManager.FindObjectById(oid);
+        if (!o) continue;
+        sum += glm::vec3(o->position[0], o->position[1], o->position[2]);
+        ++count;
+        t.objectIds.push_back(oid);
+    }
+    if (count == 0) return t;
+
+    t.valid    = true;
+    t.isGroup  = true;
+    t.origin   = sum / static_cast<float>(count);
+    t.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);   // groups are world-aligned
+    return t;
 }
 
 // Current camera view/proj for gizmo hit-testing (matches the render frame).
@@ -976,52 +1003,59 @@ static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeig
 }
 
 int Application::GizmoHover(float mouseX, float mouseY) {
-    glm::vec3 selectedPos;
-    glm::quat selectedRot;
-    if (!GetSelectedObjectPosition(selectedPos) || !GetSelectedObjectRotation(selectedRot))
-        return 0;
+    GizmoTarget target = ComputeGizmoTarget();
+    if (!target.valid) return 0;
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
-    return gizmoController.Hover(glm::vec2(mouseX, mouseY), selectedPos, selectedRot, v, p,
+    return gizmoController.Hover(glm::vec2(mouseX, mouseY), target.origin, target.rotation, v, p,
         static_cast<float>(renderWidth), static_cast<float>(renderHeight));
 }
 
 void Application::GizmoBeginDrag(float mouseX, float mouseY) {
-    auto& objects = sceneManager.GetObjects();
-    int index = selectionState.selectedObjectIndex;
-
-    if (index < 0 || index >= static_cast<int>(objects.size()))
-        return;
-
-    glm::vec3 selectedPos;
-    glm::quat selectedRot;
-    if (!GetSelectedObjectPosition(selectedPos) || !GetSelectedObjectRotation(selectedRot))
-        return;
+    GizmoTarget target = ComputeGizmoTarget();
+    if (!target.valid) return;
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
 
     gizmoController.BeginDrag(
         glm::vec2(mouseX, mouseY),
-        selectedPos,
-        selectedRot,
+        target.origin,
+        target.rotation,
         v,
         p,
         static_cast<float>(renderWidth),
         static_cast<float>(renderHeight)
     );
 
-    const int32_t objectId = objects[index].objectId;
+    // BeginDrag refuses (e.g. no axis grabbed, or an unresolvable rotate spoke),
+    // so only arm the transaction/snapshot once a drag actually latched.
+    if (!gizmoController.IsDragging()) return;
 
-    m_TransformTransaction.Begin(sceneManager, { objectId });
+    // Snapshot the pivot and every affected object's start pose. DragTranslate/
+    // DragRotate report absolute-from-start values, so each frame recomputes from
+    // these — no accumulated drift, and a clean base for the group math.
+    m_GizmoDrag = GizmoDragState{};
+    m_GizmoDrag.active   = true;
+    m_GizmoDrag.isGroup  = target.isGroup;
+    m_GizmoDrag.pivot    = target.origin;
+    m_GizmoDrag.objectIds = target.objectIds;
+    for (int32_t oid : target.objectIds) {
+        const SdfObjectData* o = sceneManager.FindObjectById(oid);
+        m_GizmoDrag.startPos.push_back(o ? glm::vec3(o->position[0], o->position[1], o->position[2])
+                                         : glm::vec3(0.0f));
+        m_GizmoDrag.startRot.push_back(o ? QuatFromArray(o->rotation)
+                                         : glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+    }
+
+    // Undo covers every affected primitive (one for a primitive, all descendants
+    // for a group).
+    m_TransformTransaction.Begin(sceneManager, target.objectIds);
 }
 
 void Application::GizmoDrag(float mouseX, float mouseY) {
-    auto& objects = sceneManager.GetObjects();
-    int index = selectionState.selectedObjectIndex;
-    if (index < 0 || index >= static_cast<int>(objects.size()))
-        return;
+    if (!m_GizmoDrag.active) return;
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
@@ -1029,41 +1063,64 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
     const float h = static_cast<float>(renderHeight);
 
     if (gizmoController.Mode() == GizmoMode::Rotate) {
-        glm::quat newRotation;
-        if (!gizmoController.DragRotate(glm::vec2(mouseX, mouseY), v, p, w, h, newRotation))
+        glm::quat outRotation;
+        if (!gizmoController.DragRotate(glm::vec2(mouseX, mouseY), v, p, w, h, outRotation))
             return;
 
-        objects[index].rotation = { newRotation.x, newRotation.y, newRotation.z, newRotation.w };
-        // Keep the editor record (and therefore the properties panel) in step
-        // with what the drag just did to the GPU-side quaternion.
-        if (EditorObject* eo = editorStore.Find(objects[index].objectId))
-            eo->rotationEuler = QuatToEulerDegrees(objects[index].rotation);
-
+        if (m_GizmoDrag.isGroup) {
+            // The group's start rotation was identity, so outRotation IS the delta.
+            // Turn each descendant about the pivot and reorient it by the same delta.
+            const glm::quat delta = outRotation;
+            for (size_t i = 0; i < m_GizmoDrag.objectIds.size(); ++i) {
+                SdfObjectData* o = sceneManager.FindObjectById(m_GizmoDrag.objectIds[i]);
+                if (!o) continue;
+                glm::vec3 newPos = m_GizmoDrag.pivot + delta * (m_GizmoDrag.startPos[i] - m_GizmoDrag.pivot);
+                glm::quat newRot = glm::normalize(delta * m_GizmoDrag.startRot[i]);
+                o->position = { newPos.x, newPos.y, newPos.z, 0.0f };
+                o->rotation = { newRot.x, newRot.y, newRot.z, newRot.w };
+                if (EditorObject* eo = editorStore.Find(o->objectId))
+                    eo->rotationEuler = QuatToEulerDegrees(o->rotation);
+            }
+        } else {
+            // Single primitive: rotate in place about its own centre (position fixed).
+            SdfObjectData* o = sceneManager.FindObjectById(m_GizmoDrag.objectIds[0]);
+            if (o) {
+                o->rotation = { outRotation.x, outRotation.y, outRotation.z, outRotation.w };
+                if (EditorObject* eo = editorStore.Find(o->objectId))
+                    eo->rotationEuler = QuatToEulerDegrees(o->rotation);
+            }
+        }
         OnSceneChanged();
         return;
     }
 
-    glm::vec3 newPosition;
-    if (!gizmoController.DragTranslate(glm::vec2(mouseX, mouseY), v, p, w, h, newPosition))
+    glm::vec3 outOrigin;
+    if (!gizmoController.DragTranslate(glm::vec2(mouseX, mouseY), v, p, w, h, outOrigin))
         return;
 
-    objects[index].position = { newPosition.x, newPosition.y, newPosition.z, 0.0f };
+    // Shift every affected object by the same pivot delta (for a lone primitive
+    // this reduces to setting its position to outOrigin).
+    const glm::vec3 delta = outOrigin - m_GizmoDrag.pivot;
+    for (size_t i = 0; i < m_GizmoDrag.objectIds.size(); ++i) {
+        SdfObjectData* o = sceneManager.FindObjectById(m_GizmoDrag.objectIds[i]);
+        if (!o) continue;
+        glm::vec3 newPos = m_GizmoDrag.startPos[i] + delta;
+        o->position = { newPos.x, newPos.y, newPos.z, 0.0f };
+    }
     OnSceneChanged();
 }
 
 void Application::GizmoEndDrag() {
     gizmoController.EndDrag();
-
     m_TransformTransaction.Commit(sceneManager, m_UndoStack);
-
+    m_GizmoDrag = GizmoDragState{};
     OnSceneChanged();
 }
 
 void Application::GizmoCancelDrag() {
     gizmoController.EndDrag();
-
     m_TransformTransaction.Cancel(sceneManager);
-
+    m_GizmoDrag = GizmoDragState{};
     OnSceneChanged();
 }
 
@@ -1071,10 +1128,13 @@ void Application::GizmoCancelDrag() {
 // the same frame as the scene. Called every frame from MainLoop with the live
 // camera matrices.
 void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
-    glm::vec3 origin;
-    glm::quat rotation;
-    bool visible = gizmoEnabled && GetSelectedObjectPosition(origin)
-                                && GetSelectedObjectRotation(rotation);
+    // Recompute the target every frame: during a group translate the centroid
+    // rides along with the objects (the gizmo follows the cursor); during a rotate
+    // it is preserved (rotation about the centroid), so the gizmo stays put.
+    GizmoTarget target = ComputeGizmoTarget();
+    bool visible = gizmoEnabled && target.valid;
+    glm::vec3 origin   = target.origin;
+    glm::quat rotation = target.rotation;
 
     globals.gizmoVisible = visible ? 1 : 0;
     globals.gizmoHovered = static_cast<int32_t>(gizmoController.HoveredAxis());

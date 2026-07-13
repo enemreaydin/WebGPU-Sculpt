@@ -478,10 +478,14 @@ export default class App extends React.Component<any, any> {
     return { x: (e.clientX - rect.left) * sx, y: (e.clientY - rect.top) * sy };
   }
 
-  // True when the gizmo is applicable: move/rotate tool + a primitive selected.
+  // True when the gizmo is applicable: move/rotate tool + something the engine can
+  // transform — either a selected primitive or a selected group/operation node.
+  // (The engine draws the gizmo and computes its target; this only gates whether a
+  // viewport press grabs an axis instead of orbiting.)
   gizmoActive(): boolean {
     const tool = this.state.tool;
-    return (tool === "move" || tool === "rotate") && !!this.engine && !!this.selObj();
+    if (!(tool === "move" || tool === "rotate") || !this.engine) return false;
+    return !!this.selObj() || this.isGroupKey(this.state.sel);
   }
 
   camDown = (e: React.PointerEvent) => {

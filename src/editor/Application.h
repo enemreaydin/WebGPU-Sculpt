@@ -177,9 +177,20 @@ private:
     void UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p);  // fill gizmo* in globals
     void SyncRenderGlobals();  // copy appSettings render values into globals each frame
     void RebuildEditorRecords();   // recreate editor records after a scene load
-    bool GetSelectedObjectPosition(glm::vec3& outPosition) const;
-    bool GetSelectedObjectRotation(glm::quat& outRotation) const;
     TextureView GetNextSurfaceTextureView();
+
+    // The gizmo target derived from the primary selected node: a single primitive
+    // (transform about its own centre/axes) or a group/operation node (transform
+    // every descendant primitive together about their centroid, world-aligned).
+    // One route drives hover, drag, and the shader-drawn gizmo for both cases.
+    struct GizmoTarget {
+        bool valid = false;
+        bool isGroup = false;
+        glm::vec3 origin{ 0.0f };
+        glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
+        std::vector<int32_t> objectIds;   // affected primitives (1 for a primitive)
+    };
+    GizmoTarget ComputeGizmoTarget() const;
 
     static const char* TypeName(int32_t type);
 
@@ -188,6 +199,20 @@ private:
     void OnSceneChanged();
 
     TransformTransaction m_TransformTransaction;
+
+    // Start-of-drag snapshot for the gizmo. The controller reports translate/rotate
+    // as absolute-from-start, so we capture each affected object's starting pose and
+    // the pivot once at BeginDrag and recompute from them every frame.
+    struct GizmoDragState {
+        bool active = false;
+        bool isGroup = false;
+        glm::vec3 pivot{ 0.0f };
+        std::vector<int32_t> objectIds;
+        std::vector<glm::vec3> startPos;
+        std::vector<glm::quat> startRot;
+    };
+    GizmoDragState m_GizmoDrag;
+
     int m_SceneEditDepth = 0;
     std::string m_SceneEditName;
     SceneEditSnapshot m_SceneEditBefore{};
