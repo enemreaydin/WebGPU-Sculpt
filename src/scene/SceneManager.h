@@ -4,6 +4,17 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include "data/ObjectTransformSnapshot.h"
+#include <optional>
+
+struct SceneManagerState
+{
+    std::vector<SdfObjectData> objects;
+    CsgTree::State csgTree;
+    int32_t nextObjectId = 0;
+    int32_t rootNodeIndex = -1;
+    std::unordered_map<int32_t, int32_t> objectNodeIndex;
+};
 
 class SceneManager {
 public:
@@ -22,6 +33,8 @@ public:
     void RemoveObjectAt(size_t index);
 
     void ClearScene();
+    SceneManagerState CaptureState() const;
+    void RestoreState(const SceneManagerState& state);
 
     std::vector<SdfObjectData>& GetObjects();
     const std::vector<SdfObjectData>& GetObjects() const;
@@ -43,6 +56,12 @@ public:
     int32_t GroupNodes(const std::vector<int32_t>& indicesInOrder, // indices[0] = Subtract base
                    CsgNodeType opType);                        // returns new op node's nodeId
     void RemoveNodeSubtree(int32_t nodeIndex);                     // node(s) + their objects
+
+    SdfObjectData* FindObjectById(int32_t objectId);
+    const SdfObjectData* FindObjectById(int32_t objectId) const;
+
+    std::optional<ObjectTransformSnapshot> GetObjectTransformSnapshotById(int32_t objectId) const;
+    bool SetObjectTransformById(const ObjectTransformSnapshot& snapshot);
 
 
 private:

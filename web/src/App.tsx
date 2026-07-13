@@ -284,18 +284,87 @@ export default class App extends React.Component<any, any> {
 
   componentDidMount() {
     this._kd = (e: KeyboardEvent) => {
-      if (e.key === "F1") {
+            const target = e.target as HTMLElement | null;
+            const isEditable =
+                !!target &&
+                (
+                    target.tagName === "INPUT" ||
+                    target.tagName === "TEXTAREA" ||
+                    target.tagName === "SELECT" ||
+                    target.isContentEditable ||
+                    !!target.closest("[contenteditable='true']")
+                );
+
+            // F1 overlay shortcut. Do not steal keys while the user is typing.
+            if (!isEditable && e.key === "F1") {
         e.preventDefault();
         this.setState((s: any) => ({ overlay: !s.overlay }));
         return;
       }
-      if (e.key === "Escape") {
-        this.setState({ overlay: false, openMenu: null, ctx: null, picker: null, dd: false, opDd: false, editing: null, renaming: null });
+
+            // Text fields keep their native browser/editor undo behavior.
+            if (isEditable) return;
+
+            const k = e.key.toLowerCase();
+            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+            // Undo / Redo must be handled before single-key tools.
+            if (isCtrlOrCmd) {
+                if (k === "z") {
+                    e.preventDefault();
+                    if (e.shiftKey) this.redo();
+                    else this.undo();
         return;
       }
-      const t = e.target as HTMLElement;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
-      const k = e.key.toLowerCase();
+
+                if (k === "y") {
+                    e.preventDefault();
+                    this.redo();
+                    return;
+                }
+
+                if (k === "o") {
+                    e.preventDefault();
+                    this.openScene();
+                    return;
+                }
+
+                if (k === "s") {
+                    e.preventDefault();
+                    this.saveScene();
+                    return;
+                }
+
+                if (k === "n") {
+                    e.preventDefault();
+                    this.newScene();
+                    return;
+                }
+            }
+
+            if (e.key === "Escape") {
+                e.preventDefault();
+
+                // If a gizmo drag is active, Esc cancels the engine-side transform
+                // transaction and restores the begin-drag snapshot.
+                if (this._gizmoDrag) {
+                    this.cancelGizmoDrag();
+                }
+
+                this.setState({
+                    overlay: false,
+                    openMenu: null,
+                    ctx: null,
+                    picker: null,
+                    dd: false,
+                    opDd: false,
+                    editing: null,
+                    renaming: null,
+                });
+
+                return;
+            }
+
       if (k === "q") this.setState({ tool: "select" });
       else if (k === "g") this.setState({ tool: "move" });
       else if (k === "r") this.setState({ tool: "rotate" });
@@ -379,6 +448,7 @@ export default class App extends React.Component<any, any> {
       e.setObjectPosition(i, pos[0], pos[1], pos[2]);
     }
     e.clearSelection();
+        e.clearUndoStack();
     this.refresh();
     this.setState({ saved: true });
     this.log("scene", "untitled.sdfo — " + specs.length + " objects");
@@ -684,18 +754,30 @@ export default class App extends React.Component<any, any> {
   // are the clamp bounds. General ("look") settings are cheap/free; the advanced
   // set trades speed for quality.
   RENDER_SETTINGS = [
-    { id: RenderSetting.LightIntensity, key: "lightIntensity", label: "Light Intensity", min: 0, max: 3, step: 0.05,
-      help: "Overall brightness of the main light. Higher = brighter direct light. No performance cost." },
-    { id: RenderSetting.AmbientStrength, key: "ambientStrength", label: "Ambient Light", min: 0, max: 1, step: 0.01,
-      help: "Base fill light present everywhere, even in shadow. Higher = flatter and brighter; lower = darker, moodier shadows. No performance cost." },
-    { id: RenderSetting.ShadowSharpness, key: "shadowSharpness", label: "Shadow Sharpness", min: 1, max: 64, step: 1,
-      help: "How crisp shadow edges are. Higher = hard, sharp shadows; lower = soft, blurry penumbra. No performance cost." },
-    { id: RenderSetting.SpecularGloss, key: "specularGloss", label: "Glossiness", min: 1, max: 256, step: 1,
-      help: "Size of the shiny highlight. Higher = small, tight, polished-looking; lower = broad, matte. No performance cost." },
-    { id: RenderSetting.SpecularStrength, key: "specularStrength", label: "Highlight Strength", min: 0, max: 1, step: 0.02,
-      help: "Brightness of the specular highlight. 0 = fully matte, no shine. No performance cost." },
-    { id: RenderSetting.AoStrength, key: "aoStrength", label: "Ambient Occlusion", min: 0, max: 5, step: 0.1,
-      help: "Soft darkening in creases and where objects meet, which adds depth. Higher = darker contact shadows. Tiny performance cost." },
+        {
+            id: RenderSetting.LightIntensity, key: "lightIntensity", label: "Light Intensity", min: 0, max: 3, step: 0.05,
+            help: "Overall brightness of the main light. Higher = brighter direct light. No performance cost."
+        },
+        {
+            id: RenderSetting.AmbientStrength, key: "ambientStrength", label: "Ambient Light", min: 0, max: 1, step: 0.01,
+            help: "Base fill light present everywhere, even in shadow. Higher = flatter and brighter; lower = darker, moodier shadows. No performance cost."
+        },
+        {
+            id: RenderSetting.ShadowSharpness, key: "shadowSharpness", label: "Shadow Sharpness", min: 1, max: 64, step: 1,
+            help: "How crisp shadow edges are. Higher = hard, sharp shadows; lower = soft, blurry penumbra. No performance cost."
+        },
+        {
+            id: RenderSetting.SpecularGloss, key: "specularGloss", label: "Glossiness", min: 1, max: 256, step: 1,
+            help: "Size of the shiny highlight. Higher = small, tight, polished-looking; lower = broad, matte. No performance cost."
+        },
+        {
+            id: RenderSetting.SpecularStrength, key: "specularStrength", label: "Highlight Strength", min: 0, max: 1, step: 0.02,
+            help: "Brightness of the specular highlight. 0 = fully matte, no shine. No performance cost."
+        },
+        {
+            id: RenderSetting.AoStrength, key: "aoStrength", label: "Ambient Occlusion", min: 0, max: 5, step: 0.1,
+            help: "Soft darkening in creases and where objects meet, which adds depth. Higher = darker contact shadows. Tiny performance cost."
+        },
     { id: RenderSetting.LightColorR, key: "lightColR", label: "Light Color R", min: 0, max: 1, step: 0.02, help: "Red amount of the main light's color." },
     { id: RenderSetting.LightColorG, key: "lightColG", label: "Light Color G", min: 0, max: 1, step: 0.02, help: "Green amount of the main light's color." },
     { id: RenderSetting.LightColorB, key: "lightColB", label: "Light Color B", min: 0, max: 1, step: 0.02, help: "Blue amount of the main light's color." },
@@ -705,18 +787,30 @@ export default class App extends React.Component<any, any> {
   ];
 
   RENDER_ADVANCED = [
-    { id: RenderSetting.MaxSteps, key: "maxSteps", label: "Max Ray Steps", min: 16, max: 512, step: 1, int: true,
-      help: "How many steps each view ray may take. This is the MAIN performance dial: higher renders distant and thin shapes correctly but costs speed; too low and object edges dissolve or vanish." },
-    { id: RenderSetting.HitEpsilon, key: "hitEpsilon", label: "Surface Threshold", min: 0.0001, max: 0.01, step: 0.0001,
-      help: "How close a ray must get to count as hitting a surface. Smaller = sharper silhouettes and finer detail, but needs more Max Ray Steps or surfaces develop holes. Lower value = higher quality, higher cost." },
-    { id: RenderSetting.MaxDistance, key: "maxDistance", label: "View Distance", min: 10, max: 200, step: 1,
-      help: "How far view rays travel before giving up. Higher lets you see distant objects; too high just wastes steps on empty space." },
-    { id: RenderSetting.ShadowSteps, key: "shadowSteps", label: "Shadow Steps", min: 8, max: 128, step: 1, int: true,
-      help: "Step budget for shadow rays. Higher = more accurate soft shadows, at a performance cost." },
-    { id: RenderSetting.ShadowDistance, key: "shadowDistance", label: "Shadow Distance", min: 5, max: 100, step: 1,
-      help: "How far shadow rays search for blockers. Higher catches shadows from distant objects; costs performance." },
-    { id: RenderSetting.AoSamples, key: "aoSamples", label: "AO Samples", min: 2, max: 16, step: 1, int: true,
-      help: "Number of samples used for ambient occlusion. Higher = smoother contact shadows, lower performance." },
+        {
+            id: RenderSetting.MaxSteps, key: "maxSteps", label: "Max Ray Steps", min: 16, max: 512, step: 1, int: true,
+            help: "How many steps each view ray may take. This is the MAIN performance dial: higher renders distant and thin shapes correctly but costs speed; too low and object edges dissolve or vanish."
+        },
+        {
+            id: RenderSetting.HitEpsilon, key: "hitEpsilon", label: "Surface Threshold", min: 0.0001, max: 0.01, step: 0.0001,
+            help: "How close a ray must get to count as hitting a surface. Smaller = sharper silhouettes and finer detail, but needs more Max Ray Steps or surfaces develop holes. Lower value = higher quality, higher cost."
+        },
+        {
+            id: RenderSetting.MaxDistance, key: "maxDistance", label: "View Distance", min: 10, max: 200, step: 1,
+            help: "How far view rays travel before giving up. Higher lets you see distant objects; too high just wastes steps on empty space."
+        },
+        {
+            id: RenderSetting.ShadowSteps, key: "shadowSteps", label: "Shadow Steps", min: 8, max: 128, step: 1, int: true,
+            help: "Step budget for shadow rays. Higher = more accurate soft shadows, at a performance cost."
+        },
+        {
+            id: RenderSetting.ShadowDistance, key: "shadowDistance", label: "Shadow Distance", min: 5, max: 100, step: 1,
+            help: "How far shadow rays search for blockers. Higher catches shadows from distant objects; costs performance."
+        },
+        {
+            id: RenderSetting.AoSamples, key: "aoSamples", label: "AO Samples", min: 2, max: 16, step: 1, int: true,
+            help: "Number of samples used for ambient occlusion. Higher = smoother contact shadows, lower performance."
+        },
   ];
 
   // Apply a render setting: clamp to the config bounds, push to the engine, and
@@ -749,10 +843,16 @@ export default class App extends React.Component<any, any> {
             <span style={css("white-space:nowrap;overflow:hidden;text-overflow:ellipsis")}>{cfg.label}</span>
           </Hv>
           <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={val}
+                        onPointerDown={() => this.engine?.beginSceneEdit("Change Render Setting")}
+                        onPointerUp={() => this.engine?.commitSceneEdit()}
             onChange={(e: any) => this.rsSet(cfg, Number(e.target.value))}
             style={css("flex:1;min-width:0;height:4px;accent-color:#e8912d;cursor:pointer")} />
           <input type="number" min={cfg.min} max={cfg.max} step={cfg.step} key={cfg.key + ":" + val} defaultValue={disp}
-            onBlur={(e: any) => this.rsSet(cfg, Number(e.target.value))}
+                        onBlur={(e: any) => {
+                            this.engine?.beginSceneEdit("Change Render Setting");
+                            this.rsSet(cfg, Number(e.target.value));
+                            this.engine?.commitSceneEdit();
+                        }}
             onKeyDown={(e: any) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
             style={css("flex:0 0 56px;width:56px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 5px;box-sizing:border-box")} />
         </div>
@@ -876,7 +976,12 @@ export default class App extends React.Component<any, any> {
     const k = this.state.editing;
     if (!k) return;
     const v = parseFloat(this.state.editText);
-    if (!isNaN(v)) this.sf(k, v);
+        if (!isNaN(v)) {
+            const engineField = k !== "demo" && k !== "demoSlider" && k !== "smooth";
+            if (engineField) this.engine?.beginSceneEdit("Edit Numeric Field");
+            this.sf(k, v);
+            if (engineField) this.engine?.commitSceneEdit();
+        }
     this.setState({ editing: null });
   }
   field(key: string, step: number, disabled?: boolean): any {
@@ -910,6 +1015,9 @@ export default class App extends React.Component<any, any> {
         try {
           e.currentTarget.setPointerCapture(e.pointerId);
         } catch (_) {}
+                if (key !== "demo" && key !== "demoSlider" && key !== "smooth") {
+                    this.engine?.beginSceneEdit("Drag Numeric Field");
+                }
         this._dg = { key, step, sx: e.clientX, start: this.gf(key), moved: 0 };
       },
       move: (e: any) => {
@@ -925,7 +1033,15 @@ export default class App extends React.Component<any, any> {
         try {
           e.currentTarget.releasePointerCapture(e.pointerId);
         } catch (_) {}
-        if (d.moved < 3) this.setState({ editing: key, editText: this.gf(key).toFixed(2) });
+                if (d.moved < 3) {
+                    if (key !== "demo" && key !== "demoSlider" && key !== "smooth") {
+                        this.engine?.cancelSceneEdit();
+                    }
+                    this.setState({ editing: key, editText: this.gf(key).toFixed(2) });
+                }
+                else if (key !== "demo" && key !== "demoSlider" && key !== "smooth") {
+                    this.engine?.commitSceneEdit();
+                }
         this._dg = null;
       },
       onInput: (e: any) => this.setState({ editText: e.target.value }),
@@ -1023,6 +1139,8 @@ export default class App extends React.Component<any, any> {
     const typeName = TYPE_NAME[o.type] || "box";
     // Copy the source's engine-owned attributes onto a fresh primitive through
     // the same setters the UI uses — no size math on the web side.
+        e.beginSceneEdit("Duplicate Object");
+        try {
     const idx = e.addPrimitive(TYPE_ENUM[typeName]);
     const p = o.position;
     e.setObjectPosition(idx, p[0] + 0.5, p[1], p[2]);
@@ -1036,6 +1154,11 @@ export default class App extends React.Component<any, any> {
     e.setObjectRotation(idx, o.rotation[0], o.rotation[1], o.rotation[2]);
     e.setObjectColor(idx, o.color[0], o.color[1], o.color[2]);
     e.setObjectName(idx, (o.name || typeName) + " copy");
+            e.commitSceneEdit();
+        } catch (err) {
+            e.cancelSceneEdit();
+            throw err;
+        }
     this.refresh();
     this.setState({ saved: false, ctx: null });
     this.log("scene", (o.name || typeName) + " duplicated");
@@ -1136,6 +1259,50 @@ export default class App extends React.Component<any, any> {
     this.engine?.setShowGrid(grid);
     this.setState({ grid });
   }
+
+    undo() {
+        const e = this.engine;
+        if (!e) return;
+
+        try {
+            e.undo();
+            this.refresh();
+            this.setState({ saved: false });
+            this.status("Undo");
+        } catch (err) {
+            this.status("Undo failed");
+            this.log("error", "Undo: " + String(err));
+        }
+    }
+
+    redo() {
+        const e = this.engine;
+        if (!e) return;
+
+        try {
+            e.redo();
+            this.refresh();
+            this.setState({ saved: false });
+            this.status("Redo");
+        } catch (err) {
+            this.status("Redo failed");
+            this.log("error", "Redo: " + String(err));
+        }
+    }
+
+    cancelGizmoDrag() {
+        if (!this.engine) return;
+
+        try {
+            this._gizmoDrag = false;
+            this.engine.gizmoCancelDrag();
+            this.refresh();
+            this.status("Transform cancelled");
+        } catch (err) {
+            this.status("Cancel transform failed");
+            this.log("error", "Cancel transform: " + String(err));
+        }
+    }
 
   mkItem(label: string, key: string, fn: () => void, disabled?: boolean): any {
     return {
@@ -1380,12 +1547,19 @@ export default class App extends React.Component<any, any> {
       const col = o.color;
       const rot = o.rotation;
       const name = o.name;
+            e.beginSceneEdit("Change Primitive Type");
+            try {
       e.removeObject(o.index);
       const idx = e.addPrimitive(TYPE_ENUM[t]);
       e.setObjectPosition(idx, pos[0], pos[1], pos[2]);
       e.setObjectColor(idx, col[0], col[1], col[2]);
       e.setObjectRotation(idx, rot[0], rot[1], rot[2]);
       e.setObjectName(idx, name);
+                e.commitSceneEdit();
+            } catch (err) {
+                e.cancelSceneEdit();
+                throw err;
+            }
       this.refresh();
       this.setState({ dd: false, saved: false });
     };
@@ -1446,7 +1620,9 @@ export default class App extends React.Component<any, any> {
     const commitHex = () => {
       const t = (this.state.hexEdit || "").trim().replace(/^#/, "");
       if (/^[0-9a-f]{6}$/i.test(t) && d) {
+                this.engine?.beginSceneEdit("Change Color");
         applyHsv(this.rgb2hsv(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16)));
+                this.engine?.commitSceneEdit();
       } else this.setState({ hexEdit: null });
     };
 
@@ -1495,8 +1671,8 @@ export default class App extends React.Component<any, any> {
       ],
       mEdit: { bg: mE.bg }, editOpen: mE.open, mtEdit: mE.mt, mhEdit: mE.mh,
       editItems: [
-        mi("Undo", "Ctrl Z", () => {}, true),
-        mi("Redo", "Ctrl ⇧ Z", () => {}, true),
+                mi("Undo", "Ctrl Z", () => this.undo(), !this.engine),
+                mi("Redo", "Ctrl ⇧ Z", () => this.redo(), !this.engine),
         sep,
         mi("Preferences…", "", () => {}, true),
       ],
@@ -1705,6 +1881,7 @@ export default class App extends React.Component<any, any> {
           try {
             e.currentTarget.setPointerCapture(e.pointerId);
           } catch (_) {}
+                    this.engine?.beginSceneEdit("Change Color");
           this._sv = true;
           svSet(e);
         },
@@ -1716,6 +1893,7 @@ export default class App extends React.Component<any, any> {
             e.currentTarget.releasePointerCapture(e.pointerId);
           } catch (_) {}
           this._sv = false;
+                    this.engine?.commitSceneEdit();
         },
       },
       hueX: d ? (d.hsv.h / 360) * 100 + "%" : "0%",
@@ -1725,6 +1903,7 @@ export default class App extends React.Component<any, any> {
           try {
             e.currentTarget.setPointerCapture(e.pointerId);
           } catch (_) {}
+                    this.engine?.beginSceneEdit("Change Color");
           this._hu = true;
           hueSet(e);
         },
@@ -1736,6 +1915,7 @@ export default class App extends React.Component<any, any> {
             e.currentTarget.releasePointerCapture(e.pointerId);
           } catch (_) {}
           this._hu = false;
+                    this.engine?.commitSceneEdit();
         },
       },
       hexShown: S.hexEdit != null ? S.hexEdit : colorHex,

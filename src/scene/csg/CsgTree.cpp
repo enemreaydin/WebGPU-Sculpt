@@ -188,6 +188,22 @@ void CsgTree::Clear()
     m_NextNodeId = 0;
 }
 
+CsgTree::State CsgTree::CaptureState() const
+{
+    State state;
+    state.nodes = m_Nodes;
+    state.root = m_Root;
+    state.nextNodeId = m_NextNodeId;
+    return state;
+}
+
+void CsgTree::RestoreState(const State& state)
+{
+    m_Nodes = state.nodes;
+    m_Root = state.root;
+    m_NextNodeId = state.nextNodeId;
+}
+
 void CsgTree::WriteToStream(std::ostream& out) const
 {
     // Size prefix (node count) followed by the raw node array, then the two scalars.

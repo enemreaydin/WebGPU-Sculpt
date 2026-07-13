@@ -67,3 +67,17 @@ const EditorObject* EditorObjectStore::Find(int32_t objectId) const
     auto it = m_Objects.find(objectId);
     return it == m_Objects.end() ? nullptr : &it->second;
 }
+
+EditorObjectStoreState EditorObjectStore::CaptureState() const
+{
+    EditorObjectStoreState state;
+    state.objects = m_Objects;
+    state.typeCounters = m_TypeCounters;
+    return state;
+}
+
+void EditorObjectStore::RestoreState(const EditorObjectStoreState& state)
+{
+    m_Objects = state.objects;
+    m_TypeCounters = state.typeCounters;
+}

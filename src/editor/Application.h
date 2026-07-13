@@ -20,6 +20,9 @@
 #include "interaction/GizmoController.h"
 #include "serialization/SceneSerializer.h"
 #include "editor/EditorObjectStore.h"
+#include "editor/command/UndoStack.h"
+#include "editor/TransformTransaction.h"
+#include "editor/SceneEditSnapshot.h"
 
 using namespace wgpu;
 
@@ -69,6 +72,9 @@ public:
     void ClearSelection();
     int  ApplyOperation(int opType);        
     void DeleteSelection();
+    void BeginSceneEdit(const char* name);
+    void CommitSceneEdit();
+    void CancelSceneEdit();
 
 
     // Serialized snapshot of the scene as JSON (object list + selection), for
@@ -113,6 +119,18 @@ public:
     void SetGizmoMode(int mode)   { gizmoController.SetMode(static_cast<GizmoMode>(mode)); }
     void SetGizmoSpace(int space) { gizmoController.SetSpace(static_cast<GizmoSpace>(space)); }
 
+    void Undo();
+    void Redo();
+
+    bool CanUndo() const;
+    bool CanRedo() const;
+    void ClearUndoStack();
+
+    UndoStack& GetUndoStack();
+    const UndoStack& GetUndoStack() const;
+
+    void GizmoCancelDrag();
+
 private:
     bool running = true;
     int width;
@@ -156,4 +174,17 @@ private:
     TextureView GetNextSurfaceTextureView();
 
     static const char* TypeName(int32_t type);
+
+    UndoStack m_UndoStack;
+
+    void OnSceneChanged();
+
+    TransformTransaction m_TransformTransaction;
+    int m_SceneEditDepth = 0;
+    std::string m_SceneEditName;
+    SceneEditSnapshot m_SceneEditBefore{};
+
+    SceneEditSnapshot CaptureSceneEditSnapshot() const;
+    void FinishSceneEdit(const char* name, const SceneEditSnapshot& before);
+    bool ShouldRecordSceneEdit() const;
 };

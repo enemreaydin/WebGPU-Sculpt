@@ -8,6 +8,12 @@
 #include "scene/data/SdfEnums.h"
 #include "scene/data/EditorObject.h"
 
+struct EditorObjectStoreState
+{
+    std::unordered_map<int32_t, EditorObject> objects;
+    std::unordered_map<int32_t, int32_t> typeCounters;
+};
+
 // Owns the editor-only attributes (name, visibility, lock, rotation, scale,
 // shape params) for every scene object, keyed by permanent objectId. Also
 // assigns default display names ("Sphere.001", ...). This keeps naming and
@@ -28,6 +34,9 @@ public:
     // nullptr when there is no record for this objectId.
     EditorObject* Find(int32_t objectId);
     const EditorObject* Find(int32_t objectId) const;
+
+    EditorObjectStoreState CaptureState() const;
+    void RestoreState(const EditorObjectStoreState& state);
 
 private:
     std::string MakeDefaultName(SdfObjectType type);

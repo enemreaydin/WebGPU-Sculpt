@@ -339,6 +339,43 @@ export class Engine {
     );
   }
 
+  // ---- Undo / Redo --------------------------------------------------------
+  // Undo/redo logic lives in the C++ engine. The web side only forwards calls.
+
+  undo(): void {
+      this.call("sdf_undo", null, [], []);
+  }
+
+  redo(): void {
+      this.call("sdf_redo", null, [], []);
+  }
+
+  canUndo(): boolean {
+      return (this.call("sdf_can_undo", "number", [], []) as number) !== 0;
+  }
+
+  canRedo(): boolean {
+      return (this.call("sdf_can_redo", "number", [], []) as number) !== 0;
+  }
+
+  clearUndoStack(): void {
+      this.call("sdf_clear_undo_stack", null, [], []);
+  }
+
+  beginSceneEdit(name: string): void {
+      this.call("sdf_begin_scene_edit", null, ["string"], [name]);
+  }
+
+  commitSceneEdit(): void {
+      this.call("sdf_commit_scene_edit", null, [], []);
+  }
+
+  cancelSceneEdit(): void {
+      this.call("sdf_cancel_scene_edit", null, [], []);
+  }
+
+
+
   getScene(): SceneState {
     const json = this.call("sdf_get_scene_json", "string", [], []) as string;
     return JSON.parse(json) as SceneState;
@@ -405,6 +442,10 @@ export class Engine {
 
   gizmoEndDrag(): void {
     this.call("sdf_gizmo_end_drag", null, [], []);
+  }
+
+  gizmoCancelDrag(): void {
+      this.call("sdf_gizmo_cancel_drag", null, [], []);
   }
 
   // Enable/disable drawing the gizmo (drive this from the active tool). The

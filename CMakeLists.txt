@@ -45,6 +45,10 @@ endif()
 set(EDITOR_SOURCES
     src/editor/Application.cpp
     src/editor/EditorObjectStore.cpp
+    src/editor/TransformTransaction.cpp
+    src/editor/command/UndoStack.cpp
+    src/editor/command/TransformObjectsCommand.cpp
+    src/editor/command/SceneEditCommand.cpp
 )
 
 # Platform layer: window, graphics context, WebGPU wrapper implementation.
@@ -86,6 +90,7 @@ set(PROJECT_HEADERS
     src/scene/data/SdfObjectData.h
     src/scene/data/EditorObject.h
     src/scene/data/GlobalsData.h
+    src/scene/data/ObjectTransformSnapshot.h
     src/scene/PrimitiveGeometry.h
     src/editor/EditorObjectStore.h
     src/scene/csg/CsgCommand.h
@@ -103,6 +108,12 @@ set(PROJECT_HEADERS
     src/serialization/ExtensionLoader.h
     src/serialization/SceneSerializer.h
     src/utils/FileHelper.h
+    src/editor/command/IEditorCommand.h
+    src/editor/command/UndoStack.h
+    src/editor/command/TransformObjectsCommand.h
+    src/editor/command/SceneEditCommand.h
+    src/editor/SceneEditSnapshot.h
+    src/editor/TransformTransaction.h
 )
 
 # ============================================================

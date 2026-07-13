@@ -1,5 +1,23 @@
 #include "SceneManager.h"
 
+namespace
+{
+    ObjectTransformSnapshot MakeTransformSnapshot(const SdfObjectData& object)
+    {
+        ObjectTransformSnapshot snapshot;
+        snapshot.objectId = object.objectId;
+
+        for (int i = 0; i < 4; ++i)
+        {
+            snapshot.position[i] = object.position[i];
+            snapshot.rotation[i] = object.rotation[i];
+            snapshot.size[i] = object.size[i];
+        }
+
+        return snapshot;
+    }
+}
+
 int32_t SceneManager::EnsureRootUnion()
 {
     const auto& nodes = m_CsgTree.GetNodes();
@@ -54,6 +72,26 @@ void SceneManager::ClearScene() {
     m_ObjectNodeIndex.clear();
     m_RootNodeIndex = -1;
     m_NextObjectId = 0;
+}
+
+SceneManagerState SceneManager::CaptureState() const
+{
+    SceneManagerState state;
+    state.objects = m_Objects;
+    state.csgTree = m_CsgTree.CaptureState();
+    state.nextObjectId = m_NextObjectId;
+    state.rootNodeIndex = m_RootNodeIndex;
+    state.objectNodeIndex = m_ObjectNodeIndex;
+    return state;
+}
+
+void SceneManager::RestoreState(const SceneManagerState& state)
+{
+    m_Objects = state.objects;
+    m_CsgTree.RestoreState(state.csgTree);
+    m_NextObjectId = state.nextObjectId;
+    m_RootNodeIndex = state.rootNodeIndex;
+    m_ObjectNodeIndex = state.objectNodeIndex;
 }
 
 std::vector<SdfObjectData>& SceneManager::GetObjects() {
@@ -190,4 +228,53 @@ void SceneManager::RebuildAfterLoad() {
             m_ObjectNodeIndex[nodes[i].objectId] = i;
         }
     }
+}
+
+SdfObjectData* SceneManager::FindObjectById(int32_t objectId)
+{
+    for (auto& object : m_Objects)
+    {
+        if (object.objectId == objectId)
+            return &object;
+    }
+
+    return nullptr;
+}
+
+const SdfObjectData* SceneManager::FindObjectById(int32_t objectId) const
+{
+    for (const auto& object : m_Objects)
+    {
+        if (object.objectId == objectId)
+            return &object;
+    }
+
+    return nullptr;
+}
+
+std::optional<ObjectTransformSnapshot> SceneManager::GetObjectTransformSnapshotById(int32_t objectId) const
+{
+    const SdfObjectData* object = FindObjectById(objectId);
+
+    if (!object)
+        return std::nullopt;
+
+    return MakeTransformSnapshot(*object);
+}
+
+bool SceneManager::SetObjectTransformById(const ObjectTransformSnapshot& snapshot)
+{
+    SdfObjectData* object = FindObjectById(snapshot.objectId);
+
+    if (!object)
+        return false;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        object->position[i] = snapshot.position[i];
+        object->rotation[i] = snapshot.rotation[i];
+        object->size[i] = snapshot.size[i];
+    }
+
+    return true;
 }
