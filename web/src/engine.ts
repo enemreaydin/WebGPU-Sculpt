@@ -58,6 +58,9 @@ export interface CsgNodeJson {
   nodeId: number;
   type: number;
   objectId: number;
+  // Custom name for operation/group nodes (engine-owned, persisted). "" when the
+  // node has no custom name; the UI then shows a generated default label.
+  name?: string;
   children: number[];
 }
 
@@ -183,6 +186,25 @@ function loadScript(url: string): Promise<void> {
       reject(new Error(`Failed to load engine script: ${url}`));
     document.head.appendChild(script);
   });
+}
+
+// Binary <-> base64 for the .sdfp project bytes that cross the ccall boundary.
+// btoa/atob operate on binary strings (one char per byte), so we bridge through
+// those. Chunked to avoid blowing the argument stack on large String.fromCharCode.
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
 }
 
 /**
@@ -312,6 +334,12 @@ export class Engine {
     this.call("sdf_set_object_name", null, ["number", "string"], [index, name]);
   }
 
+  // Name a CSG operation/group node by its permanent nodeId. Engine-owned and
+  // persisted with the project (read the value back via getScene().tree nodes).
+  setNodeName(nodeId: number, name: string): void {
+    this.call("sdf_set_node_name", null, ["number", "string"], [nodeId, name]);
+  }
+
   setObjectVisible(index: number, visible: boolean): void {
     this.call("sdf_set_object_visible", null, ["number", "number"], [index, visible ? 1 : 0]);
   }
@@ -394,6 +422,22 @@ export class Engine {
 
   newScene(): void {
     this.call("sdf_new_scene", null, [], []);
+  }
+
+  // ---- Project (.sdfp) bytes ----------------------------------------------
+  // The engine produces/consumes the raw project bytes; the browser (App.tsx via
+  // the File System Access API) owns the actual file. Bytes cross the ccall
+  // boundary base64-encoded because ccall marshals strings, not buffers.
+
+  // Serialize the current scene to .sdfp project bytes.
+  saveProject(): Uint8Array {
+    const b64 = this.call("sdf_save_project", "string", [], []) as string;
+    return base64ToBytes(b64);
+  }
+
+  // Load a .sdfp project from bytes read out of a file.
+  loadProject(bytes: Uint8Array): void {
+    this.call("sdf_load_project", null, ["string"], [bytesToBase64(bytes)]);
   }
 
   openScene(): void {

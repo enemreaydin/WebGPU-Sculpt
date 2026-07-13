@@ -1,6 +1,7 @@
 #include "Application.h"
 #include <glm/gtc/quaternion.hpp>
 #include "utils/FileHelper.h"
+#include "serialization/ExtensionLoader.h"
 #include "editor/command/SceneEditCommand.h"
 #include "scene/SdfObjectFactory.h"
 #include "scene/PrimitiveGeometry.h"
@@ -547,6 +548,10 @@ void Application::SetObjectName(int index, const char* name) {
     if (record) FinishSceneEdit("Rename Object", before);
 }
 
+void Application::SetNodeName(int nodeId, const char* name) {
+    editorStore.SetNodeName(nodeId, name ? name : "");
+}
+
 void Application::SetObjectVisible(int index, bool visible) {
     auto& objects = sceneManager.GetObjects();
     if (index < 0 || index >= static_cast<int>(objects.size())) return;
@@ -855,9 +860,11 @@ std::string Application::GetSceneJson() const {
         if (!n.alive) continue;
         if (!firstNode) out << ",";
         firstNode = false;
+        const std::string* nodeName = editorStore.FindNodeName(n.nodeId);
         out << "{\"nodeId\":" << n.nodeId
             << ",\"type\":" << static_cast<int>(n.type)   // 0=prim 1=union 2=sub 3=intersect
             << ",\"objectId\":" << (n.type == CsgNodeType::Primitive ? n.objectId : -1)
+            << ",\"name\":\"" << JsonEscape(nodeName ? *nodeName : std::string()) << "\""
             << ",\"children\":[";
         bool firstChild = true;
         for (int32_t c = n.firstChild; c != -1; c = nodes[c].nextSibling) {
@@ -916,6 +923,34 @@ void Application::OpenScene() {
 }
 
 void Application::SaveScene() { sceneSerializer.SaveSceneToSDFO(); }
+
+std::string Application::SerializeProject() {
+    std::ostringstream out(std::ios::binary);
+    ExtensionLoader::WriteSDFP(out, sceneManager.GetObjects(), sceneManager.GetCsgTree());
+    // Editor attributes (names / visibility / rotation / scale / params) follow the
+    // CSG-tree section as their own block; see EditorObjectStore::WriteToStream.
+    editorStore.WriteToStream(out);
+    return out.str();
+}
+
+bool Application::DeserializeProject(const std::string& bytes) {
+    std::istringstream in(bytes, std::ios::binary);
+    bool ok = ExtensionLoader::ReadSDFP(in, sceneManager);
+
+    // Whether or not the header parsed, resync everything derived from the scene so
+    // we never leave the GPU / editor / selection pointing at stale data.
+    sceneSerializer.RefreshSceneBuffer();
+    RebuildEditorRecords();
+    // Overlay the saved editor attributes on top of the freshly rebuilt defaults.
+    // Reads the section ReadSDFP left the stream positioned at; EOF-tolerant, so a
+    // legacy .sdfp without the block just keeps the defaults.
+    if (ok) editorStore.ReadFromStream(in);
+    selectionState.Clear();
+    selectionState.selectedObjectIndex = -1;
+    m_UndoStack.Clear();
+    OnSceneChanged();
+    return ok;
+}
 
 void Application::CameraOrbit(float dx, float dy) {
     viewportInput.orbiting = true;

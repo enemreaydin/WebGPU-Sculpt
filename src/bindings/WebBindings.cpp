@@ -10,10 +10,64 @@
 
 #include <emscripten.h>
 #include <string>
+#include <cstdint>
 #include "editor/Application.h"
 
 // Defined in main.cpp; set once the Application has been constructed.
 extern Application* g_App;
+
+// Project (.sdfp) bytes are binary; ccall marshals strings, not raw buffers, so we
+// base64 the payload in/out. The browser owns the real file (File System Access
+// API) and only passes the bytes through here.
+namespace {
+    const char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::string Base64Encode(const std::string& in) {
+        std::string out;
+        out.reserve(((in.size() + 2) / 3) * 4);
+        size_t i = 0;
+        for (; i + 2 < in.size(); i += 3) {
+            uint32_t n = (uint8_t)in[i] << 16 | (uint8_t)in[i + 1] << 8 | (uint8_t)in[i + 2];
+            out.push_back(kB64[(n >> 18) & 63]);
+            out.push_back(kB64[(n >> 12) & 63]);
+            out.push_back(kB64[(n >> 6) & 63]);
+            out.push_back(kB64[n & 63]);
+        }
+        if (i < in.size()) {
+            uint32_t n = (uint8_t)in[i] << 16;
+            bool two = (i + 1 < in.size());
+            if (two) n |= (uint8_t)in[i + 1] << 8;
+            out.push_back(kB64[(n >> 18) & 63]);
+            out.push_back(kB64[(n >> 12) & 63]);
+            out.push_back(two ? kB64[(n >> 6) & 63] : '=');
+            out.push_back('=');
+        }
+        return out;
+    }
+
+    std::string Base64Decode(const std::string& in) {
+        int8_t rev[256];
+        for (int k = 0; k < 256; ++k) rev[k] = -1;
+        for (int k = 0; k < 64; ++k) rev[(uint8_t)kB64[k]] = (int8_t)k;
+
+        std::string out;
+        out.reserve((in.size() / 4) * 3);
+        uint32_t acc = 0;
+        int bits = 0;
+        for (char c : in) {
+            if (c == '=') break;
+            int8_t v = rev[(uint8_t)c];
+            if (v < 0) continue;  // skip whitespace / newlines
+            acc = (acc << 6) | (uint32_t)v;
+            bits += 6;
+            if (bits >= 8) {
+                bits -= 8;
+                out.push_back((char)((acc >> bits) & 0xFF));
+            }
+        }
+        return out;
+    }
+}
 
 extern "C" {
 
@@ -100,6 +154,11 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
         void sdf_set_object_name(int index, const char* name) {
         if (g_App) g_App->SetObjectName(index, name);
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_set_node_name(int nodeId, const char* name) {
+        if (g_App) g_App->SetNodeName(nodeId, name);
     }
 
     EMSCRIPTEN_KEEPALIVE
@@ -195,6 +254,21 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
         void sdf_save_scene() {
         if (g_App) g_App->SaveScene();
+    }
+
+    // Serialize the current scene to a .sdfp project and return it base64-encoded.
+    // Result lives in a static buffer valid until the next call (JS copies it out).
+    EMSCRIPTEN_KEEPALIVE
+        const char* sdf_save_project() {
+        static std::string buffer;
+        buffer = g_App ? Base64Encode(g_App->SerializeProject()) : "";
+        return buffer.c_str();
+    }
+
+    // Load a .sdfp project from a base64-encoded byte buffer produced by the browser.
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_load_project(const char* b64) {
+        if (g_App && b64) g_App->DeserializeProject(Base64Decode(b64));
     }
 
     EMSCRIPTEN_KEEPALIVE

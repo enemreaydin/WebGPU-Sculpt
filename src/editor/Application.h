@@ -69,6 +69,9 @@ public:
     // Editor attributes (owned by the engine via EditorObjectStore). Scale and
     // shape-param edits recompute the object's SDF `size`; the rest are stored.
     void SetObjectName(int index, const char* name);
+    // Name a CSG operation/group node (groups have no objectId, so their names are
+    // stored per-nodeId in EditorObjectStore and serialized with the project).
+    void SetNodeName(int nodeId, const char* name);
     void SetObjectVisible(int index, bool visible);
     void SetObjectLocked(int index, bool locked);
     void SetObjectRotation(int index, float x, float y, float z);
@@ -91,6 +94,14 @@ public:
     void NewScene();
     void OpenScene();
     void SaveScene();
+
+    // Project (.sdfp) I/O for the web front-end. The browser owns the actual file
+    // (via the File System Access API); the engine only produces/consumes the raw
+    // project bytes. SerializeProject returns the current scene as a .sdfp byte
+    // string; DeserializeProject loads one back (and refreshes the GPU + editor
+    // records). Returns false on a malformed buffer.
+    std::string SerializeProject();
+    bool DeserializeProject(const std::string& bytes);
 
     // View
     void SetShowGrid(bool show) { showGrid = show; }

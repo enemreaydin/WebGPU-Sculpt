@@ -1,6 +1,8 @@
 #include "ExtensionLoader.h"
 #include <fstream>
 #include <iostream>
+#include <ostream>
+#include <istream>
 #include <vector>
 
 // Write the scene to a binary .sdfo file.
@@ -64,5 +66,45 @@ bool ExtensionLoader::LoadFromSDFO(const std::string& filepath, SceneManager& sc
 
     file.close();
     std::cout << "[ExtensionLoader] Dosya basariyla yuklendi: " << filepath << "\n";
+    return true;
+}
+
+// Write the project to any binary output stream (file or in-memory).
+void ExtensionLoader::WriteSDFP(std::ostream& out, const std::vector<SdfObjectData>& objects, const CsgTree& csgTree) {
+    // Header: magic tag + object count. Same payload layout as SDFO, but the magic
+    // is "SDFP" so a project file and a (future) composite-object .sdfo never mix.
+    char magic[4] = { 'S', 'D', 'F', 'P' };
+    int32_t count = static_cast<int32_t>(objects.size());
+
+    out.write(magic, 4);
+    out.write(reinterpret_cast<const char*>(&count), sizeof(int32_t));
+    out.write(reinterpret_cast<const char*>(objects.data()), objects.size() * sizeof(SdfObjectData));
+
+    // CSG tree (groups / boolean operations): size-prefixed section.
+    csgTree.WriteToStream(out);
+}
+
+// Read a project from any binary input stream (file or in-memory).
+bool ExtensionLoader::ReadSDFP(std::istream& in, SceneManager& sceneManager) {
+    char magic[4] = { 0, 0, 0, 0 };
+    int32_t count = 0;
+    in.read(magic, 4);
+    in.read(reinterpret_cast<char*>(&count), sizeof(int32_t));
+
+    if (!in || std::string(magic, 4) != "SDFP" || count < 0) {
+        std::cerr << "[ExtensionLoader] HATA: Gecersiz .sdfp formati!\n";
+        return false;
+    }
+
+    sceneManager.ClearScene();
+    for (int i = 0; i < count; ++i) {
+        SdfObjectData obj;
+        in.read(reinterpret_cast<char*>(&obj), sizeof(SdfObjectData));
+        sceneManager.RestoreObjectRaw(obj);
+    }
+
+    // CSG tree section (EOF-tolerant, same as SDFO), then rebuild derived state.
+    sceneManager.GetCsgTree().ReadFromStream(in);
+    sceneManager.RebuildAfterLoad();
     return true;
 }

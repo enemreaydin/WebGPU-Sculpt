@@ -217,9 +217,16 @@ export default class App extends React.Component<any, any> {
   _downPos: { x: number; y: number } | null = null;
   _didDrag = false;
   _gizmoDrag = false;                // dragging a gizmo axis
+  // The .sdfp project file the user is editing (File System Access API handle).
+  // null until the first Save names one; kept so later Saves overwrite it silently.
+  _fileHandle: FileSystemFileHandle | null = null;
+  // Action awaiting the discard-changes confirmation (New / Open on a dirty scene).
+  _pendingAction: (() => void) | null = null;
 
   state: any = {
     openMenu: null,
+    fileName: null,        // current .sdfp file name, shown in the title bar (null = unsaved)
+    confirm: null,         // { title, body, okLabel } when the discard-changes modal is open
     tool: "select",
     gizmoSpace: "world",   // "world" | "local" — which axes the gizmo handles follow
     shading: "solid",
@@ -325,13 +332,13 @@ export default class App extends React.Component<any, any> {
 
                 if (k === "o") {
                     e.preventDefault();
-                    this.openScene();
+                    this.openProject();
                     return;
                 }
 
                 if (k === "s") {
                     e.preventDefault();
-                    this.saveScene();
+                    this.saveProject();
                     return;
                 }
 
@@ -370,10 +377,11 @@ export default class App extends React.Component<any, any> {
       else if (k === "r") this.setState({ tool: "rotate" });
       else if (k === "s") this.setState({ tool: "scale" });
       else if (k === "f2") {
-        const o = this.selObj();
-        if (o) {
-          const id = String(o.id);
-          this.setState({ renaming: id, renameText: this.state.meta[id]?.name || o.typeName });
+        // Rename the current selection — primitive or group/operation node.
+        const key = this.state.sel;
+        if (key && key !== "scene") {
+          const nm = this.state.meta[key]?.name || this.objById(key)?.typeName || "Group";
+          this.setState({ renaming: key, renameText: nm });
         }
       } else if (k === "x" || e.key === "Delete") this.deleteSel();
       else if (k === "d" && e.shiftKey) this.duplicateSel();
@@ -681,7 +689,10 @@ export default class App extends React.Component<any, any> {
         for (const nd of tree.nodes) {
           if (nd.type === 0 || nd.nodeId === tree.root) continue;
           const gk = "g" + nd.nodeId;
-          meta[gk] = s.meta[gk] || this.defaultGroupMeta(nd.type, counts);
+          const base = s.meta[gk] || this.defaultGroupMeta(nd.type, counts);
+          // The engine owns the custom name (persisted). Fall back to the previous
+          // UI label / generated default only when the node has no engine name.
+          meta[gk] = nd.name ? { ...base, name: nd.name } : base;
         }
       }
       // Mirror the engine's selection (nodeIds) into UI selection keys.
@@ -1209,39 +1220,137 @@ export default class App extends React.Component<any, any> {
     }
     const o = this.objById(id);
     if (o) {
-      // Primitive names are engine-owned; group names stay UI-only for now.
+      // Primitive names are engine-owned (EditorObjectStore, keyed by objectId).
       this.engine?.setObjectName(o.index, name);
+      this.setState({ renaming: null, saved: false });
+      this.refresh();
+    } else if (this.isGroupKey(id)) {
+      // Group/operation node names are engine-owned too (keyed by CSG nodeId), so
+      // they persist with the project; refresh() reads the value back from the tree.
+      this.engine?.setNodeName(this.nodeIdForKey(id), name);
       this.setState({ renaming: null, saved: false });
       this.refresh();
     } else {
       this.setState((s: any) => ({ meta: { ...s.meta, [id]: { ...s.meta[id], name } }, renaming: null, saved: false }));
     }
   }
+  // Guard destructive actions (New / Open) behind a discard-changes confirmation.
+  // If the scene is clean, the action runs immediately. Otherwise we stash it and
+  // open the modal; the button handler runs it (still inside the user gesture, so
+  // Open's file picker is allowed).
+  confirmDiscard(action: () => void, okLabel: string) {
+    this.setState({ openMenu: null });
+    if (this.state.saved) { action(); return; }
+    this._pendingAction = action;
+    this.setState({
+      confirm: {
+        title: "Discard unsaved changes?",
+        body: "Your project has unsaved changes that will be lost.",
+        okLabel,
+      },
+    });
+  }
+  cancelDiscard() {
+    this._pendingAction = null;
+    this.setState({ confirm: null });
+  }
+  proceedDiscard() {
+    const action = this._pendingAction;
+    this._pendingAction = null;
+    this.setState({ confirm: null });
+    action?.();
+  }
+
   newScene() {
+    this.confirmDiscard(() => this.doNewScene(), "Discard & new");
+  }
+  doNewScene() {
     this.engine?.newScene();
+    this._fileHandle = null;
     this.setState({
       meta: {},
       counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 },
       sel: "scene",
       saved: true,
+      fileName: null,
       openMenu: null,
     });
     this.refresh(true);
     this.log("scene", "New scene");
     this.status("New scene");
   }
-  openScene() {
-    this.engine?.openScene();
-    this.setState({ meta: {}, counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 }, sel: "scene", openMenu: null });
-    this.refresh(true);
-    this.log("scene", "Open scene — reading from engine");
-    this.status("Open scene");
+  openProject() {
+    this.confirmDiscard(() => this.doOpenProject(), "Discard & open");
   }
-  saveScene() {
-    this.engine?.saveScene();
-    this.setState({ saved: true, openMenu: null });
-    this.log("scene", "Saved untitled.sdfo (" + this.countObjects() + " objects)");
-    this.status("Saved");
+  async doOpenProject() {
+    this.setState({ openMenu: null });
+    const e = this.engine;
+    if (!e) return;
+    if (!window.showOpenFilePicker) {
+      this.log("error", "Open needs the File System Access API — use Chrome or Edge.");
+      this.status("Open unavailable");
+      return;
+    }
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        types: [{ description: "SDF Project", accept: { "application/x-sdf-project": [".sdfp"] } }],
+        excludeAcceptAllOption: true,
+      });
+      const file = await handle.getFile();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      e.loadProject(bytes);
+      // The opened file becomes the current project, so later Saves overwrite it.
+      this._fileHandle = handle;
+      this.setState({
+        meta: {},
+        counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 },
+        sel: "scene",
+        fileName: handle.name,
+        saved: true,
+      });
+      this.refresh(true);
+      this.log("scene", "Opened " + handle.name + " (" + this.countObjects() + " objects)");
+      this.status("Opened " + handle.name);
+    } catch (err: any) {
+      if (err && err.name === "AbortError") return;  // user cancelled the picker
+      this.log("error", "Open failed: " + String(err));
+      this.status("Open failed");
+    }
+  }
+  async saveProject() {
+    this.setState({ openMenu: null });
+    const e = this.engine;
+    if (!e) return;
+    if (!window.showSaveFilePicker) {
+      this.log("error", "Save needs the File System Access API — use Chrome or Edge.");
+      this.status("Save unavailable");
+      return;
+    }
+    try {
+      // First save (no remembered file): the OS dialog is the only place the
+      // browser lets us name the file, so the .sdfp name is chosen there. Later
+      // saves reuse the handle and overwrite it silently — no dialog.
+      if (!this._fileHandle) {
+        this._fileHandle = await window.showSaveFilePicker({
+          suggestedName: "untitled.sdfp",
+          types: [{ description: "SDF Project", accept: { "application/x-sdf-project": [".sdfp"] } }],
+          excludeAcceptAllOption: true,
+        });
+        this.setState({ fileName: this._fileHandle.name });
+      }
+      const handle = this._fileHandle;
+      const bytes = e.saveProject();
+      const w = await handle.createWritable();
+      await w.write(bytes as BufferSource);
+      await w.close();
+      this.setState({ saved: true });
+      this.log("scene", "Saved " + handle.name + " (" + this.countObjects() + " objects)");
+      this.status("Saved");
+    } catch (err: any) {
+      if (err && err.name === "AbortError") return;  // user cancelled the picker
+      this.log("error", "Save failed: " + String(err));
+      this.status("Save failed");
+    }
   }
   csg(op: string) {
     const e = this.engine;
@@ -1689,8 +1798,13 @@ export default class App extends React.Component<any, any> {
         ]
       : [
           mi("Rename", "F2", () => {
-            if (selObj && selId) this.setState({ renaming: selId, renameText: d?.name || selObj.typeName });
-          }, !isObj),
+            // Works for a primitive or a group/operation node — both are renamable.
+            const k = S.sel;
+            if (k && k !== "scene") {
+              const nm = S.meta[k]?.name || this.objById(k)?.typeName || "Group";
+              this.setState({ renaming: k, renameText: nm });
+            }
+          }, !(S.sel && S.sel !== "scene")),
           mi("Duplicate", "⇧D", () => this.duplicateSel(), !isObj),
           sep,
           mi("New Collection", "", () => this.addCollection()),
@@ -1703,9 +1817,8 @@ export default class App extends React.Component<any, any> {
       mFile: { bg: mF.bg }, fileOpen: mF.open, mtFile: mF.mt, mhFile: mF.mh,
       fileItems: [
         mi("New", "Ctrl N", () => this.newScene()),
-        mi("Open…", "Ctrl O", () => this.openScene()),
-        mi("Save", "Ctrl S", () => this.saveScene()),
-        mi("Save As…", "", () => this.saveScene()),
+        mi("Open…", "Ctrl O", () => this.openProject()),
+        mi("Save", "Ctrl S", () => this.saveProject()),
         sep,
         mi("Import .sdfo", "", () => {}, true),
         mi("Export", "", () => {}, true),
@@ -1756,6 +1869,7 @@ export default class App extends React.Component<any, any> {
         mi("About SDF Editor", "", () => this.status("SDF Editor v0.1.0 — WebGPU raymarched CSG editor")),
       ],
       unsaved: !S.saved,
+      fileName: S.fileName || "untitled.sdfp",
 
       // left toolbar
       addSphere: () => this.addPrimitive("sphere"),
@@ -2063,7 +2177,7 @@ export default class App extends React.Component<any, any> {
           <div style={css("flex:1")} />
           <div style={css("display:flex;align-items:center;gap:6px;padding-right:4px")}>
             {V.unsaved && <span style={css("width:6px;height:6px;border-radius:50%;background:#e8912d;display:block")} title="Unsaved changes" />}
-            <span style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>untitled.sdfo</span>
+            <span style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>{V.fileName}</span>
           </div>
         </header>
 
@@ -2566,6 +2680,19 @@ export default class App extends React.Component<any, any> {
                 <span style={css("font-size:11px;color:#616161")}>F1 or click to close</span>
               </div>
               <Raw html={SHORTCUTS_GRID_HTML} />
+            </div>
+          </div>
+        )}
+
+        {this.state.confirm && (
+          <div onClick={() => this.cancelDiscard()} style={css("position:fixed;inset:0;z-index:600;background:rgba(12,12,12,0.84);display:flex;align-items:center;justify-content:center;animation:sdfFadeIn 0.15s ease")}>
+            <div onClick={(e: any) => e.stopPropagation()} style={css("width:380px;max-width:90vw;background:#1f1f1f;border:1px solid #363636;border-radius:2px;box-shadow:0 20px 60px rgba(0,0,0,0.6);padding:20px 22px")}>
+              <div style={css("font-size:13px;font-weight:600;margin-bottom:10px")}>{this.state.confirm.title}</div>
+              <div style={css("font-size:12px;color:#a0a0a0;line-height:1.5;margin-bottom:20px")}>{this.state.confirm.body}</div>
+              <div style={css("display:flex;justify-content:flex-end;gap:8px")}>
+                <Hv onClick={() => this.cancelDiscard()} s="padding:6px 14px;font-size:12px;color:#dedede;border:1px solid #3a3a3a;border-radius:2px;cursor:default" h="background:#2e2e2e">Cancel</Hv>
+                <Hv onClick={() => this.proceedDiscard()} s="padding:6px 14px;font-size:12px;color:#151515;font-weight:600;background:#e8912d;border:1px solid #e8912d;border-radius:2px;cursor:default" h="background:#f0a24a">{this.state.confirm.okLabel}</Hv>
+              </div>
             </div>
           </div>
         )}
