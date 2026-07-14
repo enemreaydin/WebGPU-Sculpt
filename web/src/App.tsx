@@ -246,6 +246,8 @@ export default class App extends React.Component<any, any> {
   _rafId: number | null = null;
   _fpsFrames = 0;
   _fpsLast = 0;
+  // Last non-zero light intensity, so the Light toggle can restore it after "off".
+  _lastLightIntensity = 1;
   _camDrag = false;
   _camPan = false;
   _downPos: { x: number; y: number } | null = null;
@@ -276,6 +278,10 @@ export default class App extends React.Component<any, any> {
     // a viewport DISPLAY preference (like DPR), not scene state — it lives here,
     // not in the engine, and modulates what syncCanvasSize tells the engine to render.
     renderScale: 1,
+    // Active performance profile key ("low"/"balanced"/"high"/"ultra"), or "custom"
+    // once the user hand-tweaks any quality setting. Purely a UI convenience that
+    // batch-applies the existing render setters; the engine stays authoritative.
+    perfProfile: "custom",
     rightW: 300,
     dockH: 200,
     outlH: 300,
@@ -557,8 +563,8 @@ export default class App extends React.Component<any, any> {
   // Change the internal render resolution and immediately re-size the backing
   // store. canvasPoint() normalizes pointer coords by canvas.width/rect.width, so
   // picking + the gizmo stay pixel-correct at any scale.
-  setRenderScale(scale: number) {
-    this.setState({ renderScale: scale }, () => this.syncCanvasSize());
+  setRenderScale(scale: number, profile: string = "custom") {
+    this.setState({ renderScale: scale, perfProfile: profile }, () => this.syncCanvasSize());
   }
 
   // Mouse position in render (device) pixels — the space the engine picks and
@@ -968,14 +974,81 @@ export default class App extends React.Component<any, any> {
     let v = Math.max(cfg.min, Math.min(cfg.max, value));
     if (cfg.int) v = Math.round(v);
     this.engine?.setRenderSetting(cfg.id, v);
-    this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false }));
+    this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false, perfProfile: "custom" }));
   }
 
   // Toggle a boolean render setting (shadows / AO). The engine takes a float, so
   // send 1/0; mirror the bool into state like rsSet does for numbers.
   rsBool(id: number, key: string, value: boolean) {
     this.engine?.setRenderSetting(id, value ? 1 : 0);
-    this.setState((s: any) => ({ render: { ...s.render, [key]: value }, saved: false }));
+    this.setState((s: any) => ({ render: { ...s.render, [key]: value }, saved: false, perfProfile: "custom" }));
+  }
+
+  // "Light" master toggle — pure sugar over lightIntensity (no new engine state).
+  // Off stores the current intensity and zeroes it (the shader then also skips the
+  // shadow march, see main.wgsl); on restores it. The Light Intensity slider stays
+  // the fine control and reflects the same value.
+  toggleLight(on: boolean) {
+    const cur = this.state.render?.lightIntensity ?? 1;
+    const next = on ? (this._lastLightIntensity > 0 ? this._lastLightIntensity : 1) : 0;
+    if (!on && cur > 0) this._lastLightIntensity = cur;
+    this.engine?.setRenderSetting(RenderSetting.LightIntensity, next);
+    this.setState((s: any) => ({ render: { ...s.render, lightIntensity: next }, saved: false, perfProfile: "custom" }));
+  }
+
+  // Performance profiles — one-click presets that batch render scale + the feature
+  // toggles + the raymarch/shadow/AO budgets. Values stay within the RENDER_ADVANCED
+  // slider bounds. "Ultra" trades speed for crisper distant/thin geometry; "Performance"
+  // (low) drops both marches and halves resolution for max FPS on weak GPUs.
+  PERF_PROFILES: Record<string, { label: string; scale: number; settings: Array<[number, number]> }> = {
+    low: {
+      label: "Fast", scale: 0.5,
+      settings: [
+        [RenderSetting.ShadowsEnabled, 0], [RenderSetting.AoEnabled, 0],
+        [RenderSetting.MaxSteps, 64], [RenderSetting.HitEpsilon, 0.002], [RenderSetting.MaxDistance, 40],
+        [RenderSetting.ShadowSteps, 16], [RenderSetting.ShadowDistance, 20], [RenderSetting.AoSamples, 3],
+      ],
+    },
+    balanced: {
+      label: "Balanced", scale: 0.75,
+      settings: [
+        [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
+        [RenderSetting.MaxSteps, 96], [RenderSetting.HitEpsilon, 0.001], [RenderSetting.MaxDistance, 50],
+        [RenderSetting.ShadowSteps, 32], [RenderSetting.ShadowDistance, 30], [RenderSetting.AoSamples, 4],
+      ],
+    },
+    high: {
+      label: "High", scale: 1,
+      settings: [
+        [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
+        [RenderSetting.MaxSteps, 128], [RenderSetting.HitEpsilon, 0.0008], [RenderSetting.MaxDistance, 60],
+        [RenderSetting.ShadowSteps, 48], [RenderSetting.ShadowDistance, 30], [RenderSetting.AoSamples, 5],
+      ],
+    },
+    ultra: {
+      label: "Ultra", scale: 1,
+      settings: [
+        [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
+        [RenderSetting.MaxSteps, 256], [RenderSetting.HitEpsilon, 0.0004], [RenderSetting.MaxDistance, 80],
+        [RenderSetting.ShadowSteps, 96], [RenderSetting.ShadowDistance, 40], [RenderSetting.AoSamples, 8],
+      ],
+    },
+  };
+
+  applyProfile(key: string) {
+    const p = this.PERF_PROFILES[key];
+    const e = this.engine;
+    if (!p || !e) return;
+    // Coalesce the batch into one scene-edit (same wrap a slider drag uses), so a
+    // profile is a single history step rather than one per field.
+    e.beginSceneEdit("Apply Performance Profile");
+    for (const [id, val] of p.settings) e.setRenderSetting(id, val);
+    e.commitSceneEdit();
+    // Re-read engine values so every slider/toggle reflects the profile...
+    this.refresh();
+    // ...then the web-side render scale (also tags the active profile) + resync canvas.
+    this.setRenderScale(p.scale, key);
+    this.setState({ saved: false });
   }
 
   rsToggleHelp(key: string) {
@@ -2847,7 +2920,22 @@ export default class App extends React.Component<any, any> {
                     ) : (
                       <>
                         <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Performance</span>
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Render Resolution — the fastest way to speed up a slow viewport. Lower renders fewer pixels (the biggest cost) and upscales; the image gets softer but the framerate climbs.</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Quality Preset — one click sets resolution, shadows/AO, and all the raymarch budgets. Start here; the controls below fine-tune from a preset (which then reads as "Custom").</span>
+                        <div style={css("display:flex;gap:4px;flex-wrap:wrap")}>
+                          {["low", "balanced", "high", "ultra"].map((k) => {
+                            const active = this.state.perfProfile === k;
+                            return (
+                              <Hv key={k} onClick={() => this.applyProfile(k)}
+                                s={`flex:1 1 0;min-width:62px;text-align:center;padding:5px 6px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
+                                h={active ? "" : "border-color:#565656;color:#dedede"}>{this.PERF_PROFILES[k].label}</Hv>
+                            );
+                          })}
+                        </div>
+                        {this.state.perfProfile === "custom" && (
+                          <span style={css("font-size:10px;color:#7a7a7a;padding:0 2px")}>Custom — a preset was fine-tuned by hand. Pick a preset above to reset.</span>
+                        )}
+
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:6px 2px 0")}>Render Resolution — the fastest single dial. Lower renders fewer pixels (the biggest cost) and upscales; softer image, higher framerate.</span>
                         <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
                           <div style={css("display:flex;gap:4px")}>
                             {[["50%", 0.5], ["75%", 0.75], ["100%", 1]].map(([lbl, sc]) => {
@@ -2862,8 +2950,20 @@ export default class App extends React.Component<any, any> {
                           <span style={css("font-size:10px;color:#616161")}>{this.state.vpW}×{this.state.vpH}</span>
                         </div>
 
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive.</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive. With the light off, shadows are skipped automatically.</span>
                         <div style={css("display:flex;flex-direction:column;gap:6px")}>
+                          {(() => {
+                            const on = (this.state.render?.lightIntensity ?? 1) > 0;
+                            return (
+                              <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+                                <span style={css("font-size:11px;color:#c0c0c0")}>Light</span>
+                                <Hv onClick={() => this.toggleLight(!on)}
+                                  s={`width:34px;height:18px;border-radius:9px;cursor:default;position:relative;flex:0 0 auto;background:${on ? "#e8912d" : "#3a3a3a"}`} h="">
+                                  <span style={css(`position:absolute;top:2px;left:${on ? "18px" : "2px"};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)} />
+                                </Hv>
+                              </div>
+                            );
+                          })()}
                           {[["Shadows", RenderSetting.ShadowsEnabled, "shadowsEnabled"], ["Ambient Occlusion", RenderSetting.AoEnabled, "aoEnabled"]].map(([lbl, id, key]) => {
                             const on = (this.state.render as any)?.[key as string] !== false;
                             return (

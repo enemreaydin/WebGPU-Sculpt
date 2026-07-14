@@ -230,16 +230,40 @@ void SceneManager::RebuildAfterLoad() {
     m_ObjectNodeIndex.clear();
     m_RootNodeIndex = m_CsgTree.GetRoot();
 
-    if (m_RootNodeIndex == -1 && !m_Objects.empty())
+    // A tree with valid links can still be inconsistent with the object list — a
+    // corrupt file may point a primitive node at an objectId that no longer exists,
+    // which CompileToRPN's .at() lookup would throw on. Detect that (and the
+    // legacy "no tree at all" case) and fall back to a flat default union so the
+    // scene still renders instead of crashing.
+    bool consistent = m_RootNodeIndex != -1;
+    if (consistent)
     {
-        // Legacy file without a CSG section: rebuild a default root Union tree so the
-        // scene still renders (matches the auto root-Union default behavior).
-        m_CsgTree.Clear();
-        m_RootNodeIndex = m_CsgTree.AddOperationNode(CsgNodeType::Union, -1);
-        for (const auto& o : m_Objects)
+        const auto& nodes = m_CsgTree.GetNodes();
+        for (const auto& n : nodes)
         {
-            int32_t nodeIndex = m_CsgTree.AddPrimitiveNode(o.objectId, m_RootNodeIndex);
-            m_ObjectNodeIndex[o.objectId] = nodeIndex;
+            if (n.alive && n.type == CsgNodeType::Primitive && FindObjectById(n.objectId) == nullptr)
+            {
+                consistent = false;
+                break;
+            }
+        }
+    }
+
+    if (!consistent)
+    {
+        // Legacy file without a CSG section, or a corrupt tree: rebuild a default
+        // root Union tree so the scene still renders (matches the auto root-Union
+        // default behavior).
+        m_CsgTree.Clear();
+        m_RootNodeIndex = -1;
+        if (!m_Objects.empty())
+        {
+            m_RootNodeIndex = m_CsgTree.AddOperationNode(CsgNodeType::Union, -1);
+            for (const auto& o : m_Objects)
+            {
+                int32_t nodeIndex = m_CsgTree.AddPrimitiveNode(o.objectId, m_RootNodeIndex);
+                m_ObjectNodeIndex[o.objectId] = nodeIndex;
+            }
         }
         return;
     }

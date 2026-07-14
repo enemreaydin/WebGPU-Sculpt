@@ -59,6 +59,10 @@ private:
     void CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, std::vector<CsgCommand>& outProgram) const;
     void NormalizeLegacyModifierNodes();
     bool RemoveLegacyModifierNode(int32_t modifierIndex);
+    // True iff m_Root and every node link (parent/child/sibling) is either -1 or a
+    // valid vector index. Deserialized (untrusted) files can carry out-of-range
+    // links that would be dereferenced with operator[] later -> heap OOB read.
+    bool LinksAreValid() const;
 
     std::vector<CsgNode> m_Nodes;
     int32_t m_Root = -1;

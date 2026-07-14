@@ -127,7 +127,7 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let specularStrength = globals.specularStrength;
         let spec = pow(max(dot(n, h), 0.0), shininess);
         var shadow = 1.0;
-        if (globals.shadowsEnabled == 1) { shadow = calcSoftShadow(hitPos, lightDirection); }
+        if (globals.shadowsEnabled == 1 && intensity > 0.0) { shadow = calcSoftShadow(hitPos, lightDirection); }
         var ao = 1.0;
         if (globals.aoEnabled == 1) { ao = calcAO(hitPos, n); }
         let diffuseTerm = result.color * lightColor * intensity * diff;

@@ -328,10 +328,35 @@ void CsgTree::ReadFromStream(std::istream& in)
         // Truncated/partial section — fall back to an empty tree.
         Clear();
     }
+    else if (!LinksAreValid())
+    {
+        // Corrupt/hostile file: a link points outside the node vector. Dropping the
+        // tree here means SceneManager::RebuildAfterLoad rebuilds a flat default
+        // union from the objects, so the scene still loads (just ungrouped) instead
+        // of dereferencing an out-of-range index in CompileNode / GetSceneJson.
+        Clear();
+    }
     else
     {
         NormalizeLegacyModifierNodes();
     }
+}
+
+bool CsgTree::LinksAreValid() const
+{
+    const int32_t n = static_cast<int32_t>(m_Nodes.size());
+    const auto inRange = [n](int32_t idx) { return idx >= -1 && idx < n; };
+
+    if (!inRange(m_Root)) return false;
+    for (const CsgNode& node : m_Nodes)
+    {
+        if (!inRange(node.parent) || !inRange(node.firstChild) || !inRange(node.lastChild) ||
+            !inRange(node.nextSibling) || !inRange(node.previousSibling))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void CsgTree::NormalizeLegacyModifierNodes()

@@ -1410,12 +1410,15 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::SpecularGloss:    appSettings.specularGloss = value; break;
     case RenderSetting::SpecularStrength: appSettings.specularStrength = value; break;
     case RenderSetting::AoStrength:       appSettings.aoStrength = value; break;
-    case RenderSetting::MaxSteps:         appSettings.maxSteps = std::max(1, static_cast<int>(value + 0.5f)); break;
-    case RenderSetting::HitEpsilon:       appSettings.hitEpsilon = value; break;
-    case RenderSetting::MaxDistance:      appSettings.maxDistance = value; break;
-    case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::max(1, static_cast<int>(value + 0.5f)); break;
-    case RenderSetting::ShadowDistance:   appSettings.shadowDistance = value; break;
-    case RenderSetting::AoSamples:        appSettings.aoSamples = std::max(2, static_cast<int>(value + 0.5f)); break;
+    // Hard safety caps (well above the UI slider maxes, so they never interfere
+    // with legitimate values) guard against a rogue binding call passing a value
+    // that would hang the GPU or make the march never terminate a hit.
+    case RenderSetting::MaxSteps:         appSettings.maxSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 2048); break;
+    case RenderSetting::HitEpsilon:       appSettings.hitEpsilon = std::clamp(value, 1e-6f, 1.0f); break;
+    case RenderSetting::MaxDistance:      appSettings.maxDistance = std::clamp(value, 0.1f, 100000.0f); break;
+    case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 1024); break;
+    case RenderSetting::ShadowDistance:   appSettings.shadowDistance = std::clamp(value, 0.1f, 100000.0f); break;
+    case RenderSetting::AoSamples:        appSettings.aoSamples = std::clamp(static_cast<int>(value + 0.5f), 2, 128); break;
     case RenderSetting::ShadowsEnabled:   appSettings.shadowsEnabled = value != 0.0f; break;
     case RenderSetting::AoEnabled:         appSettings.aoEnabled = value != 0.0f; break;
     default: break;

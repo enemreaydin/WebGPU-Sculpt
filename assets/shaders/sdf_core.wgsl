@@ -187,33 +187,39 @@ fn distanceCalc(p : vec3f) -> f32
                 case 8: { dist = sdfPyramid(localPos, obj.size.x, obj.size.y); }
                 default: { dist = 100000.0; }
             }
-            distanceStack[sp] = dist;
-            sp = sp + 1;
+            if (sp < 16)
+            {
+                distanceStack[sp] = dist;
+                sp = sp + 1;
+            }
         }
         else if (cmd.cmd_type >= 1 && cmd.cmd_type <= 6)
         {
-            let dB = distanceStack[sp - 1];
-            let dA = distanceStack[sp - 2];
-            var d = 100000.0;
-            if (cmd.cmd_type == 1)
+            if (sp >= 2)
             {
-                d = opUnion(dA, dB);
-            }
-            else if (cmd.cmd_type == 2)
-            {
-                d = opSubtract(dB, dA);
-            }
-            else
-            {
-                d = opIntersection(dA, dB);
-            }
+                let dB = distanceStack[sp - 1];
+                let dA = distanceStack[sp - 2];
+                var d = 100000.0;
+                if (cmd.cmd_type == 1)
+                {
+                    d = opUnion(dA, dB);
+                }
+                else if (cmd.cmd_type == 2)
+                {
+                    d = opSubtract(dB, dA);
+                }
+                else
+                {
+                    d = opIntersection(dA, dB);
+                }
 
-            if (cmd.cmd_type == 4) { d = opSmoothUnion(dA, dB, cmd.parameter); }
-            else if (cmd.cmd_type == 5) { d = opSmoothSubtract(dA, dB, cmd.parameter); }
-            else if (cmd.cmd_type == 6) { d = opSmoothIntersection(dA, dB, cmd.parameter); }
+                if (cmd.cmd_type == 4) { d = opSmoothUnion(dA, dB, cmd.parameter); }
+                else if (cmd.cmd_type == 5) { d = opSmoothSubtract(dA, dB, cmd.parameter); }
+                else if (cmd.cmd_type == 6) { d = opSmoothIntersection(dA, dB, cmd.parameter); }
 
-            sp = sp - 1;
-            distanceStack[sp - 1] = d;
+                sp = sp - 1;
+                distanceStack[sp - 1] = d;
+            }
         }
     }
      if (sp > 0)
@@ -326,69 +332,75 @@ fn evaluateScene(p : vec3f) -> SceneResult
                 objColor = mix(objColor, vec3f(1.0), 0.4);
             }
 
-            stack[sp] = dist;
-            stackColor[sp] = objColor;
-            stackId[sp] = u32(cmd.operand);
-            sp = sp + 1;
+            if (sp < 16)
+            {
+                stack[sp] = dist;
+                stackColor[sp] = objColor;
+                stackId[sp] = u32(cmd.operand);
+                sp = sp + 1;
+            }
         }
         else if (cmd.cmd_type >= 1 && cmd.cmd_type <= 6)
         {
-            let dB = stack[sp - 1];
-            let cB = stackColor[sp - 1];
-            let idB = stackId[sp - 1];
-            let dA = stack[sp - 2];
-            let cA = stackColor[sp - 2];
-            let idA = stackId[sp - 2];
-
-            var d = 100000.0;
-            var c = cA;
-            var id = idA;
-
-            if (cmd.cmd_type == 1)
+            if (sp >= 2)
             {
-                d = opUnion(dA, dB);
-                if (dB < dA)
+                let dB = stack[sp - 1];
+                let cB = stackColor[sp - 1];
+                let idB = stackId[sp - 1];
+                let dA = stack[sp - 2];
+                let cA = stackColor[sp - 2];
+                let idA = stackId[sp - 2];
+
+                var d = 100000.0;
+                var c = cA;
+                var id = idA;
+
+                if (cmd.cmd_type == 1)
                 {
-                    c = cB;
-                    id = idB;
+                    d = opUnion(dA, dB);
+                    if (dB < dA)
+                    {
+                        c = cB;
+                        id = idB;
+                    }
                 }
-            }
-            else if (cmd.cmd_type == 2)
-            {
-                d = opSubtract(dB, dA);
-                c = cA;
-            }
-            else
-            {
-                d = opIntersection(dA, dB);
-                c = cA;
-            }
-
-            if (cmd.cmd_type >= 4 && cmd.cmd_type <= 6)
-            {
-                let k = max(cmd.parameter, 0.0);
-                var h = 0.0;
-                if (cmd.cmd_type == 4)
+                else if (cmd.cmd_type == 2)
                 {
-                    d = opSmoothUnion(dA, dB, k);
-                    h = select(0.0, 1.0, dA <= dB);
-                    if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dB - dA) / k, 0.0, 1.0); }
+                    d = opSubtract(dB, dA);
+                    c = cA;
                 }
                 else
                 {
-                    let comparedB = select(dB, -dB, cmd.cmd_type == 5);
-                    d = opSmoothIntersection(dA, comparedB, k);
-                    h = select(0.0, 1.0, dA >= comparedB);
-                    if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dA - comparedB) / k, 0.0, 1.0); }
+                    d = opIntersection(dA, dB);
+                    c = cA;
                 }
-                c = mix(cB, cA, h);
-                id = select(idB, idA, h >= 0.5);
-            }
 
-            sp = sp - 1;
-            stack[sp - 1] = d;
-            stackColor[sp - 1] = c;
-            stackId[sp - 1] = id;
+                if (cmd.cmd_type >= 4 && cmd.cmd_type <= 6)
+                {
+                    let k = max(cmd.parameter, 0.0);
+                    var h = 0.0;
+                    if (cmd.cmd_type == 4)
+                    {
+                        d = opSmoothUnion(dA, dB, k);
+                        h = select(0.0, 1.0, dA <= dB);
+                        if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dB - dA) / k, 0.0, 1.0); }
+                    }
+                    else
+                    {
+                        let comparedB = select(dB, -dB, cmd.cmd_type == 5);
+                        d = opSmoothIntersection(dA, comparedB, k);
+                        h = select(0.0, 1.0, dA >= comparedB);
+                        if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dA - comparedB) / k, 0.0, 1.0); }
+                    }
+                    c = mix(cB, cA, h);
+                    id = select(idB, idA, h >= 0.5);
+                }
+
+                sp = sp - 1;
+                stack[sp - 1] = d;
+                stackColor[sp - 1] = c;
+                stackId[sp - 1] = id;
+            }
         }
     }
 
