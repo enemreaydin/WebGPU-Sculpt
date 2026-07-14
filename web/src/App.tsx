@@ -262,6 +262,12 @@ export default class App extends React.Component<any, any> {
     // Canvas render dimensions (kept in state so a resize re-renders panels).
     vpW: 1,
     vpH: 1,
+    // Internal render resolution as a fraction of the viewport's CSS size. The
+    // raymarch cost scales with pixel count, so 0.75/0.5 are big, cheap FPS wins;
+    // the browser upscales the smaller backing store to fill the canvas. This is
+    // a viewport DISPLAY preference (like DPR), not scene state — it lives here,
+    // not in the engine, and modulates what syncCanvasSize tells the engine to render.
+    renderScale: 1,
     rightW: 300,
     dockH: 200,
     outlH: 300,
@@ -509,12 +515,22 @@ export default class App extends React.Component<any, any> {
     const viewport = this.viewportRef.current;
     if (!canvas || !viewport || !this.engine) return;
     const rect = viewport.getBoundingClientRect();
-    const w = Math.max(1, Math.floor(rect.width));
-    const h = Math.max(1, Math.floor(rect.height));
+    // Backing-store size = CSS size × renderScale. CSS keeps the canvas full-size
+    // (width:100%/height:100%), so the browser upscales a smaller buffer for free.
+    const scale = this.state.renderScale || 1;
+    const w = Math.max(1, Math.floor(rect.width * scale));
+    const h = Math.max(1, Math.floor(rect.height * scale));
     canvas.width = w;
     canvas.height = h;
     this.engine.resize(w, h);
     this.setState({ vpW: w, vpH: h });
+  }
+
+  // Change the internal render resolution and immediately re-size the backing
+  // store. canvasPoint() normalizes pointer coords by canvas.width/rect.width, so
+  // picking + the gizmo stay pixel-correct at any scale.
+  setRenderScale(scale: number) {
+    this.setState({ renderScale: scale }, () => this.syncCanvasSize());
   }
 
   // Mouse position in render (device) pixels — the space the engine picks and
@@ -2792,7 +2808,23 @@ export default class App extends React.Component<any, any> {
                       <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Loading render settings…</span>
                     ) : (
                       <>
-                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Lighting &amp; Look</span>
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Performance</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Render Resolution — the fastest way to speed up a slow viewport. Lower renders fewer pixels (the biggest cost) and upscales; the image gets softer but the framerate climbs.</span>
+                        <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+                          <div style={css("display:flex;gap:4px")}>
+                            {[["50%", 0.5], ["75%", 0.75], ["100%", 1]].map(([lbl, sc]) => {
+                              const active = (this.state.renderScale || 1) === sc;
+                              return (
+                                <Hv key={String(sc)} onClick={() => this.setRenderScale(sc as number)}
+                                  s={`padding:4px 12px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
+                                  h={active ? "" : "border-color:#565656;color:#dedede"}>{lbl as string}</Hv>
+                              );
+                            })}
+                          </div>
+                          <span style={css("font-size:10px;color:#616161")}>{this.state.vpW}×{this.state.vpH}</span>
+                        </div>
+
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9;margin-top:4px")}>Lighting &amp; Look</span>
                         <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Click a setting's name for a short explanation. These affect the look and cost little or no performance.</span>
                         <div style={css("display:flex;flex-direction:column;gap:8px")}>
                           {this.RENDER_SETTINGS.map((cfg: any) => this.rsRow(cfg))}
