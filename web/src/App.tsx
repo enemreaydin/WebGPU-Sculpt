@@ -230,6 +230,7 @@ export default class App extends React.Component<any, any> {
   _rl = false;
   _sv = false;
   _hu = false;
+  _groupScaleLast = 1;   // slider value at the start of a group-scale drag
   _kd: any = null;
   _pt: any = null;
 
@@ -288,6 +289,12 @@ export default class App extends React.Component<any, any> {
     modifierMenu: false,
     // Toolbar "Smooth Boolean" flyout (Smooth Union/Subtract/Intersect).
     smoothMenu: false,
+    // Transient group-panel controls (groups store no color/scale of their own).
+    // groupHsv = last colour picked for the group; groupScaleUI = the scale slider's
+    // session-relative factor (1 = the size the group had when selected). Both reset
+    // when the selection changes (componentDidUpdate).
+    groupHsv: null as any,
+    groupScaleUI: 1,
     blendOpen: true,
     roundnessOpen: true,
     renaming: null,
@@ -434,6 +441,10 @@ export default class App extends React.Component<any, any> {
     if (!this.engine) return;
     if (prevState.tool !== this.state.tool || prevState.gizmoSpace !== this.state.gizmoSpace) {
       this.syncGizmo();
+    }
+    // Reset the transient group controls when the selection changes.
+    if (prevState.sel !== this.state.sel && (this.state.groupHsv !== null || this.state.groupScaleUI !== 1)) {
+      this.setState({ groupHsv: null, groupScaleUI: 1 });
     }
   }
 
@@ -654,6 +665,31 @@ export default class App extends React.Component<any, any> {
     };
     walk(nodeId);
     return count;
+  }
+
+  // Representative colour (as HSV) for a group: read straight from its objects.
+  // If they all share a colour (the case after a group-colour edit) that colour is
+  // returned; otherwise the first primitive's colour stands in. Lets the group
+  // colour control show the real state instead of a placeholder. null = no objects.
+  groupColorHsv(nodeId: number): any {
+    const t = this.state.tree;
+    if (!t) return null;
+    const byId: Record<number, any> = {};
+    for (const n of t.nodes) byId[n.nodeId] = n;
+    const colors: number[][] = [];
+    const walk = (id: number) => {
+      const n = byId[id];
+      if (!n) return;
+      if (n.type === 0) {
+        const o = this.objById(String(n.objectId));
+        if (o && o.color) colors.push(o.color);
+      }
+      for (const c of n.children || []) walk(c);
+    };
+    walk(nodeId);
+    if (colors.length === 0) return null;
+    const [r, g, b] = colors[0];
+    return this.rgb2hsv(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255));
   }
 
   // Engine object for a selection id ("scene" and null resolve to no object).
@@ -1559,11 +1595,19 @@ export default class App extends React.Component<any, any> {
       if (gnode) {
         const opName = gnode.type === 2 ? "Subtract" : gnode.type === 3 ? "Intersect" : gnode.type === 4 ? "Group" : "Union";
         const gm = S.meta[S.sel];
-        groupSel = { name: (gm && gm.name) || opName, op: opName, count: this.groupPrimitiveCount(gnid) };
+        groupSel = { nodeId: gnid, name: (gm && gm.name) || opName, op: opName, count: this.groupPrimitiveCount(gnid) };
       }
     }
 
-    const rgb = d ? this.hsv2rgb(d.hsv.h, d.hsv.s, d.hsv.v) : [128, 128, 128];
+    // The colour picker serves both a selected primitive (its meta.hsv) and a
+    // selected group (a transient groupHsv, since a group stores no colour of its
+    // own). activeHsv unifies the two so the picker + swatch reuse one code path.
+    // For a group, show the objects' actual colour (groupColorHsv); groupHsv only
+    // overrides it live during a picker drag, and resets on reselect so the control
+    // always reflects the real object colour when you come back to it.
+    const isGroupColor = (isGroupSel && !!groupSel) as boolean;
+    const activeHsv = d ? d.hsv : (isGroupColor ? (S.groupHsv || this.groupColorHsv(groupSel.nodeId) || { h: 0, s: 0, v: 0.85 }) : null);
+    const rgb = activeHsv ? this.hsv2rgb(activeHsv.h, activeHsv.s, activeHsv.v) : [128, 128, 128];
     const colorCss = "rgb(" + rgb.join(",") + ")";
     const colorHex = this.hex(rgb);
 
@@ -1822,32 +1866,39 @@ export default class App extends React.Component<any, any> {
       scale: "Drag Scale · X/Y/Z Constrain · Esc Cancel",
     };
 
-    // Push an HSV value to the selected object's meta AND the engine color.
+    // Push an HSV value to the engine colour of whatever is selected: a primitive
+    // (its meta.hsv + setObjectColor) or a group (transient groupHsv + setGroupColor
+    // fanned over the subtree). Either way the control reflects it live via setState.
     const applyHsv = (hsv: any) => {
-      if (!selObj || !selId) return;
       const c = this.hsv2rgb(hsv.h, hsv.s, hsv.v);
-      this.engine?.setObjectColor(selObj.index, c[0] / 255, c[1] / 255, c[2] / 255);
-      this.setState((s: any) => ({ hexEdit: null, saved: false, meta: { ...s.meta, [selId!]: { ...s.meta[selId!], hsv } } }));
+      if (selObj && selId) {
+        this.engine?.setObjectColor(selObj.index, c[0] / 255, c[1] / 255, c[2] / 255);
+        this.setState((s: any) => ({ hexEdit: null, saved: false, meta: { ...s.meta, [selId!]: { ...s.meta[selId!], hsv } } }));
+      } else if (isGroupColor) {
+        this.engine?.setGroupColor(groupSel.nodeId, c[0] / 255, c[1] / 255, c[2] / 255);
+        this.setState({ hexEdit: null, saved: false, groupHsv: hsv });
+      }
     };
     const svSet = (e: any) => {
-      if (!d) return;
+      if (!activeHsv) return;
       const r = e.currentTarget.getBoundingClientRect();
       const sN = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
       const vN = 1 - Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
-      applyHsv({ ...d.hsv, s: sN, v: vN });
+      applyHsv({ ...activeHsv, s: sN, v: vN });
     };
     const hueSet = (e: any) => {
-      if (!d) return;
+      if (!activeHsv) return;
       const r = e.currentTarget.getBoundingClientRect();
       const h = Math.max(0, Math.min(359.9, ((e.clientX - r.left) / r.width) * 360));
-      applyHsv({ ...d.hsv, h });
+      applyHsv({ ...activeHsv, h });
     };
     const commitHex = () => {
       const t = (this.state.hexEdit || "").trim().replace(/^#/, "");
-      if (/^[0-9a-f]{6}$/i.test(t) && d) {
+      if (/^[0-9a-f]{6}$/i.test(t) && activeHsv) {
                 this.engine?.beginSceneEdit("Change Color");
         applyHsv(this.rgb2hsv(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16)));
                 this.engine?.commitSceneEdit();
+        this.refresh();
       } else this.setState({ hexEdit: null });
     };
 
@@ -2056,6 +2107,23 @@ export default class App extends React.Component<any, any> {
       isObjTab: propsTab === "object", isMatTab: propsTab === "material", isModTab: propsTab === "modifiers", isRenTab: propsTab === "render",
       hasObj: isObj, isCollSel: isColl, isGroupSel: isGroupSel && !!groupSel, groupSel,
       noSel: S.sel == null || (isGroupSel && !groupSel),
+      // Group colour uses the shared picker (applyHsv routes to setGroupColor).
+      // Group scale is a session-relative slider: the whole drag is one scene-edit,
+      // and each tick applies the ratio to the previous value so the engine scales
+      // incrementally about the group centre. The slider reflects the value live.
+      groupScaleValue: S.groupScaleUI,
+      groupScaleCfg: { key: "groupscale", label: "Scale", min: 0.1, max: 3, step: 0.01, help: "Uniformly resizes every object in the group about the group centre. Relative to the group's size when selected (1 = unchanged); reselecting resets to 1." },
+      groupScaleBegin: () => { this._groupScaleLast = this.state.groupScaleUI; this.engine?.beginSceneEdit("Scale Group"); },
+      groupScaleChange: (v: number) => {
+        const nid = this.nodeIdForKey(S.sel);
+        const last = this._groupScaleLast || 1;
+        if (nid >= 0 && v > 0 && isFinite(v) && Math.abs(v - last) > 1e-6) {
+          this.engine?.scaleGroup(nid, v / last);
+          this._groupScaleLast = v;
+        }
+        this.setState({ groupScaleUI: v, saved: false });
+      },
+      groupScaleCommit: () => { this.engine?.commitSceneEdit(); this.refresh(); },
       objIconPath: isObj ? this.IC[selTypeName] : "",
       objName: isObj ? (d?.name || selObj.typeName) : "",
       objTypeChip: isObj ? "SDF " + this.cap(selTypeName) : "",
@@ -2117,9 +2185,9 @@ export default class App extends React.Component<any, any> {
       pickerOpen: !!S.picker,
       pickerX: S.picker ? S.picker.x + "px" : "0px",
       pickerY: S.picker ? S.picker.y + "px" : "0px",
-      svBg: d ? "linear-gradient(to top, #000000, rgba(0,0,0,0)), linear-gradient(to right, #ffffff, hsl(" + d.hsv.h + ", 100%, 50%))" : "#000",
-      svX: d ? d.hsv.s * 100 + "%" : "0%",
-      svY: d ? (1 - d.hsv.v) * 100 + "%" : "0%",
+      svBg: activeHsv ? "linear-gradient(to top, #000000, rgba(0,0,0,0)), linear-gradient(to right, #ffffff, hsl(" + activeHsv.h + ", 100%, 50%))" : "#000",
+      svX: activeHsv ? activeHsv.s * 100 + "%" : "0%",
+      svY: activeHsv ? (1 - activeHsv.v) * 100 + "%" : "0%",
       sv: {
         down: (e: any) => {
           e.preventDefault();
@@ -2139,9 +2207,10 @@ export default class App extends React.Component<any, any> {
           } catch (_) {}
           this._sv = false;
                     this.engine?.commitSceneEdit();
+          if (isGroupColor) this.refresh();
         },
       },
-      hueX: d ? (d.hsv.h / 360) * 100 + "%" : "0%",
+      hueX: activeHsv ? (activeHsv.h / 360) * 100 + "%" : "0%",
       hue: {
         down: (e: any) => {
           e.preventDefault();
@@ -2161,6 +2230,7 @@ export default class App extends React.Component<any, any> {
           } catch (_) {}
           this._hu = false;
                     this.engine?.commitSceneEdit();
+          if (isGroupColor) this.refresh();
         },
       },
       hexShown: S.hexEdit != null ? S.hexEdit : colorHex,
@@ -2656,7 +2726,22 @@ export default class App extends React.Component<any, any> {
                           <span style={css("margin-left:auto;font-size:10px;color:#7a7a7a;font-family:'IBM Plex Mono',monospace")}>{V.groupSel.op}</span>
                         </div>
                         <span style={css("font-size:11px;color:#7a7a7a")}>{V.groupSel.count} objects grouped</span>
-                        <span style={css("font-size:10px;line-height:1.5;color:#616161")}>Moving or rotating this group transforms all its objects together, about their shared centre. Pick an individual object from the outliner above to edit it on its own.</span>
+
+                        {/* Color — one colour painted over every object in the group,
+                            through the app's shared picker (applyHsv → setGroupColor). */}
+                        <div style={css("display:flex;align-items:center;gap:8px;margin-top:2px")}>
+                          <span style={css("flex:0 0 52px;font-size:11px;color:#a0a0a0")}>Color</span>
+                          <div onClick={V.onPickerOpen} style={css(`width:46px;height:22px;border:1px solid #363636;border-radius:2px;cursor:pointer;background:${V.colorCss}`)} />
+                          <span style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>{V.colorHex}</span>
+                        </div>
+
+                        {/* Scale — uniform, about the group centre; session-relative slider. */}
+                        <NumericSliderRow cfg={V.groupScaleCfg} value={V.groupScaleValue}
+                          open={!!V.modifierHelp.groupscale} caretPath={V.modifierHelp.groupscale ? this.IC.caretD : this.IC.caretR}
+                          onToggleHelp={() => V.toggleModifierHelp("groupscale")}
+                          onBegin={V.groupScaleBegin} onChange={V.groupScaleChange} onCommit={V.groupScaleCommit} />
+
+                        <span style={css("font-size:10px;line-height:1.5;color:#616161")}>Colour and scale apply to every object in the group (overwriting each object's own colour), about their shared centre. Pick an individual object from the outliner above to edit it on its own.</span>
                       </div>
                     )}
 

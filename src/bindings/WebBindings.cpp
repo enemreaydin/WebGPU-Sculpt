@@ -123,6 +123,9 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE void sdf_set_roundness_amount(int nodeId, float value) { if (g_App) g_App->SetRoundnessAmount(nodeId, value); }
     EMSCRIPTEN_KEEPALIVE void sdf_remove_roundness_modifier(int nodeId) { if (g_App) g_App->RemoveRoundnessModifier(nodeId); }
 
+    EMSCRIPTEN_KEEPALIVE void sdf_set_group_color(int nodeId, float r, float g, float b) { if (g_App) g_App->SetGroupColor(nodeId, r, g, b); }
+    EMSCRIPTEN_KEEPALIVE void sdf_scale_group(int nodeId, float factor) { if (g_App) g_App->ScaleGroup(nodeId, factor); }
+
     // Removes every currently-selected node (primitives + objects, op subtrees).
     EMSCRIPTEN_KEEPALIVE
         void sdf_delete_selection() {

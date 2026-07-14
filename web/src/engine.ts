@@ -294,6 +294,11 @@ export class Engine {
   setRoundnessAmount(nodeId: number, value: number): void { this.call("sdf_set_roundness_amount", null, ["number", "number"], [nodeId, value]); }
   removeRoundnessModifier(nodeId: number): void { this.call("sdf_remove_roundness_modifier", null, ["number"], [nodeId]); }
 
+  // Group (CSG subtree) batch edits: fan a color/uniform-scale over every
+  // primitive under the node. Engine-side single scene-edit → one undo step.
+  setGroupColor(nodeId: number, r: number, g: number, b: number): void { this.call("sdf_set_group_color", null, ["number", "number", "number", "number"], [nodeId, r, g, b]); }
+  scaleGroup(nodeId: number, factor: number): void { this.call("sdf_scale_group", null, ["number", "number"], [nodeId, factor]); }
+
   // Removes every currently-selected node — primitives (and their objects) and
   // operation nodes (and their subtrees).
   deleteSelection(): void {
