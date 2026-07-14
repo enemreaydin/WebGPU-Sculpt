@@ -28,6 +28,10 @@ struct Settings
     float specularStrength  = 0.4f;   // highlight brightness / reflectivity (0 = matte)
     float aoStrength        = 3.0f;   // contact-shadow darkening in creases
 
+    // Feature toggles — drop the two biggest optional per-pixel costs entirely.
+    bool  shadowsEnabled    = true;   // soft shadows (calcSoftShadow, ~shadowSteps marches/pixel)
+    bool  aoEnabled         = true;   // ambient occlusion (calcAO, aoSamples taps/pixel)
+
     // Quality / performance settings (advanced — trade speed for precision/range):
     int   maxSteps          = 100;    // primary-ray step budget (main performance dial)
     float hitEpsilon        = 0.001f; // surface-hit threshold (smaller = crisper, needs more maxSteps)
@@ -55,4 +59,6 @@ enum class RenderSetting : int
     ShadowSteps = 15,
     ShadowDistance = 16,
     AoSamples = 17,
+    ShadowsEnabled = 18,
+    AoEnabled = 19,
 };

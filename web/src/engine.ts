@@ -115,6 +115,8 @@ export enum RenderSetting {
   ShadowSteps = 15,
   ShadowDistance = 16,
   AoSamples = 17,
+  ShadowsEnabled = 18,
+  AoEnabled = 19,
 }
 
 // Current render settings, mirrored from the engine (Settings). Keys match the
@@ -134,6 +136,8 @@ export interface RenderSettings {
   shadowSteps: number;
   shadowDistance: number;
   aoSamples: number;
+  shadowsEnabled: boolean;
+  aoEnabled: boolean;
 }
 
 export interface SceneState {

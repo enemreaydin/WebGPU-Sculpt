@@ -1064,6 +1064,8 @@ std::string Application::GetSceneJson() const {
         << ",\"shadowSteps\":" << rs.shadowSteps
         << ",\"shadowDistance\":" << rs.shadowDistance
         << ",\"aoSamples\":" << rs.aoSamples
+        << ",\"shadowsEnabled\":" << (rs.shadowsEnabled ? "true" : "false")
+        << ",\"aoEnabled\":" << (rs.aoEnabled ? "true" : "false")
         << "}";
 
     out << "}";
@@ -1383,6 +1385,8 @@ void Application::SyncRenderGlobals() {
     globals.shadowMaxSteps    = s.shadowSteps;
     globals.shadowMaxDistance = s.shadowDistance;
     globals.aoSamples         = s.aoSamples;
+    globals.shadowsEnabled    = s.shadowsEnabled ? 1 : 0;
+    globals.aoEnabled         = s.aoEnabled ? 1 : 0;
 }
 
 // Update one render setting by RenderSetting id (see Settings.h). Ints arrive as
@@ -1412,6 +1416,8 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::max(1, static_cast<int>(value + 0.5f)); break;
     case RenderSetting::ShadowDistance:   appSettings.shadowDistance = value; break;
     case RenderSetting::AoSamples:        appSettings.aoSamples = std::max(2, static_cast<int>(value + 0.5f)); break;
+    case RenderSetting::ShadowsEnabled:   appSettings.shadowsEnabled = value != 0.0f; break;
+    case RenderSetting::AoEnabled:         appSettings.aoEnabled = value != 0.0f; break;
     default: break;
     }
 

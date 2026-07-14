@@ -29,6 +29,10 @@ struct Globals {
     shadowMaxDistance : f32,
     aoSamples : i32,
     qualityPad0 : i32,
+    shadowsEnabled : i32,
+    aoEnabled : i32,
+    qualityPad1 : i32,
+    qualityPad2 : i32,
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;
@@ -122,8 +126,10 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         let shininess = globals.specularShininess;
         let specularStrength = globals.specularStrength;
         let spec = pow(max(dot(n, h), 0.0), shininess);
-        let shadow = calcSoftShadow(hitPos, lightDirection);
-        let ao = calcAO(hitPos, n);
+        var shadow = 1.0;
+        if (globals.shadowsEnabled == 1) { shadow = calcSoftShadow(hitPos, lightDirection); }
+        var ao = 1.0;
+        if (globals.aoEnabled == 1) { ao = calcAO(hitPos, n); }
         let diffuseTerm = result.color * lightColor * intensity * diff;
         let specularTerm = lightColor * intensity * spec * specularStrength;
         col = result.color * ambient * ao + shadow * (diffuseTerm + specularTerm);

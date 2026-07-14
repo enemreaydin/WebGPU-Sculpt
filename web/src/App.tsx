@@ -943,6 +943,13 @@ export default class App extends React.Component<any, any> {
     this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false }));
   }
 
+  // Toggle a boolean render setting (shadows / AO). The engine takes a float, so
+  // send 1/0; mirror the bool into state like rsSet does for numbers.
+  rsBool(id: number, key: string, value: boolean) {
+    this.engine?.setRenderSetting(id, value ? 1 : 0);
+    this.setState((s: any) => ({ render: { ...s.render, [key]: value }, saved: false }));
+  }
+
   rsToggleHelp(key: string) {
     this.setState((s: any) => ({ renderHelp: { ...s.renderHelp, [key]: !s.renderHelp[key] } }));
   }
@@ -2822,6 +2829,22 @@ export default class App extends React.Component<any, any> {
                             })}
                           </div>
                           <span style={css("font-size:10px;color:#616161")}>{this.state.vpW}×{this.state.vpH}</span>
+                        </div>
+
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive.</span>
+                        <div style={css("display:flex;flex-direction:column;gap:6px")}>
+                          {[["Shadows", RenderSetting.ShadowsEnabled, "shadowsEnabled"], ["Ambient Occlusion", RenderSetting.AoEnabled, "aoEnabled"]].map(([lbl, id, key]) => {
+                            const on = (this.state.render as any)?.[key as string] !== false;
+                            return (
+                              <div key={key as string} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+                                <span style={css("font-size:11px;color:#c0c0c0")}>{lbl as string}</span>
+                                <Hv onClick={() => this.rsBool(id as number, key as string, !on)}
+                                  s={`width:34px;height:18px;border-radius:9px;cursor:default;position:relative;flex:0 0 auto;background:${on ? "#e8912d" : "#3a3a3a"}`} h="">
+                                  <span style={css(`position:absolute;top:2px;left:${on ? "18px" : "2px"};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)} />
+                                </Hv>
+                              </div>
+                            );
+                          })}
                         </div>
 
                         <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9;margin-top:4px")}>Lighting &amp; Look</span>
