@@ -129,9 +129,17 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         col = result.color * ambient * ao + shadow * (diffuseTerm + specularTerm);
         id = result.object_id;
     } else if (globals.showGrid == 1) {
-        col = gridBackground(ro, rd);
+        col = vec3f(0.05, 0.05, 0.05);
     } else {
         col = vec3f(0.02, 0.02, 0.02);
+    }
+
+    if (globals.showGrid == 1) {
+        let g = gridSample(ro, rd);
+        let inFront = g.tGrid >= 0.0 && (!hit || g.tGrid < t);
+        if (inFront && g.intensity > 0.0) {
+            col = mix(col, vec3f(0.3), g.intensity);
+        }
     }
 
     col = toneMapAndEncode(col);
@@ -255,17 +263,24 @@ fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, rd : vec3f, right : vec
 }
 
 
-fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
-    let bgColor = vec3f(0.05, 0.05, 0.05);
+struct GridSample {
+    tGrid : f32,
+    intensity : f32,
+}
+
+fn gridSample(ro: vec3f, rd: vec3f) -> GridSample {
+    var s : GridSample;
+    s.tGrid = -1.0;
+    s.intensity = 0.0;
 
     if (abs(rd.y) < 0.0001) {
-        return bgColor;
+        return s;
     }
 
     let t = -ro.y / rd.y;
 
     if (t < 0.0) {
-        return bgColor;
+        return s;
     }
 
     let p = ro + rd * t;
@@ -277,7 +292,8 @@ fn gridBackground(ro: vec3f, rd: vec3f) -> vec3f {
     let lineMask = 1.0 - smoothstep(0.0, lineWidth, min(gx, gz));
 
     let fade = 1.0 / (1.0 + t * t * 0.01);
-    let gridColor = vec3f(0.3) * lineMask * fade;
 
-    return bgColor + gridColor;
+    s.tGrid = t;
+    s.intensity = lineMask * fade;
+    return s;
 }
