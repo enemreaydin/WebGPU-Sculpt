@@ -37,8 +37,9 @@ enum class PrimitiveParam : int32_t
 // them through GetSceneJson and edits them through the setter API. Held by
 // EditorObjectStore, keyed on the object's permanent objectId.
 //
-// Not persisted to the .sdfo file yet — regenerated with defaults on load, which
-// matches the previous behaviour when these lived in the web UI's state.
+// Persisted in the .sdfp project file (the editor-attrs section written by
+// EditorObjectStore::WriteToStream). On load, RebuildEditorRecords() first fills
+// defaults derived from geometry, then ReadFromStream overlays these saved values.
 struct EditorObject
 {
     std::string name;
