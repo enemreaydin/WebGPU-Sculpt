@@ -239,6 +239,13 @@ export default class App extends React.Component<any, any> {
   viewportRef = React.createRef<HTMLDivElement>();
   engine: Engine | null = null;
   _ro: ResizeObserver | null = null;
+  // FPS meter: a rAF loop counts frames and updates state.fps ~2×/sec. The engine
+  // renders on its own emscripten rAF; under GPU load the browser throttles rAF
+  // (it won't call back faster than the canvas can present), so this tracks the
+  // real displayed framerate — the number the user actually perceives.
+  _rafId: number | null = null;
+  _fpsFrames = 0;
+  _fpsLast = 0;
   _camDrag = false;
   _camPan = false;
   _downPos: { x: number; y: number } | null = null;
@@ -262,6 +269,7 @@ export default class App extends React.Component<any, any> {
     // Canvas render dimensions (kept in state so a resize re-renders panels).
     vpW: 1,
     vpH: 1,
+    fps: 0,               // displayed framerate, sampled by the rAF meter (~2×/sec)
     // Internal render resolution as a fraction of the viewport's CSS size. The
     // raymarch cost scales with pixel count, so 0.75/0.5 are big, cheap FPS wins;
     // the browser upscales the smaller backing store to fill the canvas. This is
@@ -439,6 +447,7 @@ export default class App extends React.Component<any, any> {
     window.removeEventListener("keydown", this._kd);
     if (this._pt) clearInterval(this._pt);
     if (this._ro) this._ro.disconnect();
+    if (this._rafId !== null) cancelAnimationFrame(this._rafId);
   }
 
   // Keep the engine's gizmo in step with the active tool and space (the gizmo is
@@ -481,11 +490,30 @@ export default class App extends React.Component<any, any> {
         engine.setShowGrid(this.state.grid);
         this.syncGizmo();
         this.seedDemo();
+        this.startFpsMeter();
       })
       .catch((err: unknown) => {
         this.log("error", "engine failed: " + String(err));
         this.status("Engine failed to load — check console");
       });
+  }
+
+  // Count frames on a rAF loop and publish FPS to state ~2×/sec (a coarse cadence
+  // so the counter itself costs almost nothing and doesn't spam re-renders).
+  startFpsMeter() {
+    const tick = (now: number) => {
+      this._fpsFrames++;
+      if (this._fpsLast === 0) this._fpsLast = now;
+      const dt = now - this._fpsLast;
+      if (dt >= 500) {
+        const fps = Math.round((this._fpsFrames * 1000) / dt);
+        this._fpsFrames = 0;
+        this._fpsLast = now;
+        if (fps !== this.state.fps) this.setState({ fps });
+      }
+      this._rafId = requestAnimationFrame(tick);
+    };
+    this._rafId = requestAnimationFrame(tick);
   }
 
   // Populate a small starting scene through the real bindings so the viewport
@@ -2457,6 +2485,9 @@ export default class App extends React.Component<any, any> {
                   frame as the scene), so there is no HTML/SVG overlay here. */}
 
               <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>User Perspective</span>
+
+              {/* FPS readout (top-right). Green >=50, amber 30-49, red <30. */}
+              <span style={css(`position:absolute;top:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;color:${this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps} FPS</span>
 
               {/* Viewport overlay toolbar */}
               <div style={css("position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;background:rgba(28,28,28,0.92);border:1px solid #333333;border-radius:3px;padding:2px")}>
