@@ -153,6 +153,9 @@ function NumericSliderRow({ cfg, value, open, caretPath, onToggleHelp, onBegin, 
 
 export default class App extends React.Component<any, any> {
   // Icon path table.
+  // Default blend radius applied when creating a Smooth Union/Subtract/Intersect
+  // from the toolbar (the modifier panel can fine-tune it afterward).
+  SMOOTH_DEFAULT_RADIUS = 0.3;
   IC: any = {
     collection: "M1.75 3.25h4.5l1.5 1.9h6.5v7.6H1.75V3.25z",
     sphere: "M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5",
@@ -283,6 +286,8 @@ export default class App extends React.Component<any, any> {
     renderHelp: {} as Record<string, boolean>,
     modifierHelp: {} as Record<string, boolean>,
     modifierMenu: false,
+    // Toolbar "Smooth Boolean" flyout (Smooth Union/Subtract/Intersect).
+    smoothMenu: false,
     blendOpen: true,
     roundnessOpen: true,
     renaming: null,
@@ -1372,7 +1377,7 @@ export default class App extends React.Component<any, any> {
     };
     const code = codeMap[op];
     if (!code) {
-      // Smooth Union etc. are not wired into the CSG tree yet.
+      // Smooth variants go through csgSmooth(), not here; this guards unknown ops.
       this.status(op + " — not implemented yet");
       return;
     }
@@ -1398,6 +1403,53 @@ export default class App extends React.Component<any, any> {
     }
     this.log("scene", op + " applied");
     this.status(op);
+  }
+  // Smooth variants: apply the hard boolean, then switch the new op node to Smooth
+  // blend with a default radius — all inside one scene-edit so it's a single undo
+  // step. The engine already owns smooth union/subtract/intersect (blendMode +
+  // blendRadius); this is just a one-click path to them.
+  csgSmooth(op: "Union" | "Subtract" | "Intersect") {
+    const e = this.engine;
+    if (!e) return;
+    const count = (this.state.selSet || []).filter((k: string) => k !== "scene").length;
+    if (count < 2) {
+      this.setState({ smoothMenu: false });
+      this.status("Smooth " + op + " needs 2 or more selected objects");
+      return;
+    }
+    const code = { Union: CsgOp.Union, Subtract: CsgOp.Subtract, Intersect: CsgOp.Intersect }[op];
+    let newNodeId = -1;
+    try {
+      // finally-commit keeps the scene-edit depth balanced even if a call throws.
+      e.beginSceneEdit("Smooth " + op);
+      try {
+        newNodeId = e.applyOperation(code);
+        if (newNodeId >= 0) {
+          e.setBlendMode(newNodeId, 1);            // 1 = Smooth
+          e.setBlendRadius(newNodeId, this.SMOOTH_DEFAULT_RADIUS);
+        }
+      } finally {
+        e.commitSceneEdit();
+      }
+    } catch (err) {
+      this.setState({ smoothMenu: false });
+      this.status("Smooth " + op + " failed — engine bridge missing");
+      this.log("error", "Smooth " + op + ": " + String(err));
+      return;
+    }
+    this.refresh();
+    if (newNodeId < 0) {
+      this.setState({ smoothMenu: false });
+      this.status("Smooth " + op + " needs 2 or more selected objects");
+      return;
+    }
+    this.setState((s: any) => ({
+      saved: false,
+      smoothMenu: false,
+      expanded: { ...s.expanded, ["g" + newNodeId]: true },
+    }));
+    this.log("scene", "Smooth " + op + " applied");
+    this.status("Smooth " + op);
   }
   toggleGrid() {
     const grid = !this.state.grid;
@@ -1908,7 +1960,11 @@ export default class App extends React.Component<any, any> {
       csgUnion: () => this.csg("Union"),
       csgSub: () => this.csg("Subtract"),
       csgInt: () => this.csg("Intersect"),
-      csgSmooth: () => this.csg("Smooth Union"),
+      smoothMenu: S.smoothMenu,
+      csgSmoothToggle: () => this.setState((s: any) => ({ smoothMenu: !s.smoothMenu, dd: false, opDd: false, modifierMenu: false, openMenu: null })),
+      csgSmoothUnion: () => this.csgSmooth("Union"),
+      csgSmoothSub: () => this.csgSmooth("Subtract"),
+      csgSmoothInt: () => this.csgSmooth("Intersect"),
 
       // viewport
       vpCtx: (e: any) => {
@@ -2052,8 +2108,8 @@ export default class App extends React.Component<any, any> {
       objCountText: this.countObjects() + " objects",
 
       // popups
-      anyPopup: !!(S.openMenu || S.ctx || S.picker || S.dd || S.opDd || S.modifierMenu),
-      closeAll: () => this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false, modifierMenu: false }),
+      anyPopup: !!(S.openMenu || S.ctx || S.picker || S.dd || S.opDd || S.modifierMenu || S.smoothMenu),
+      closeAll: () => this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false, modifierMenu: false, smoothMenu: false }),
       ctxOpen: !!S.ctx,
       ctxX: S.ctx ? Math.min(S.ctx.x, window.innerWidth - 200) + "px" : "0px",
       ctxY: S.ctx ? Math.min(S.ctx.y, window.innerHeight - 240) + "px" : "0px",
@@ -2245,7 +2301,6 @@ export default class App extends React.Component<any, any> {
               ["Boolean Union", V.csgUnion, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
               ["Boolean Subtract", V.csgSub, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path><path d="M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"></path></svg>`],
               ["Boolean Intersect", V.csgInt, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.55"></path><path d="M8 4.83A3.75 3.75 0 0 1 8 11.17A3.75 3.75 0 0 1 8 4.83z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
-              ["Smooth Union", V.csgSmooth, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M5.5 4.5a3.5 3.5 0 0 0 0 7c.9 0 1.8-.3 2.5-.9.7.6 1.6.9 2.5.9a3.5 3.5 0 0 0 0-7c-.9 0-1.8.3-2.5.9C7.3 4.8 6.4 4.5 5.5 4.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>`],
             ].map(([title, onClick, svg]: any, i) => (
               <Hv
                 key={i}
@@ -2258,6 +2313,33 @@ export default class App extends React.Component<any, any> {
                 <Ico d={svg} />
               </Hv>
             ))}
+            {/* Smooth Boolean — opens a flyout of the smooth variants; the engine
+                owns them via blendMode/blendRadius (see csgSmooth). */}
+            <div style={css("position:relative")}>
+              <Hv
+                tag="button"
+                title="Smooth Boolean"
+                onClick={V.csgSmoothToggle}
+                s={`width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:${V.smoothMenu ? "#2e2e2e" : "transparent"};border:none;border-radius:2px;color:${V.smoothMenu ? "#e8912d" : "#a8a8a8"};cursor:pointer;padding:0`}
+                h="background:#2e2e2e;color:#dedede"
+              >
+                <Ico d={`<svg width="16" height="16" viewBox="0 0 16 16"><path d="M5.5 4.5a3.5 3.5 0 0 0 0 7c.9 0 1.8-.3 2.5-.9.7.6 1.6.9 2.5.9a3.5 3.5 0 0 0 0-7c-.9 0-1.8.3-2.5.9C7.3 4.8 6.4 4.5 5.5 4.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>`} />
+              </Hv>
+              {V.smoothMenu && (
+                <div style={css("position:absolute;left:calc(100% + 8px);top:0;min-width:152px;background:#232323;border:1px solid #3a3a3a;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,0.55);padding:3px 0;z-index:400")}>
+                  {[
+                    ["Smooth Union", V.csgSmoothUnion, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
+                    ["Smooth Subtract", V.csgSmoothSub, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path><path d="M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"></path></svg>`],
+                    ["Smooth Intersect", V.csgSmoothInt, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.55"></path><path d="M8 4.83A3.75 3.75 0 0 1 8 11.17A3.75 3.75 0 0 1 8 4.83z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
+                  ].map(([label, onClick, svg]: any) => (
+                    <Hv key={label} tag="button" onClick={onClick} s="width:100%;display:flex;align-items:center;gap:8px;padding:5px 10px;background:transparent;border:none;font-size:11px;color:#d6d6d6;cursor:pointer;text-align:left" h="background:#2e2e2e;color:#ffffff">
+                      <span style={css("flex:0 0 16px;height:16px;display:flex;align-items:center;justify-content:center;color:#a8a8a8")}><Ico d={svg} /></span>
+                      <span>{label}</span>
+                    </Hv>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Center: viewport + bottom dock */}
