@@ -309,6 +309,7 @@ export default class App extends React.Component<any, any> {
   _rl = false;
   _sv = false;
   _hu = false;
+  _groupScaleLast = 1;   // slider value at the start of a group-scale drag
   _kd: any = null;
   _pt: any = null;
   _navFrame: number | null = null;
@@ -318,6 +319,13 @@ export default class App extends React.Component<any, any> {
   viewportRef = React.createRef<HTMLDivElement>();
   engine: Engine | null = null;
   _ro: ResizeObserver | null = null;
+  // FPS meter: a rAF loop counts frames and updates state.fps ~2×/sec. The engine
+  // renders on its own emscripten rAF; under GPU load the browser throttles rAF
+  // (it won't call back faster than the canvas can present), so this tracks the
+  // real displayed framerate — the number the user actually perceives.
+  _rafId: number | null = null;
+  _fpsFrames = 0;
+  _fpsLast = 0;
   _camDrag = false;
   _camPan = false;
   _downPos: { x: number; y: number } | null = null;
@@ -343,6 +351,13 @@ export default class App extends React.Component<any, any> {
     // Canvas render dimensions (kept in state so a resize re-renders panels).
     vpW: 1,
     vpH: 1,
+    fps: 0,               // displayed framerate, sampled by the rAF meter (~2×/sec)
+    // Internal render resolution as a fraction of the viewport's CSS size. The
+    // raymarch cost scales with pixel count, so 0.75/0.5 are big, cheap FPS wins;
+    // the browser upscales the smaller backing store to fill the canvas. This is
+    // a viewport DISPLAY preference (like DPR), not scene state — it lives here,
+    // not in the engine, and modulates what syncCanvasSize tells the engine to render.
+    renderScale: 1,
     rightW: 300,
     dockH: 200,
     outlH: 300,
@@ -370,6 +385,12 @@ export default class App extends React.Component<any, any> {
     modifierMenu: false,
     // Toolbar "Smooth Boolean" flyout (Smooth Union/Subtract/Intersect).
     smoothMenu: false,
+    // Transient group-panel controls (groups store no color/scale of their own).
+    // groupHsv = last colour picked for the group; groupScaleUI = the scale slider's
+    // session-relative factor (1 = the size the group had when selected). Both reset
+    // when the selection changes (componentDidUpdate).
+    groupHsv: null as any,
+    groupScaleUI: 1,
     blendOpen: true,
     roundnessOpen: true,
     renaming: null,
@@ -548,7 +569,11 @@ export default class App extends React.Component<any, any> {
     window.removeEventListener("keydown", this._kd);
     if (this._pt) clearInterval(this._pt);
     if (this._ro) this._ro.disconnect();
+
     if (this._navFrame !== null) cancelAnimationFrame(this._navFrame);
+
+    if (this._rafId !== null) cancelAnimationFrame(this._rafId);
+
   }
 
   // Keep the engine's gizmo in step with the active tool and space (the gizmo is
@@ -557,6 +582,10 @@ export default class App extends React.Component<any, any> {
     if (!this.engine) return;
     if (prevState.tool !== this.state.tool || prevState.gizmoSpace !== this.state.gizmoSpace) {
       this.syncGizmo();
+    }
+    // Reset the transient group controls when the selection changes.
+    if (prevState.sel !== this.state.sel && (this.state.groupHsv !== null || this.state.groupScaleUI !== 1)) {
+      this.setState({ groupHsv: null, groupScaleUI: 1 });
     }
   }
 
@@ -587,11 +616,30 @@ export default class App extends React.Component<any, any> {
         engine.setShowGrid(this.state.grid);
         this.syncGizmo();
         this.seedDemo();
+        this.startFpsMeter();
       })
       .catch((err: unknown) => {
         this.log("error", "engine failed: " + String(err));
         this.status("Engine failed to load — check console");
       });
+  }
+
+  // Count frames on a rAF loop and publish FPS to state ~2×/sec (a coarse cadence
+  // so the counter itself costs almost nothing and doesn't spam re-renders).
+  startFpsMeter() {
+    const tick = (now: number) => {
+      this._fpsFrames++;
+      if (this._fpsLast === 0) this._fpsLast = now;
+      const dt = now - this._fpsLast;
+      if (dt >= 500) {
+        const fps = Math.round((this._fpsFrames * 1000) / dt);
+        this._fpsFrames = 0;
+        this._fpsLast = now;
+        if (fps !== this.state.fps) this.setState({ fps });
+      }
+      this._rafId = requestAnimationFrame(tick);
+    };
+    this._rafId = requestAnimationFrame(tick);
   }
 
   // Populate a small starting scene through the real bindings so the viewport
@@ -621,12 +669,22 @@ export default class App extends React.Component<any, any> {
     const viewport = this.viewportRef.current;
     if (!canvas || !viewport || !this.engine) return;
     const rect = viewport.getBoundingClientRect();
-    const w = Math.max(1, Math.floor(rect.width));
-    const h = Math.max(1, Math.floor(rect.height));
+    // Backing-store size = CSS size × renderScale. CSS keeps the canvas full-size
+    // (width:100%/height:100%), so the browser upscales a smaller buffer for free.
+    const scale = this.state.renderScale || 1;
+    const w = Math.max(1, Math.floor(rect.width * scale));
+    const h = Math.max(1, Math.floor(rect.height * scale));
     canvas.width = w;
     canvas.height = h;
     this.engine.resize(w, h);
     this.setState({ vpW: w, vpH: h });
+  }
+
+  // Change the internal render resolution and immediately re-size the backing
+  // store. canvasPoint() normalizes pointer coords by canvas.width/rect.width, so
+  // picking + the gizmo stay pixel-correct at any scale.
+  setRenderScale(scale: number) {
+    this.setState({ renderScale: scale }, () => this.syncCanvasSize());
   }
 
   // Mouse position in render (device) pixels — the space the engine picks and
@@ -796,6 +854,31 @@ export default class App extends React.Component<any, any> {
     };
     walk(nodeId);
     return count;
+  }
+
+  // Representative colour (as HSV) for a group: read straight from its objects.
+  // If they all share a colour (the case after a group-colour edit) that colour is
+  // returned; otherwise the first primitive's colour stands in. Lets the group
+  // colour control show the real state instead of a placeholder. null = no objects.
+  groupColorHsv(nodeId: number): any {
+    const t = this.state.tree;
+    if (!t) return null;
+    const byId: Record<number, any> = {};
+    for (const n of t.nodes) byId[n.nodeId] = n;
+    const colors: number[][] = [];
+    const walk = (id: number) => {
+      const n = byId[id];
+      if (!n) return;
+      if (n.type === 0) {
+        const o = this.objById(String(n.objectId));
+        if (o && o.color) colors.push(o.color);
+      }
+      for (const c of n.children || []) walk(c);
+    };
+    walk(nodeId);
+    if (colors.length === 0) return null;
+    const [r, g, b] = colors[0];
+    return this.rgb2hsv(Math.round(r * 255), Math.round(g * 255), Math.round(b * 255));
   }
 
   // Engine object for a selection id ("scene" and null resolve to no object).
@@ -1031,6 +1114,13 @@ export default class App extends React.Component<any, any> {
     if (cfg.int) v = Math.round(v);
     this.engine?.setRenderSetting(cfg.id, v);
     this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false }));
+  }
+
+  // Toggle a boolean render setting (shadows / AO). The engine takes a float, so
+  // send 1/0; mirror the bool into state like rsSet does for numbers.
+  rsBool(id: number, key: string, value: boolean) {
+    this.engine?.setRenderSetting(id, value ? 1 : 0);
+    this.setState((s: any) => ({ render: { ...s.render, [key]: value }, saved: false }));
   }
 
   rsToggleHelp(key: string) {
@@ -1713,11 +1803,19 @@ export default class App extends React.Component<any, any> {
       if (gnode) {
         const opName = gnode.type === 2 ? "Subtract" : gnode.type === 3 ? "Intersect" : gnode.type === 4 ? "Group" : "Union";
         const gm = S.meta[S.sel];
-        groupSel = { name: (gm && gm.name) || opName, op: opName, count: this.groupPrimitiveCount(gnid) };
+        groupSel = { nodeId: gnid, name: (gm && gm.name) || opName, op: opName, count: this.groupPrimitiveCount(gnid) };
       }
     }
 
-    const rgb = d ? this.hsv2rgb(d.hsv.h, d.hsv.s, d.hsv.v) : [128, 128, 128];
+    // The colour picker serves both a selected primitive (its meta.hsv) and a
+    // selected group (a transient groupHsv, since a group stores no colour of its
+    // own). activeHsv unifies the two so the picker + swatch reuse one code path.
+    // For a group, show the objects' actual colour (groupColorHsv); groupHsv only
+    // overrides it live during a picker drag, and resets on reselect so the control
+    // always reflects the real object colour when you come back to it.
+    const isGroupColor = (isGroupSel && !!groupSel) as boolean;
+    const activeHsv = d ? d.hsv : (isGroupColor ? (S.groupHsv || this.groupColorHsv(groupSel.nodeId) || { h: 0, s: 0, v: 0.85 }) : null);
+    const rgb = activeHsv ? this.hsv2rgb(activeHsv.h, activeHsv.s, activeHsv.v) : [128, 128, 128];
     const colorCss = "rgb(" + rgb.join(",") + ")";
     const colorHex = this.hex(rgb);
 
@@ -1976,32 +2074,39 @@ export default class App extends React.Component<any, any> {
       scale: "Drag Scale · X/Y/Z Constrain · Esc Cancel",
     };
 
-    // Push an HSV value to the selected object's meta AND the engine color.
+    // Push an HSV value to the engine colour of whatever is selected: a primitive
+    // (its meta.hsv + setObjectColor) or a group (transient groupHsv + setGroupColor
+    // fanned over the subtree). Either way the control reflects it live via setState.
     const applyHsv = (hsv: any) => {
-      if (!selObj || !selId) return;
       const c = this.hsv2rgb(hsv.h, hsv.s, hsv.v);
-      this.engine?.setObjectColor(selObj.index, c[0] / 255, c[1] / 255, c[2] / 255);
-      this.setState((s: any) => ({ hexEdit: null, saved: false, meta: { ...s.meta, [selId!]: { ...s.meta[selId!], hsv } } }));
+      if (selObj && selId) {
+        this.engine?.setObjectColor(selObj.index, c[0] / 255, c[1] / 255, c[2] / 255);
+        this.setState((s: any) => ({ hexEdit: null, saved: false, meta: { ...s.meta, [selId!]: { ...s.meta[selId!], hsv } } }));
+      } else if (isGroupColor) {
+        this.engine?.setGroupColor(groupSel.nodeId, c[0] / 255, c[1] / 255, c[2] / 255);
+        this.setState({ hexEdit: null, saved: false, groupHsv: hsv });
+      }
     };
     const svSet = (e: any) => {
-      if (!d) return;
+      if (!activeHsv) return;
       const r = e.currentTarget.getBoundingClientRect();
       const sN = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
       const vN = 1 - Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
-      applyHsv({ ...d.hsv, s: sN, v: vN });
+      applyHsv({ ...activeHsv, s: sN, v: vN });
     };
     const hueSet = (e: any) => {
-      if (!d) return;
+      if (!activeHsv) return;
       const r = e.currentTarget.getBoundingClientRect();
       const h = Math.max(0, Math.min(359.9, ((e.clientX - r.left) / r.width) * 360));
-      applyHsv({ ...d.hsv, h });
+      applyHsv({ ...activeHsv, h });
     };
     const commitHex = () => {
       const t = (this.state.hexEdit || "").trim().replace(/^#/, "");
-      if (/^[0-9a-f]{6}$/i.test(t) && d) {
+      if (/^[0-9a-f]{6}$/i.test(t) && activeHsv) {
                 this.engine?.beginSceneEdit("Change Color");
         applyHsv(this.rgb2hsv(parseInt(t.slice(0, 2), 16), parseInt(t.slice(2, 4), 16), parseInt(t.slice(4, 6), 16)));
                 this.engine?.commitSceneEdit();
+        this.refresh();
       } else this.setState({ hexEdit: null });
     };
 
@@ -2210,6 +2315,23 @@ export default class App extends React.Component<any, any> {
       isObjTab: propsTab === "object", isMatTab: propsTab === "material", isModTab: propsTab === "modifiers", isRenTab: propsTab === "render",
       hasObj: isObj, isCollSel: isColl, isGroupSel: isGroupSel && !!groupSel, groupSel,
       noSel: S.sel == null || (isGroupSel && !groupSel),
+      // Group colour uses the shared picker (applyHsv routes to setGroupColor).
+      // Group scale is a session-relative slider: the whole drag is one scene-edit,
+      // and each tick applies the ratio to the previous value so the engine scales
+      // incrementally about the group centre. The slider reflects the value live.
+      groupScaleValue: S.groupScaleUI,
+      groupScaleCfg: { key: "groupscale", label: "Scale", min: 0.1, max: 3, step: 0.01, help: "Uniformly resizes every object in the group about the group centre. Relative to the group's size when selected (1 = unchanged); reselecting resets to 1." },
+      groupScaleBegin: () => { this._groupScaleLast = this.state.groupScaleUI; this.engine?.beginSceneEdit("Scale Group"); },
+      groupScaleChange: (v: number) => {
+        const nid = this.nodeIdForKey(S.sel);
+        const last = this._groupScaleLast || 1;
+        if (nid >= 0 && v > 0 && isFinite(v) && Math.abs(v - last) > 1e-6) {
+          this.engine?.scaleGroup(nid, v / last);
+          this._groupScaleLast = v;
+        }
+        this.setState({ groupScaleUI: v, saved: false });
+      },
+      groupScaleCommit: () => { this.engine?.commitSceneEdit(); this.refresh(); },
       objIconPath: isObj ? this.IC[selTypeName] : "",
       objName: isObj ? (d?.name || selObj.typeName) : "",
       objTypeChip: isObj ? "SDF " + this.cap(selTypeName) : "",
@@ -2271,9 +2393,9 @@ export default class App extends React.Component<any, any> {
       pickerOpen: !!S.picker,
       pickerX: S.picker ? S.picker.x + "px" : "0px",
       pickerY: S.picker ? S.picker.y + "px" : "0px",
-      svBg: d ? "linear-gradient(to top, #000000, rgba(0,0,0,0)), linear-gradient(to right, #ffffff, hsl(" + d.hsv.h + ", 100%, 50%))" : "#000",
-      svX: d ? d.hsv.s * 100 + "%" : "0%",
-      svY: d ? (1 - d.hsv.v) * 100 + "%" : "0%",
+      svBg: activeHsv ? "linear-gradient(to top, #000000, rgba(0,0,0,0)), linear-gradient(to right, #ffffff, hsl(" + activeHsv.h + ", 100%, 50%))" : "#000",
+      svX: activeHsv ? activeHsv.s * 100 + "%" : "0%",
+      svY: activeHsv ? (1 - activeHsv.v) * 100 + "%" : "0%",
       sv: {
         down: (e: any) => {
           e.preventDefault();
@@ -2293,9 +2415,10 @@ export default class App extends React.Component<any, any> {
           } catch (_) {}
           this._sv = false;
                     this.engine?.commitSceneEdit();
+          if (isGroupColor) this.refresh();
         },
       },
-      hueX: d ? (d.hsv.h / 360) * 100 + "%" : "0%",
+      hueX: activeHsv ? (activeHsv.h / 360) * 100 + "%" : "0%",
       hue: {
         down: (e: any) => {
           e.preventDefault();
@@ -2315,6 +2438,7 @@ export default class App extends React.Component<any, any> {
           } catch (_) {}
           this._hu = false;
                     this.engine?.commitSceneEdit();
+          if (isGroupColor) this.refresh();
         },
       },
       hexShown: S.hexEdit != null ? S.hexEdit : colorHex,
@@ -2518,6 +2642,9 @@ export default class App extends React.Component<any, any> {
                   frame as the scene), so there is no HTML/SVG overlay here. */}
 
               <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>User Perspective</span>
+
+              {/* FPS readout (top-right). Green >=50, amber 30-49, red <30. */}
+              <span style={css(`position:absolute;top:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;color:${this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps} FPS</span>
 
               {/* Viewport overlay toolbar */}
               <div style={css("position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;background:rgba(28,28,28,0.92);border:1px solid #333333;border-radius:3px;padding:2px")}>
@@ -2812,7 +2939,22 @@ export default class App extends React.Component<any, any> {
                           <span style={css("margin-left:auto;font-size:10px;color:#7a7a7a;font-family:'IBM Plex Mono',monospace")}>{V.groupSel.op}</span>
                         </div>
                         <span style={css("font-size:11px;color:#7a7a7a")}>{V.groupSel.count} objects grouped</span>
-                        <span style={css("font-size:10px;line-height:1.5;color:#616161")}>Moving or rotating this group transforms all its objects together, about their shared centre. Pick an individual object from the outliner above to edit it on its own.</span>
+
+                        {/* Color — one colour painted over every object in the group,
+                            through the app's shared picker (applyHsv → setGroupColor). */}
+                        <div style={css("display:flex;align-items:center;gap:8px;margin-top:2px")}>
+                          <span style={css("flex:0 0 52px;font-size:11px;color:#a0a0a0")}>Color</span>
+                          <div onClick={V.onPickerOpen} style={css(`width:46px;height:22px;border:1px solid #363636;border-radius:2px;cursor:pointer;background:${V.colorCss}`)} />
+                          <span style={css("font-family:'IBM Plex Mono',monospace;font-size:11px;color:#a0a0a0")}>{V.colorHex}</span>
+                        </div>
+
+                        {/* Scale — uniform, about the group centre; session-relative slider. */}
+                        <NumericSliderRow cfg={V.groupScaleCfg} value={V.groupScaleValue}
+                          open={!!V.modifierHelp.groupscale} caretPath={V.modifierHelp.groupscale ? this.IC.caretD : this.IC.caretR}
+                          onToggleHelp={() => V.toggleModifierHelp("groupscale")}
+                          onBegin={V.groupScaleBegin} onChange={V.groupScaleChange} onCommit={V.groupScaleCommit} />
+
+                        <span style={css("font-size:10px;line-height:1.5;color:#616161")}>Colour and scale apply to every object in the group (overwriting each object's own colour), about their shared centre. Pick an individual object from the outliner above to edit it on its own.</span>
                       </div>
                     )}
 
@@ -2863,7 +3005,39 @@ export default class App extends React.Component<any, any> {
                       <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Loading render settings…</span>
                     ) : (
                       <>
-                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Lighting &amp; Look</span>
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Performance</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Render Resolution — the fastest way to speed up a slow viewport. Lower renders fewer pixels (the biggest cost) and upscales; the image gets softer but the framerate climbs.</span>
+                        <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+                          <div style={css("display:flex;gap:4px")}>
+                            {[["50%", 0.5], ["75%", 0.75], ["100%", 1]].map(([lbl, sc]) => {
+                              const active = (this.state.renderScale || 1) === sc;
+                              return (
+                                <Hv key={String(sc)} onClick={() => this.setRenderScale(sc as number)}
+                                  s={`padding:4px 12px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
+                                  h={active ? "" : "border-color:#565656;color:#dedede"}>{lbl as string}</Hv>
+                              );
+                            })}
+                          </div>
+                          <span style={css("font-size:10px;color:#616161")}>{this.state.vpW}×{this.state.vpH}</span>
+                        </div>
+
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive.</span>
+                        <div style={css("display:flex;flex-direction:column;gap:6px")}>
+                          {[["Shadows", RenderSetting.ShadowsEnabled, "shadowsEnabled"], ["Ambient Occlusion", RenderSetting.AoEnabled, "aoEnabled"]].map(([lbl, id, key]) => {
+                            const on = (this.state.render as any)?.[key as string] !== false;
+                            return (
+                              <div key={key as string} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+                                <span style={css("font-size:11px;color:#c0c0c0")}>{lbl as string}</span>
+                                <Hv onClick={() => this.rsBool(id as number, key as string, !on)}
+                                  s={`width:34px;height:18px;border-radius:9px;cursor:default;position:relative;flex:0 0 auto;background:${on ? "#e8912d" : "#3a3a3a"}`} h="">
+                                  <span style={css(`position:absolute;top:2px;left:${on ? "18px" : "2px"};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)} />
+                                </Hv>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9;margin-top:4px")}>Lighting &amp; Look</span>
                         <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Click a setting's name for a short explanation. These affect the look and cost little or no performance.</span>
                         <div style={css("display:flex;flex-direction:column;gap:8px")}>
                           {this.RENDER_SETTINGS.map((cfg: any) => this.rsRow(cfg))}

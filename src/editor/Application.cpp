@@ -544,6 +544,74 @@ void Application::SetObjectColor(int index, float r, float g, float b) {
     if (record) FinishSceneEdit("Change Color", before);
 }
 
+// --- Group (CSG subtree) batch edits ----------------------------------------
+// Groups own no color/size of their own; these fan an edit out over every
+// primitive in the subtree, mutating fields the primitives already have. Both
+// run as a single scene-edit so one Ctrl+Z reverts the whole group change.
+
+void Application::SetGroupColor(int nodeId, float r, float g, float b) {
+    const int32_t idx = sceneManager.GetCsgTree().IndexForNodeId(nodeId);
+    if (idx == -1) return;
+    std::vector<int32_t> ids;
+    sceneManager.CollectSubtreeObjectIds(idx, ids);
+    if (ids.empty()) return;
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+    for (int32_t oid : ids) {
+        if (SdfObjectData* obj = sceneManager.FindObjectById(oid))
+            obj->color = { r, g, b, 1.0f };
+    }
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Set Group Color", before);
+}
+
+void Application::ScaleGroup(int nodeId, float factor) {
+    if (!std::isfinite(factor) || factor <= 0.0f) return;
+    const int32_t idx = sceneManager.GetCsgTree().IndexForNodeId(nodeId);
+    if (idx == -1) return;
+    std::vector<int32_t> ids;
+    sceneManager.CollectSubtreeObjectIds(idx, ids);
+    if (ids.empty()) return;
+
+    // Anchor = centroid of the subtree's primitive positions. Recomputed each
+    // call from the objects themselves — groups store no center of their own.
+    glm::vec3 anchor(0.0f);
+    int32_t count = 0;
+    for (int32_t oid : ids) {
+        if (const SdfObjectData* obj = sceneManager.FindObjectById(oid)) {
+            anchor += glm::vec3(obj->position[0], obj->position[1], obj->position[2]);
+            ++count;
+        }
+    }
+    if (count == 0) return;
+    anchor /= static_cast<float>(count);
+
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+
+    for (int32_t oid : ids) {
+        SdfObjectData* obj = sceneManager.FindObjectById(oid);
+        if (!obj) continue;
+        // Move the primitive along the anchor->position ray so the whole group
+        // grows/shrinks uniformly about the anchor.
+        glm::vec3 p(obj->position[0], obj->position[1], obj->position[2]);
+        p = anchor + factor * (p - anchor);
+        obj->position = { p.x, p.y, p.z, 0.0f };
+        // Scale the persisted editor scale; size re-derives from params * scale,
+        // so the change survives save/reload (a raw size write would not).
+        if (EditorObject* eo = editorStore.Find(oid)) {
+            eo->scale = { eo->scale[0] * factor, eo->scale[1] * factor, eo->scale[2] * factor };
+            const auto size = PrimitiveGeometry::ComputeSize(
+                static_cast<SdfObjectType>(obj->type), eo->params, eo->scale);
+            obj->size = { size[0], size[1], size[2], 0.0f };
+        }
+    }
+    OnSceneChanged();
+    if (record) FinishSceneEdit("Scale Group", before);
+}
+
 // --- Editor attribute setters -----------------------------------------------
 // Each resolves the object's editor record via its permanent objectId; scale
 // and shape-param edits then recompute the SDF `size` from the params.
@@ -997,6 +1065,8 @@ std::string Application::GetSceneJson() const {
         << ",\"shadowSteps\":" << rs.shadowSteps
         << ",\"shadowDistance\":" << rs.shadowDistance
         << ",\"aoSamples\":" << rs.aoSamples
+        << ",\"shadowsEnabled\":" << (rs.shadowsEnabled ? "true" : "false")
+        << ",\"aoEnabled\":" << (rs.aoEnabled ? "true" : "false")
         << "}";
 
     out << "}";
@@ -1361,6 +1431,8 @@ void Application::SyncRenderGlobals() {
     globals.shadowMaxSteps    = s.shadowSteps;
     globals.shadowMaxDistance = s.shadowDistance;
     globals.aoSamples         = s.aoSamples;
+    globals.shadowsEnabled    = s.shadowsEnabled ? 1 : 0;
+    globals.aoEnabled         = s.aoEnabled ? 1 : 0;
 }
 
 // Update one render setting by RenderSetting id (see Settings.h). Ints arrive as
@@ -1390,6 +1462,8 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::max(1, static_cast<int>(value + 0.5f)); break;
     case RenderSetting::ShadowDistance:   appSettings.shadowDistance = value; break;
     case RenderSetting::AoSamples:        appSettings.aoSamples = std::max(2, static_cast<int>(value + 0.5f)); break;
+    case RenderSetting::ShadowsEnabled:   appSettings.shadowsEnabled = value != 0.0f; break;
+    case RenderSetting::AoEnabled:         appSettings.aoEnabled = value != 0.0f; break;
     default: break;
     }
 

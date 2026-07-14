@@ -66,6 +66,12 @@ public:
     void SetObjectSize(int index, float x, float y, float z);
     void SetObjectColor(int index, float r, float g, float b);
 
+    // Group (CSG subtree) batch edits, keyed by CSG nodeId. Fan out over every
+    // primitive in the subtree; a group owns no color/size of its own. Uniform
+    // factor only (no per-axis, which would distort the SDF). See Application.cpp.
+    void SetGroupColor(int nodeId, float r, float g, float b);
+    void ScaleGroup(int nodeId, float factor);
+
     // Editor attributes (owned by the engine via EditorObjectStore). Scale and
     // shape-param edits recompute the object's SDF `size`; the rest are stored.
     void SetObjectName(int index, const char* name);

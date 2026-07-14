@@ -60,4 +60,14 @@ struct alignas(16) GlobalsData
     float   shadowMaxDistance = 30.0f;  // how far the shadow ray searches for occluders
     int32_t aoSamples         = 5;      // ambient-occlusion taps along the normal (keep >= 2)
     int32_t qualityPad0       = 0;      // padding to 16-byte alignment
+
+    // Feature toggles — let the user drop the two biggest optional per-pixel costs.
+    // The shader guards the shadow/AO marches behind these uniform flags, so an
+    // "off" flag skips the whole loop (a coherent branch: every pixel takes the
+    // same path). New 16-byte block appended at the end so the existing 224-byte
+    // layout is untouched. Buffer size = sizeof(GlobalsData), so this just grows it.
+    int32_t shadowsEnabled = 1;   // 1 = cast soft shadows (calcSoftShadow), 0 = fully lit
+    int32_t aoEnabled      = 1;   // 1 = ambient occlusion (calcAO), 0 = no occlusion
+    int32_t qualityPad1    = 0;   // padding to 16-byte alignment
+    int32_t qualityPad2    = 0;
 };
