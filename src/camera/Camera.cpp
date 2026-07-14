@@ -1,4 +1,5 @@
 #include "Camera.h"
+#include <cmath>
 
 glm::vec3 Camera::GetPosition() {
 	float x = targetP.x + distance * cos(pitch) * sin(yaw);
@@ -31,6 +32,21 @@ void Camera::TargetPan(Settings appSettings, Vec2 delta) {
 	glm::vec3 up = glm::cross(right, forward);
 
 	targetP += -right * delta.x * panSensitivity + up * delta.y * panSensitivity;
+}
+
+void Camera::SnapToDirection(const glm::vec3& direction) {
+	const glm::vec3 d = glm::normalize(direction);
+	pitch = asin(glm::clamp(d.y, -1.0f, 1.0f));
+	yaw = atan2(d.x, d.z);
+}
+
+void Camera::FrameBounds(const glm::vec3& center, float radius) {
+	if (!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(center.z) ||
+		!std::isfinite(radius) || radius <= 0.0f) return;
+	targetP = center;
+	// The camera uses a fixed 45 degree vertical FOV. A small margin keeps the
+	// bounding sphere clear of the viewport edges without changing orientation.
+	distance = glm::max(0.1f, radius / sin(glm::radians(22.5f)) * 1.15f);
 }
 
 // Helper functions to integrate Gizmo

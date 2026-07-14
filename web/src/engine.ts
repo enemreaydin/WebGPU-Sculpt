@@ -484,6 +484,25 @@ export class Engine {
     this.call("sdf_camera_zoom", null, ["number"], [delta]);
   }
 
+  cameraSnap(x: number, y: number, z: number): void {
+    this.call("sdf_camera_snap", null, ["number", "number", "number"], [x, y, z]);
+  }
+
+  cameraOrientation(): { yaw: number; pitch: number } {
+    return {
+      yaw: this.call("sdf_camera_yaw", "number", [], []) as number,
+      pitch: this.call("sdf_camera_pitch", "number", [], []) as number,
+    };
+  }
+
+  cameraFrameSelected(): boolean {
+    return (this.call("sdf_camera_frame_selected", "number", [], []) as number) !== 0;
+  }
+
+  cameraFrameAll(): boolean {
+    return (this.call("sdf_camera_frame_all", "number", [], []) as number) !== 0;
+  }
+
   // ---- Render settings ----------------------------------------------------
   // Set one render setting by RenderSetting id. Read current values back from
   // getScene().render.

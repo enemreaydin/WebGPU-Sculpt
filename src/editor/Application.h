@@ -117,6 +117,11 @@ public:
     void CameraOrbit(float dx, float dy);
     void CameraPan(float dx, float dy);
     void CameraZoom(float delta);
+    void CameraSnap(float x, float y, float z);
+    bool FrameSelected();
+    bool FrameAll();
+    float CameraYaw() const { return camera.GetYaw(); }
+    float CameraPitch() const { return camera.GetPitch(); }
 
     // Render settings. `id` is a RenderSetting (see Settings.h); ints are passed
     // as float and rounded. Writes appSettings; SyncRenderGlobals mirrors it into

@@ -13,6 +13,7 @@
 #include <cmath>
 #include <array>
 #include <memory>
+#include <limits>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -1064,6 +1065,51 @@ void Application::CameraPan(float dx, float dy) {
 
 void Application::CameraZoom(float delta) {
     viewportInput.scrollDelta += delta;
+}
+
+void Application::CameraSnap(float x, float y, float z) {
+    camera.SnapToDirection(glm::vec3(x, y, z));
+}
+
+namespace {
+bool ComputeFrameBounds(const std::vector<SdfObjectData>& objects,
+                        const EditorObjectStore& store, bool selectedOnly,
+                        glm::vec3& center, float& radius) {
+    glm::vec3 lo(std::numeric_limits<float>::max());
+    glm::vec3 hi(std::numeric_limits<float>::lowest());
+    bool found = false;
+    for (const SdfObjectData& object : objects) {
+        const EditorObject* editorObject = store.Find(object.objectId);
+        if ((selectedOnly && object.selected == 0) || (!selectedOnly && editorObject && !editorObject->visible)) continue;
+        const glm::vec3 position(object.position[0], object.position[1], object.position[2]);
+        const glm::vec3 extent(glm::abs(object.size[0]), glm::abs(object.size[1]), glm::abs(object.size[2]));
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) ||
+            !std::isfinite(extent.x) || !std::isfinite(extent.y) || !std::isfinite(extent.z)) continue;
+        lo = glm::min(lo, position - extent);
+        hi = glm::max(hi, position + extent);
+        found = true;
+    }
+    if (!found) return false;
+    center = (lo + hi) * 0.5f;
+    radius = glm::length(hi - lo) * 0.5f;
+    return std::isfinite(radius);
+}
+}
+
+bool Application::FrameSelected() {
+    glm::vec3 center;
+    float radius = 0.0f;
+    if (!ComputeFrameBounds(sceneManager.GetObjects(), editorStore, true, center, radius)) return false;
+    camera.FrameBounds(center, glm::max(radius, 0.1f));
+    return true;
+}
+
+bool Application::FrameAll() {
+    glm::vec3 center;
+    float radius = 0.0f;
+    if (!ComputeFrameBounds(sceneManager.GetObjects(), editorStore, false, center, radius)) return false;
+    camera.FrameBounds(center, glm::max(radius, 0.1f));
+    return true;
 }
 
 // ---------------------------------------------------------------------------

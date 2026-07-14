@@ -303,6 +303,31 @@ extern "C" {
         if (g_App) g_App->CameraZoom(delta);
     }
 
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_camera_snap(float x, float y, float z) {
+        if (g_App) g_App->CameraSnap(x, y, z);
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        float sdf_camera_yaw() {
+        return g_App ? g_App->CameraYaw() : 0.0f;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        float sdf_camera_pitch() {
+        return g_App ? g_App->CameraPitch() : 0.0f;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        int sdf_camera_frame_selected() {
+        return g_App && g_App->FrameSelected() ? 1 : 0;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        int sdf_camera_frame_all() {
+        return g_App && g_App->FrameAll() ? 1 : 0;
+    }
+
     // Set one render setting by RenderSetting id (see Settings.h). Ints are passed
     // as float. Read the current values back from sdf_get_scene_json().render.
     EMSCRIPTEN_KEEPALIVE

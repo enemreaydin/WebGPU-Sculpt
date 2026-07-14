@@ -79,6 +79,69 @@ const Raw = ({ html }: { html: string }) => (
   <div style={{ display: "contents" }} dangerouslySetInnerHTML={{ __html: html }} />
 );
 
+type NavAxis = { key: string; label: string; color: string; direction: [number, number, number]; x: number; y: number; depth: number; positive: boolean };
+
+function NavigationGizmo({ yaw, pitch, onSnap }: { yaw: number; pitch: number; onSnap: (x: number, y: number, z: number) => void }) {
+  const [hovered, setHovered] = React.useState<string | null>(null);
+  const eye: [number, number, number] = [Math.cos(pitch) * Math.sin(yaw), Math.sin(pitch), Math.cos(pitch) * Math.cos(yaw)];
+  const forward: [number, number, number] = [-eye[0], -eye[1], -eye[2]];
+  let right: [number, number, number] = [-forward[2], 0, forward[0]];
+  const rightLength = Math.hypot(...right) || 1;
+  right = [right[0] / rightLength, 0, right[2] / rightLength];
+  const up: [number, number, number] = [
+    right[1] * forward[2] - right[2] * forward[1],
+    right[2] * forward[0] - right[0] * forward[2],
+    right[0] * forward[1] - right[1] * forward[0],
+  ];
+  const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const specs: Array<[string, string, string, [number, number, number], boolean]> = [
+    ["+x", "X", "#d8504a", [1, 0, 0], true], ["-x", "", "#d8504a", [-1, 0, 0], false],
+    ["+y", "Y", "#7fae3a", [0, 1, 0], true], ["-y", "", "#7fae3a", [0, -1, 0], false],
+    ["+z", "Z", "#4b84d6", [0, 0, 1], true], ["-z", "", "#4b84d6", [0, 0, -1], false],
+  ];
+  const axes: NavAxis[] = specs.map(([key, label, color, direction, positive]) => {
+    const depth = dot(direction, eye);
+    const scale = 25 * (1 + depth * 0.08);
+    return { key, label, color, direction, positive, depth, x: 36 + dot(direction, right) * scale, y: 36 - dot(direction, up) * scale };
+  }).sort((a, b) => a.depth - b.depth);
+
+  return (
+    <div
+      aria-label="Viewport navigation gizmo"
+      onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      onPointerUp={(e) => e.stopPropagation()}
+      onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+      style={{ position: "absolute", top: 14, right: 14, width: 72, height: 72, opacity: 0.96, touchAction: "none" }}
+    >
+      <svg width="72" height="72" viewBox="0 0 72 72" style={{ overflow: "visible" }}>
+        {axes.map((axis) => (
+          <line key={`arm-${axis.key}`} x1="36" y1="36" x2={axis.x} y2={axis.y} stroke={axis.color} strokeWidth={axis.depth > 0 ? 2.2 : 1.4} opacity={axis.depth > 0 ? 0.95 : 0.38} />
+        ))}
+        <circle cx="36" cy="36" r="3.25" fill="#c9c9c9" stroke="#101010" strokeWidth="1" />
+        {axes.map((axis) => {
+          const hot = hovered === axis.key;
+          const radius = (axis.positive ? 7.5 : 4.5) * (1 + axis.depth * 0.06) * (hot ? 1.12 : 1);
+          return (
+            <g
+              key={axis.key}
+              role="button"
+              aria-label={`${axis.key} axis view`}
+              onPointerEnter={() => setHovered(axis.key)}
+              onPointerLeave={() => setHovered(null)}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); onSnap(...axis.direction); }}
+              style={{ cursor: "pointer" }}
+            >
+              <circle cx={axis.x} cy={axis.y} r={radius + 3} fill="transparent" />
+              <circle cx={axis.x} cy={axis.y} r={radius} fill={axis.positive ? axis.color : "#101010"} stroke={hot ? "#dedede" : axis.color} strokeWidth={hot ? 2 : 1.3} opacity={axis.depth > 0 ? 1 : 0.58} />
+              {axis.label && <text x={axis.x} y={axis.y + 3.2} textAnchor="middle" fontSize="9" fontWeight="600" fill="#101010" fontFamily="IBM Plex Sans" pointerEvents="none">{axis.label}</text>}
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 // ---- Static markup lifted straight from the mockup ------------------------
 
 const GIZMO_HTML = `<div style="position:absolute;top:14px;right:14px;pointer-events:none;opacity:0.92"><svg width="72" height="72" viewBox="0 0 72 72"><line x1="36" y1="36" x2="61" y2="36" stroke="#d8504a" stroke-width="2"></line><line x1="36" y1="36" x2="53" y2="19" stroke="#7fae3a" stroke-width="2"></line><line x1="36" y1="36" x2="36" y2="11" stroke="#4b84d6" stroke-width="2"></line><circle cx="61" cy="36" r="7.5" fill="#d8504a"></circle><circle cx="53" cy="19" r="7.5" fill="#7fae3a"></circle><circle cx="36" cy="11" r="7.5" fill="#4b84d6"></circle><circle cx="11" cy="36" r="5" fill="#101010" stroke="#d8504a" stroke-width="1.5"></circle><circle cx="19" cy="53" r="5" fill="#101010" stroke="#7fae3a" stroke-width="1.5"></circle><circle cx="36" cy="61" r="5" fill="#101010" stroke="#4b84d6" stroke-width="1.5"></circle><text x="61" y="39.5" text-anchor="middle" font-size="9" font-weight="600" fill="#101010" font-family="IBM Plex Sans">X</text><text x="53" y="22.5" text-anchor="middle" font-size="9" font-weight="600" fill="#101010" font-family="IBM Plex Sans">Y</text><text x="36" y="14.5" text-anchor="middle" font-size="9" font-weight="600" fill="#101010" font-family="IBM Plex Sans">Z</text></svg></div>`;
@@ -94,6 +157,22 @@ const KIT_BUTTONS_HTML = `<div style="flex:0 0 auto;display:flex;flex-direction:
 const KIT_TREE_HTML = `<div style="flex:0 0 auto;display:flex;flex-direction:column;gap:1px;width:200px"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#7a7a7a;font-weight:600;margin-bottom:5px">Tree rows</span><div style="display:flex;align-items:center;gap:6px;height:24px;padding:0 8px"><svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5" fill="none" stroke="#8f8f8f" stroke-width="1.2"></path></svg><span style="flex:1;font-size:12px;color:#c9c9c9">Default</span></div><div style="display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;background:#2a2a2a"><svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5" fill="none" stroke="#8f8f8f" stroke-width="1.2"></path></svg><span style="flex:1;font-size:12px;color:#dedede">Hover</span></div><div style="display:flex;align-items:center;gap:6px;height:24px;padding:0 8px;background:#333333"><svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5" fill="none" stroke="#f0a03c" stroke-width="1.2"></path></svg><span style="flex:1;font-size:12px;color:#f0a03c">Selected</span></div><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;color:#7a7a7a;font-weight:600;margin:10px 0 5px">Context menu</span><div style="background:#232323;border:1px solid #3a3a3a;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,0.55);padding:4px 0"><div style="display:flex;padding:4px 12px;font-size:12px;color:#d6d6d6"><span>Duplicate</span><span style="margin-left:auto;color:#616161;font-family:'IBM Plex Mono',monospace;font-size:10px">⇧D</span></div><div style="display:flex;padding:4px 12px;font-size:12px;color:#dedede;background:#2e2e2e"><span>Rename</span><span style="margin-left:auto;color:#616161;font-family:'IBM Plex Mono',monospace;font-size:10px">F2</span></div><div style="height:1px;background:#333;margin:4px 8px"></div><div style="display:flex;padding:4px 12px;font-size:12px;color:#d6d6d6"><span>Delete</span><span style="margin-left:auto;color:#616161;font-family:'IBM Plex Mono',monospace;font-size:10px">X</span></div></div></div>`;
 
 const SHORTCUTS_GRID_HTML = `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:26px"><div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#e8912d;margin-bottom:2px">General</span><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">F1</span><span style="font-size:11px;color:#a0a0a0">Shortcut overlay</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Ctrl N</span><span style="font-size:11px;color:#a0a0a0">New scene</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Ctrl O</span><span style="font-size:11px;color:#a0a0a0">Open scene</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Ctrl S</span><span style="font-size:11px;color:#a0a0a0">Save scene</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Ctrl Z</span><span style="font-size:11px;color:#a0a0a0">Undo</span></div></div><div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#e8912d;margin-bottom:2px">Camera</span><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">MMB</span><span style="font-size:11px;color:#a0a0a0">Orbit</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">⇧ MMB</span><span style="font-size:11px;color:#a0a0a0">Pan</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Wheel</span><span style="font-size:11px;color:#a0a0a0">Zoom</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">.</span><span style="font-size:11px;color:#a0a0a0">Frame selected</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Home</span><span style="font-size:11px;color:#a0a0a0">Frame all</span></div></div><div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#e8912d;margin-bottom:2px">Tools &amp; Edit</span><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">Q</span><span style="font-size:11px;color:#a0a0a0">Select</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">G / R / S</span><span style="font-size:11px;color:#a0a0a0">Move / Rotate / Scale</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">⇧ D</span><span style="font-size:11px;color:#a0a0a0">Duplicate</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">X</span><span style="font-size:11px;color:#a0a0a0">Delete</span></div><div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9">F2</span><span style="font-size:11px;color:#a0a0a0">Rename</span></div></div></div>`;
+
+// Keep the original mockup constants above as the visual reference for these live variants.
+void GIZMO_HTML;
+void SHORTCUTS_GRID_HTML;
+const SHORTCUT_ROW = (key: string, label: string) => `<div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9;white-space:nowrap">${key}</span><span style="font-size:11px;color:#a0a0a0">${label}</span></div>`;
+const SHORTCUT_COLUMN = (title: string, rows: string[][]) => `<div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#e8912d;margin-bottom:2px">${title}</span>${rows.map((r) => SHORTCUT_ROW(r[0], r[1])).join("")}</div>`;
+const ACTIVE_SHORTCUTS_GRID_HTML = `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px">${SHORTCUT_COLUMN("General", [
+  ["F1", "Shortcut overlay"], ["Alt N", "New scene"], ["Ctrl O", "Open scene"],
+  ["Ctrl S", "Save scene"], ["Ctrl Z", "Undo"], ["Ctrl Shift Z / Ctrl Y", "Redo"], ["Esc", "Cancel / Close"],
+])}${SHORTCUT_COLUMN("Camera", [
+  ["MMB", "Orbit"], ["Shift MMB", "Pan"], ["Wheel", "Zoom"],
+  ["F", "Frame selected"], ["Home", "Frame all"], ["Navigation Gizmo", "Axis views"],
+])}${SHORTCUT_COLUMN("Tools &amp; Edit", [
+  ["W", "Select"], ["G / R / S", "Move / Rotate / Scale"], ["Shift D", "Duplicate"],
+  ["X / Delete", "Delete"], ["F2", "Rename"], ["A", "Select all"], ["Alt A", "Deselect all"],
+])}</div>`;
 
 // Small helper: render an editable/drag numeric field control (transform axis,
 // shape param, demo field) from a mockup `field()` descriptor.
@@ -232,6 +311,7 @@ export default class App extends React.Component<any, any> {
   _hu = false;
   _kd: any = null;
   _pt: any = null;
+  _navFrame: number | null = null;
 
   // Engine / canvas plumbing.
   canvasRef = React.createRef<HTMLCanvasElement>();
@@ -253,6 +333,8 @@ export default class App extends React.Component<any, any> {
     openMenu: null,
     fileName: null,        // current .sdfp file name, shown in the title bar (null = unsaved)
     confirm: null,         // { title, body, okLabel } when the discard-changes modal is open
+    navYaw: 0.5,
+    navPitch: 0.5,
     tool: "select",
     gizmoSpace: "world",   // "world" | "local" — which axes the gizmo handles follow
     shading: "solid",
@@ -334,7 +416,7 @@ export default class App extends React.Component<any, any> {
                 );
 
             // F1 overlay shortcut. Do not steal keys while the user is typing.
-            if (!isEditable && e.key === "F1") {
+            if (!isEditable && !this.state.confirm && !e.repeat && e.key === "F1") {
         e.preventDefault();
         this.setState((s: any) => ({ overlay: !s.overlay }));
         return;
@@ -342,6 +424,20 @@ export default class App extends React.Component<any, any> {
 
             // Text fields keep their native browser/editor undo behavior.
             if (isEditable) return;
+
+            // Dialogs own the keyboard before viewport/global commands.
+            if (this.state.confirm) {
+              if (e.code === "Escape") { e.preventDefault(); this.cancelDiscard(); }
+              else if (e.code === "Enter" && !e.repeat) { e.preventDefault(); this.proceedDiscard(); }
+              return;
+            }
+
+            if (this.state.overlay) {
+              if (e.code === "Escape") { e.preventDefault(); this.setState({ overlay: false }); }
+              return;
+            }
+
+            if (e.repeat) return;
 
             const k = e.key.toLowerCase();
             const isCtrlOrCmd = e.ctrlKey || e.metaKey;
@@ -373,11 +469,12 @@ export default class App extends React.Component<any, any> {
                     return;
                 }
 
-                if (k === "n") {
-                    e.preventDefault();
-                    this.newScene();
-                    return;
-                }
+            }
+
+            if (e.altKey && e.code === "KeyN" && !e.repeat) {
+              e.preventDefault();
+              this.newScene();
+              return;
             }
 
             if (e.key === "Escape") {
@@ -403,10 +500,25 @@ export default class App extends React.Component<any, any> {
                 return;
             }
 
-      if (k === "q") this.setState({ tool: "select" });
+            // An active object-gizmo transaction owns axis keys. Its picked
+            // handle already supplies the constraint; never reinterpret X as Delete.
+            if (this._gizmoDrag && (e.code === "KeyX" || e.code === "KeyY" || e.code === "KeyZ")) {
+              e.preventDefault();
+              return;
+            }
+
+      if (e.code === "KeyW") this.setState({ tool: "select" });
       else if (k === "g") this.setState({ tool: "move" });
       else if (k === "r") this.setState({ tool: "rotate" });
       else if (k === "s") this.setState({ tool: "scale" });
+      else if (e.code === "KeyF") {
+        if (this.engine?.cameraFrameSelected()) e.preventDefault();
+      }
+      else if (e.code === "Home") {
+        if (this.engine?.cameraFrameAll()) e.preventDefault();
+      }
+      else if (e.code === "KeyA" && e.altKey) { e.preventDefault(); this.deselectAll(); }
+      else if (e.code === "KeyA") { e.preventDefault(); this.selectAll(); }
       else if (k === "f2") {
         // Rename the current selection — primitive or group/operation node.
         const key = this.state.sel;
@@ -414,18 +526,29 @@ export default class App extends React.Component<any, any> {
           const nm = this.state.meta[key]?.name || this.objById(key)?.typeName || "Group";
           this.setState({ renaming: key, renameText: nm });
         }
-      } else if (k === "x" || e.key === "Delete") this.deleteSel();
+      } else if (k === "x" || e.code === "Delete") this.confirmDelete();
       else if (k === "d" && e.shiftKey) this.duplicateSel();
     };
     window.addEventListener("keydown", this._kd);
 
     this.bootEngine();
+    const updateNavigation = () => {
+      if (this.engine) {
+        const o = this.engine.cameraOrientation();
+        if (Math.abs(o.yaw - this.state.navYaw) > 0.0001 || Math.abs(o.pitch - this.state.navPitch) > 0.0001) {
+          this.setState({ navYaw: o.yaw, navPitch: o.pitch });
+        }
+      }
+      this._navFrame = requestAnimationFrame(updateNavigation);
+    };
+    this._navFrame = requestAnimationFrame(updateNavigation);
   }
 
   componentWillUnmount() {
     window.removeEventListener("keydown", this._kd);
     if (this._pt) clearInterval(this._pt);
     if (this._ro) this._ro.disconnect();
+    if (this._navFrame !== null) cancelAnimationFrame(this._navFrame);
   }
 
   // Keep the engine's gizmo in step with the active tool and space (the gizmo is
@@ -615,6 +738,25 @@ export default class App extends React.Component<any, any> {
   camWheel = (e: React.WheelEvent) => {
     this.engine?.cameraZoom(-e.deltaY * 0.01);
   };
+
+  snapCamera(x: number, y: number, z: number) {
+    this.engine?.cameraSnap(x, y, z);
+  }
+
+  selectAll() {
+    const tree = this.state.tree;
+    const root = tree?.nodes?.find((node: any) => node.nodeId === tree.root);
+    if (!this.engine || !root || !root.children.length) return;
+    this.engine.clearSelection();
+    for (const nodeId of root.children) this.engine.selectNode(nodeId, 1);
+    this.refresh();
+  }
+
+  deselectAll() {
+    if (!this.engine) return;
+    this.engine.clearSelection();
+    this.refresh();
+  }
 
   // ---- Ported logic --------------------------------------------------------
 
@@ -1182,6 +1324,18 @@ export default class App extends React.Component<any, any> {
     this.setState({ ctx: null, saved: false });
     this.log("scene", names.join(", ") + " deleted");
     this.status(names.length + " deleted");
+  }
+  confirmDelete() {
+    const count = (this.state.selSet || []).filter((k: string) => k !== "scene").length;
+    if (!count) return;
+    this._pendingAction = () => this.deleteSel();
+    this.setState({
+      confirm: {
+        title: count === 1 ? "Delete selected object?" : `Delete ${count} selected objects?`,
+        body: "This action can be undone.",
+        okLabel: "Delete",
+      },
+    });
   }
   duplicateSel() {
     const o = this.selObj();
@@ -2383,7 +2537,9 @@ export default class App extends React.Component<any, any> {
               </div>
 
               {/* Axis gizmo */}
-              {V.showGizmo && <Raw html={GIZMO_HTML} />}
+              {V.showGizmo && (
+                <NavigationGizmo yaw={this.state.navYaw} pitch={this.state.navPitch} onSnap={(x, y, z) => this.snapCamera(x, y, z)} />
+              )}
             </div>
 
             {/* dock splitter */}
@@ -2783,9 +2939,9 @@ export default class App extends React.Component<any, any> {
             <div style={css("width:700px;max-width:90vw;background:#1f1f1f;border:1px solid #363636;border-radius:2px;box-shadow:0 20px 60px rgba(0,0,0,0.6);padding:22px 26px")}>
               <div style={css("display:flex;align-items:baseline;gap:12px;margin-bottom:18px")}>
                 <span style={css("font-size:13px;font-weight:600")}>Keyboard Shortcuts</span>
-                <span style={css("font-size:11px;color:#616161")}>F1 or click to close</span>
+                <span style={css("font-size:11px;color:#616161")}>F1, Esc or click to close</span>
               </div>
-              <Raw html={SHORTCUTS_GRID_HTML} />
+              <div style={css("max-height:70vh;overflow:auto")}><Raw html={ACTIVE_SHORTCUTS_GRID_HTML} /></div>
             </div>
           </div>
         )}
