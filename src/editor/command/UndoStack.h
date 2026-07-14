@@ -3,14 +3,17 @@
 #include "IEditorCommand.h"
 
 #include <memory>
-#include <vector>
+#include <deque>
+#include <cstddef>
 
 class SceneManager;
 
 class UndoStack
 {
 public:
-    UndoStack() = default;
+    static constexpr std::size_t DEFAULT_MAX_HISTORY_ENTRIES = 100;
+    explicit UndoStack(std::size_t maxEntries = DEFAULT_MAX_HISTORY_ENTRIES)
+        : m_MaxEntries(maxEntries) {}
     ~UndoStack() = default;
 
     UndoStack(const UndoStack&) = delete;
@@ -28,10 +31,15 @@ public:
     bool IsApplyingHistory() const;
 
     void Clear();
+    std::size_t UndoCount() const { return m_UndoStack.size(); }
+    std::size_t RedoCount() const { return m_RedoStack.size(); }
 
 private:
-    std::vector<std::unique_ptr<IEditorCommand>> m_UndoStack;
-    std::vector<std::unique_ptr<IEditorCommand>> m_RedoStack;
+    std::deque<std::unique_ptr<IEditorCommand>> m_UndoStack;
+    std::deque<std::unique_ptr<IEditorCommand>> m_RedoStack;
+    std::size_t m_MaxEntries;
+
+    void Trim(std::deque<std::unique_ptr<IEditorCommand>>& stack);
 
     bool m_IsApplyingHistory = false;
 };

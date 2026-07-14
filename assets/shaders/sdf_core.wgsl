@@ -24,7 +24,7 @@ struct CsgCommand
     cmd_type : i32,
     operand : i32,
     node_id : i32,
-    pad0 : i32,
+    parameter : f32,
 }
 
 fn rotateInverse(v: vec3f, q: vec4f) -> vec3f
@@ -119,6 +119,41 @@ fn opIntersection(d1 : f32, d2 : f32) -> f32
     return max(d1, d2);
 }
 
+fn sdfRoundedBoxPreserveBounds(p: vec3f, boxHalfExtents: vec3f, requestedRadius: f32) -> f32
+{
+    let halfExtents = max(boxHalfExtents, vec3f(0.0));
+    let epsilon = 0.00001;
+    let maxRadius = max(min(halfExtents.x, min(halfExtents.y, halfExtents.z)) - epsilon, 0.0);
+    let r = clamp(requestedRadius, 0.0, maxRadius);
+    let innerHalfSize = halfExtents - vec3f(r);
+    let q = abs(p) - innerHalfSize;
+    return length(max(q, vec3f(0.0)))
+        + min(max(q.x, max(q.y, q.z)), 0.0) - r;
+}
+
+const CSG_EPSILON : f32 = 0.000001;
+
+fn opSmoothUnion(dA: f32, dB: f32, radius: f32) -> f32
+{
+    let k = max(radius, 0.0);
+    if (k <= CSG_EPSILON) { return opUnion(dA, dB); }
+    let h = clamp(0.5 + 0.5 * (dB - dA) / k, 0.0, 1.0);
+    return mix(dB, dA, h) - k * h * (1.0 - h);
+}
+
+fn opSmoothIntersection(dA: f32, dB: f32, radius: f32) -> f32
+{
+    let k = max(radius, 0.0);
+    if (k <= CSG_EPSILON) { return opIntersection(dA, dB); }
+    let h = clamp(0.5 + 0.5 * (dA - dB) / k, 0.0, 1.0);
+    return mix(dB, dA, h) + k * h * (1.0 - h);
+}
+
+fn opSmoothSubtract(dA: f32, dB: f32, radius: f32) -> f32
+{
+    return opSmoothIntersection(dA, -dB, radius);
+}
+
 fn distanceCalc(p : vec3f) -> f32
 {
     var resultDistance = 100000.0;
@@ -142,7 +177,7 @@ fn distanceCalc(p : vec3f) -> f32
             switch(obj.obj_type)
             {
                 case 0: { dist = sdfSphere(localPos, obj.size.x); }
-                case 1: { dist = sdfBox(localPos, obj.size.xyz); }
+                case 1: { dist = sdfRoundedBoxPreserveBounds(localPos, obj.size.xyz, cmd.parameter); }
                 case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
                 case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
                 case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
@@ -155,7 +190,7 @@ fn distanceCalc(p : vec3f) -> f32
             distanceStack[sp] = dist;
             sp = sp + 1;
         }
-        else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
+        else if (cmd.cmd_type >= 1 && cmd.cmd_type <= 6)
         {
             let dB = distanceStack[sp - 1];
             let dA = distanceStack[sp - 2];
@@ -172,6 +207,10 @@ fn distanceCalc(p : vec3f) -> f32
             {
                 d = opIntersection(dA, dB);
             }
+
+            if (cmd.cmd_type == 4) { d = opSmoothUnion(dA, dB, cmd.parameter); }
+            else if (cmd.cmd_type == 5) { d = opSmoothSubtract(dA, dB, cmd.parameter); }
+            else if (cmd.cmd_type == 6) { d = opSmoothIntersection(dA, dB, cmd.parameter); }
 
             sp = sp - 1;
             distanceStack[sp - 1] = d;
@@ -270,7 +309,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             switch(obj.obj_type)
             {
                 case 0: { dist = sdfSphere(localPos, obj.size.x); }
-                case 1: { dist = sdfBox(localPos, obj.size.xyz); }
+                case 1: { dist = sdfRoundedBoxPreserveBounds(localPos, obj.size.xyz, cmd.parameter); }
                 case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
                 case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
                 case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
@@ -292,7 +331,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             stackId[sp] = u32(cmd.operand);
             sp = sp + 1;
         }
-        else if (cmd.cmd_type == 1 || cmd.cmd_type == 2 || cmd.cmd_type == 3)
+        else if (cmd.cmd_type >= 1 && cmd.cmd_type <= 6)
         {
             let dB = stack[sp - 1];
             let cB = stackColor[sp - 1];
@@ -323,6 +362,27 @@ fn evaluateScene(p : vec3f) -> SceneResult
             {
                 d = opIntersection(dA, dB);
                 c = cA;
+            }
+
+            if (cmd.cmd_type >= 4 && cmd.cmd_type <= 6)
+            {
+                let k = max(cmd.parameter, 0.0);
+                var h = 0.0;
+                if (cmd.cmd_type == 4)
+                {
+                    d = opSmoothUnion(dA, dB, k);
+                    h = select(0.0, 1.0, dA <= dB);
+                    if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dB - dA) / k, 0.0, 1.0); }
+                }
+                else
+                {
+                    let comparedB = select(dB, -dB, cmd.cmd_type == 5);
+                    d = opSmoothIntersection(dA, comparedB, k);
+                    h = select(0.0, 1.0, dA >= comparedB);
+                    if (k > CSG_EPSILON) { h = clamp(0.5 + 0.5 * (dA - comparedB) / k, 0.0, 1.0); }
+                }
+                c = mix(cB, cA, h);
+                id = select(idB, idA, h >= 0.5);
             }
 
             sp = sp - 1;

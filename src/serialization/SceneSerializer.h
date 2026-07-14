@@ -15,6 +15,7 @@ public:
     void OpenSceneFromSDFO();
     void SaveSceneToSDFO();
     void RefreshSceneBuffer();
+    void RefreshCsgBuffer();
 
 private:
     SceneManager& sceneManager;

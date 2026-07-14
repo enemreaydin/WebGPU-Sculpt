@@ -116,6 +116,13 @@ extern "C" {
         return g_App->ApplyOperation(opType);
     }
 
+    EMSCRIPTEN_KEEPALIVE void sdf_set_blend_mode(int nodeId, int mode) { if (g_App) g_App->SetBlendMode(nodeId, mode); }
+    EMSCRIPTEN_KEEPALIVE void sdf_set_blend_radius(int nodeId, float value) { if (g_App) g_App->SetBlendRadius(nodeId, value); }
+    EMSCRIPTEN_KEEPALIVE int sdf_add_roundness_modifier(int targetNodeId) { return g_App ? g_App->AddRoundnessModifier(targetNodeId) : -1; }
+    EMSCRIPTEN_KEEPALIVE void sdf_set_roundness_enabled(int nodeId, int enabled) { if (g_App) g_App->SetRoundnessEnabled(nodeId, enabled != 0); }
+    EMSCRIPTEN_KEEPALIVE void sdf_set_roundness_amount(int nodeId, float value) { if (g_App) g_App->SetRoundnessAmount(nodeId, value); }
+    EMSCRIPTEN_KEEPALIVE void sdf_remove_roundness_modifier(int nodeId) { if (g_App) g_App->RemoveRoundnessModifier(nodeId); }
+
     // Removes every currently-selected node (primitives + objects, op subtrees).
     EMSCRIPTEN_KEEPALIVE
         void sdf_delete_selection() {

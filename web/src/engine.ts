@@ -50,7 +50,8 @@ export interface SdfObject {
 }
 
 // One node of the engine's CSG tree. `type` is CsgNodeType
-// (0 = Primitive, 1 = Union, 2 = Subtract, 3 = Intersection, 4 = Group). `objectId` is
+// (0 = Primitive, 1 = Union, 2 = Subtract, 3 = Intersection, 4 = Group,
+// 5 = Modifier). `objectId` is
 // valid only for primitive nodes (-1 otherwise); `children` lists child nodeIds
 // in evaluation order (for Subtract, children[0] is the base that the rest are
 // subtracted from).
@@ -62,6 +63,12 @@ export interface CsgNodeJson {
   // node has no custom name; the UI then shows a generated default label.
   name?: string;
   children: number[];
+  blendMode: number;
+  blendRadius: number;
+  modifierType: number;
+  modifierId: number;
+  modifierAmount: number;
+  modifierEnabled: boolean;
 }
 
 export interface CsgTreeJson {
@@ -279,6 +286,13 @@ export class Engine {
   applyOperation(op: CsgOp): number {
     return this.call("sdf_apply_operation", "number", ["number"], [op]) as number;
   }
+
+  setBlendMode(nodeId: number, mode: number): void { this.call("sdf_set_blend_mode", null, ["number", "number"], [nodeId, mode]); }
+  setBlendRadius(nodeId: number, value: number): void { this.call("sdf_set_blend_radius", null, ["number", "number"], [nodeId, value]); }
+  addRoundnessModifier(nodeId: number): number { return this.call("sdf_add_roundness_modifier", "number", ["number"], [nodeId]) as number; }
+  setRoundnessEnabled(nodeId: number, enabled: boolean): void { this.call("sdf_set_roundness_enabled", null, ["number", "number"], [nodeId, enabled ? 1 : 0]); }
+  setRoundnessAmount(nodeId: number, value: number): void { this.call("sdf_set_roundness_amount", null, ["number", "number"], [nodeId, value]); }
+  removeRoundnessModifier(nodeId: number): void { this.call("sdf_remove_roundness_modifier", null, ["number"], [nodeId]); }
 
   // Removes every currently-selected node — primitives (and their objects) and
   // operation nodes (and their subtrees).

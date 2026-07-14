@@ -126,6 +126,29 @@ function FieldCtl({ f, wrapS, editS, showS, prefix }: any) {
   );
 }
 
+function NumericSliderRow({ cfg, value, open, caretPath, onToggleHelp, onBegin, onCommit, onChange, disabled }: any) {
+  const disp = cfg.int ? String(Math.round(value)) : String(Math.round(value * 10000) / 10000);
+  return (
+    <div style={css("display:flex;flex-direction:column;gap:3px")}>
+      <div style={css("display:flex;align-items:center;gap:6px")}>
+        <Hv onClick={onToggleHelp} s="flex:0 0 116px;display:flex;align-items:center;gap:4px;font-size:11px;color:#a0a0a0;cursor:default;overflow:hidden" h="color:#dedede">
+          <Ico d={`<svg width="9" height="9" viewBox="0 0 16 16"><path d="${caretPath}" fill="none" stroke="#6f6f6f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />
+          <span style={css("white-space:nowrap;overflow:hidden;text-overflow:ellipsis")}>{cfg.label}</span>
+        </Hv>
+        <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={value} disabled={disabled}
+          onPointerDown={disabled ? undefined : onBegin} onPointerUp={disabled ? undefined : onCommit} onPointerCancel={disabled ? undefined : onCommit}
+          onChange={disabled ? undefined : (e: any) => onChange(Number(e.target.value))}
+          style={css(`flex:1;min-width:0;height:4px;accent-color:#e8912d;cursor:${disabled ? "default" : "pointer"}`)} />
+        <input type="number" min={cfg.min} max={cfg.max} step={cfg.step} key={cfg.key + ":" + value} defaultValue={disp}
+          disabled={disabled} onBlur={disabled ? undefined : (e: any) => { onBegin(); onChange(Number(e.target.value)); onCommit(); }}
+          onKeyDown={(e: any) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          style={css("flex:0 0 56px;width:56px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 5px;box-sizing:border-box")} />
+      </div>
+      {open && <span style={css("font-size:10px;line-height:1.5;color:#8a8a8a;padding:0 6px 3px 15px")}>{cfg.help}</span>}
+    </div>
+  );
+}
+
 // ---- The editor component (logic ported verbatim from the mockup) ---------
 
 export default class App extends React.Component<any, any> {
@@ -258,6 +281,10 @@ export default class App extends React.Component<any, any> {
     advancedRender: false,
     // Which render-setting rows have their explanation expanded (keyed by setting key).
     renderHelp: {} as Record<string, boolean>,
+    modifierHelp: {} as Record<string, boolean>,
+    modifierMenu: false,
+    blendOpen: true,
+    roundnessOpen: true,
     renaming: null,
     renameText: "",
     // Engine-owned object list (rebuilt from engine.getScene() after each mutation).
@@ -269,7 +296,6 @@ export default class App extends React.Component<any, any> {
     counts: { sphere: 0, box: 0, cylinder: 0, torus: 0, collection: 0 },
     secT: true,
     secS: true,
-    secB: true,
     secC: true,
     ctx: null,
     picker: null,
@@ -871,30 +897,13 @@ export default class App extends React.Component<any, any> {
     const r = this.state.render || {};
     const val = typeof r[cfg.key] === "number" ? r[cfg.key] : cfg.min;
     const open = !!this.state.renderHelp[cfg.key];
-    const disp = cfg.int ? String(Math.round(val)) : String(Math.round(val * 10000) / 10000);
     return (
-      <div key={cfg.key} style={css("display:flex;flex-direction:column;gap:3px")}>
-        <div style={css("display:flex;align-items:center;gap:6px")}>
-          <Hv onClick={() => this.rsToggleHelp(cfg.key)} s="flex:0 0 116px;display:flex;align-items:center;gap:4px;font-size:11px;color:#a0a0a0;cursor:default;overflow:hidden" h="color:#dedede">
-            <Ico d={`<svg width="9" height="9" viewBox="0 0 16 16"><path d="${open ? this.IC.caretD : this.IC.caretR}" fill="none" stroke="#6f6f6f" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />
-            <span style={css("white-space:nowrap;overflow:hidden;text-overflow:ellipsis")}>{cfg.label}</span>
-          </Hv>
-          <input type="range" min={cfg.min} max={cfg.max} step={cfg.step} value={val}
-                        onPointerDown={() => this.engine?.beginSceneEdit("Change Render Setting")}
-                        onPointerUp={() => this.engine?.commitSceneEdit()}
-            onChange={(e: any) => this.rsSet(cfg, Number(e.target.value))}
-            style={css("flex:1;min-width:0;height:4px;accent-color:#e8912d;cursor:pointer")} />
-          <input type="number" min={cfg.min} max={cfg.max} step={cfg.step} key={cfg.key + ":" + val} defaultValue={disp}
-                        onBlur={(e: any) => {
-                            this.engine?.beginSceneEdit("Change Render Setting");
-                            this.rsSet(cfg, Number(e.target.value));
-                            this.engine?.commitSceneEdit();
-                        }}
-            onKeyDown={(e: any) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-            style={css("flex:0 0 56px;width:56px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 5px;box-sizing:border-box")} />
-        </div>
-        {open && <span style={css("font-size:10px;line-height:1.5;color:#8a8a8a;padding:0 6px 3px 15px")}>{cfg.help}</span>}
-      </div>
+      <NumericSliderRow key={cfg.key} cfg={cfg} value={val} open={open}
+        caretPath={open ? this.IC.caretD : this.IC.caretR}
+        onToggleHelp={() => this.rsToggleHelp(cfg.key)}
+        onBegin={() => this.engine?.beginSceneEdit("Change Render Setting")}
+        onCommit={() => this.engine?.commitSceneEdit()}
+        onChange={(value: number) => this.rsSet(cfg, value)} />
     );
   }
 
@@ -1713,16 +1722,30 @@ export default class App extends React.Component<any, any> {
       this.refresh();
       this.setState({ dd: false, saved: false });
     };
-    // Blend operation is a planned CSG feature — UI-only for now.
-    const opSet = (o: string) => () => {
-      const so = this.selObj();
-      if (!so) {
-        this.setState({ opDd: false });
-        return;
-      }
-      const id = String(so.id);
-      this.setState((s: any) => ({ opDd: false, saved: false, meta: { ...s.meta, [id]: { ...s.meta[id], op: o } } }));
-    };
+    // CSG and modifier values below are engine-owned; this view model only mirrors them.
+    const selectedKey = String(S.sel ?? "scene");
+    const selectedNode = selectedKey.startsWith("g")
+      ? S.tree?.nodes?.find((n: any) => n.nodeId === Number(selectedKey.slice(1))) || null
+      : S.tree?.nodes?.find((n: any) => n.type === 0 && n.objectId === Number(selectedKey)) || null;
+    const operationNode = selectedNode && selectedNode.type >= 1 && selectedNode.type <= 3 ? selectedNode : null;
+    const blendNode = operationNode?.blendMode === 1 ? operationNode : null;
+    const selectedPrimitive = selectedNode?.type === 0 ? S.objects.find((o: any) => o.id === selectedNode.objectId) : null;
+    const roundnessNode = selectedNode?.type === 0 && selectedNode.modifierType === 1 ? selectedNode : null;
+    const roundnessSupported = selectedPrimitive?.type === PrimitiveType.Box;
+    const refreshEdit = (fn: () => void) => { fn(); this.setState({ saved: false }); this.refresh(); };
+    const beginProperty = (name: string) => this.engine?.beginSceneEdit(name);
+    const commitProperty = () => { this.engine?.commitSceneEdit(); this.refresh(); };
+    const modifierOptions: any[] = [
+      { label: "Blend", disabled: !operationNode || !!blendNode,
+        reason: !operationNode ? "Select a CSG operation" : "Blend is already added",
+        onClick: () => operationNode && !blendNode && refreshEdit(() => this.engine!.setBlendMode(operationNode.nodeId, 1)) },
+      { label: "Roundness", disabled: !roundnessSupported || !!roundnessNode,
+        reason: !roundnessSupported ? "Select a supported primitive" : "Roundness is already added",
+        onClick: () => selectedNode && roundnessSupported && !roundnessNode && refreshEdit(() => this.engine!.addRoundnessModifier(selectedNode.nodeId)) },
+    ];
+    const roundnessSize = selectedPrimitive?.size || [];
+    const roundnessMax = roundnessSupported ? Math.max(0, Math.min(Number(roundnessSize[0]) || 0, Number(roundnessSize[1]) || 0, Number(roundnessSize[2]) || 0) - 0.00001) : 1;
+    const roundnessCfg = { key: "roundness", label: "Amount", min: 0, max: roundnessMax, step: roundnessMax > 0 ? Math.max(roundnessMax / 100, 0.0001) : 0.0001, help: "Rounds Box corners inward while preserving the original outer bounds." };
 
     // dock / tabs
     const dockTab = S.dockTab || P.dockTab || "timeline";
@@ -1982,7 +2005,6 @@ export default class App extends React.Component<any, any> {
       objTypeChip: isObj ? "SDF " + this.cap(selTypeName) : "",
       secTCaret: S.secT ? this.IC.caretD : this.IC.caretR, secTOpen: S.secT, onSecT: () => this.setState((s: any) => ({ secT: !s.secT })),
       secSCaret: S.secS ? this.IC.caretD : this.IC.caretR, secSOpen: S.secS, onSecS: () => this.setState((s: any) => ({ secS: !s.secS })),
-      secBCaret: S.secB ? this.IC.caretD : this.IC.caretR, secBOpen: S.secB, onSecB: () => this.setState((s: any) => ({ secB: !s.secB })),
       secCCaret: S.secC ? this.IC.caretD : this.IC.caretR, secCOpen: S.secC, onSecC: () => this.setState((s: any) => ({ secC: !s.secC })),
       transformRows, paramRows,
       typeName: isObj ? this.cap(selTypeName) : "",
@@ -1992,19 +2014,29 @@ export default class App extends React.Component<any, any> {
       },
       ddOpen: S.dd,
       typeOptions: ["sphere", "box", "cylinder", "torus", "link", "cone", "capsule", "solidAngle", "pyramid"].map((t) => ({ label: this.cap(t), fg: isObj && selTypeName === t ? "#e8912d" : "#d6d6d6", onClick: typeSet(t) })),
-      opName: d ? d.op : "",
-      opToggle: (e: any) => {
-        e.stopPropagation();
-        this.setState((s: any) => ({ opDd: !s.opDd, dd: false, openMenu: null }));
-      },
-      opOpen: S.opDd,
-      opOptions: ["Union", "Subtract", "Intersect", "Smooth Union"].map((o) => ({ label: o, fg: d && d.op === o ? "#e8912d" : "#d6d6d6", onClick: opSet(o) })),
-      smoothPct: d ? d.smooth * 100 + "%" : "0%",
-      smoothText: d ? d.smooth.toFixed(2) : "",
-      ...(() => {
-        const h = this.sliderH("smooth");
-        return { smDown: h.down, smMove: h.move, smUp: h.up };
-      })(),
+      operationNode,
+      blendNode,
+      roundnessNode,
+      hasModifierTarget: !!selectedNode,
+      modifierOptions,
+      modifierMenu: S.modifierMenu,
+       toggleModifierMenu: () => this.setState((s: any) => ({ modifierMenu: !s.modifierMenu })),
+      closeModifierMenu: () => this.setState({ modifierMenu: false }),
+      blendOpen: S.blendOpen,
+      roundnessOpen: S.roundnessOpen,
+      toggleBlendOpen: () => this.setState((s: any) => ({ blendOpen: !s.blendOpen })),
+      toggleRoundnessOpen: () => this.setState((s: any) => ({ roundnessOpen: !s.roundnessOpen })),
+      blendCfg: { key: "blend", label: "Amount", min: 0, max: 2, step: 0.01, help: "Smooths the selected CSG operation without changing its operation type or child order." },
+       roundnessCfg,
+      modifierHelp: S.modifierHelp,
+      toggleModifierHelp: (key: string) => this.setState((s: any) => ({ modifierHelp: { ...s.modifierHelp, [key]: !s.modifierHelp[key] } })),
+      beginProperty,
+      commitProperty,
+      setBlendAmount: (value: number) => blendNode && refreshEdit(() => this.engine!.setBlendRadius(blendNode.nodeId, Math.max(0, value))),
+      removeBlend: () => blendNode && refreshEdit(() => this.engine!.setBlendMode(blendNode.nodeId, 0)),
+      toggleRoundness: () => roundnessNode && refreshEdit(() => this.engine!.setRoundnessEnabled(roundnessNode.nodeId, !roundnessNode.modifierEnabled)),
+      removeRoundness: () => roundnessNode && refreshEdit(() => this.engine!.removeRoundnessModifier(roundnessNode.nodeId)),
+       setRoundnessAmount: (value: number) => roundnessNode && refreshEdit(() => this.engine!.setRoundnessAmount(roundnessNode.nodeId, Math.max(0, Math.min(roundnessCfg.max, value)))),
       colorCss, colorHex,
       onPickerOpen: (e: any) => {
         const r = e.currentTarget.getBoundingClientRect();
@@ -2020,8 +2052,8 @@ export default class App extends React.Component<any, any> {
       objCountText: this.countObjects() + " objects",
 
       // popups
-      anyPopup: !!(S.openMenu || S.ctx || S.picker || S.dd || S.opDd),
-      closeAll: () => this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false }),
+      anyPopup: !!(S.openMenu || S.ctx || S.picker || S.dd || S.opDd || S.modifierMenu),
+      closeAll: () => this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false, modifierMenu: false }),
       ctxOpen: !!S.ctx,
       ctxX: S.ctx ? Math.min(S.ctx.x, window.innerWidth - 200) + "px" : "0px",
       ctxY: S.ctx ? Math.min(S.ctx.y, window.innerHeight - 240) + "px" : "0px",
@@ -2509,33 +2541,6 @@ export default class App extends React.Component<any, any> {
                           </div>
                         )}
 
-                        {/* Blend */}
-                        <div onClick={V.onSecB} style={css("display:flex;align-items:center;gap:5px;height:24px;padding:0 8px;background:#262626;border-top:1px solid #0c0c0c;border-bottom:1px solid #0c0c0c;cursor:default")}>
-                          <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="${V.secBCaret}" fill="none" stroke="#8f8f8f" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />
-                          <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Blend</span>
-                        </div>
-                        {V.secBOpen && (
-                          <div style={css("display:flex;flex-direction:column;gap:6px;padding:8px 10px 10px")} title="Per-object blend — planned, not implemented yet">
-                            <div style={css("display:flex;align-items:center;gap:8px;opacity:0.4")}>
-                              <span style={css("flex:0 0 64px;font-size:11px;color:#8a8a8a")}>Operation</span>
-                              <div style={css("flex:1;position:relative")}>
-                                <div style={css("height:22px;display:flex;align-items:center;justify-content:space-between;background:#2a2a2a;border:1px solid #363636;border-radius:2px;padding:0 8px;font-size:11px;color:#8a8a8a;cursor:default")}>
-                                  <span>{V.opName}</span>
-                                  <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="#8a8a8a" stroke-width="1.4"></path></svg>`} />
-                                </div>
-                              </div>
-                            </div>
-                            <div style={css("display:flex;align-items:center;gap:8px;opacity:0.4")}>
-                              <span style={css("flex:0 0 64px;font-size:11px;color:#8a8a8a")}>Smooth</span>
-                              <div style={css("flex:1;height:22px;position:relative;background:#151515;border:1px solid #303030;border-radius:2px;overflow:hidden;cursor:default")}>
-                                <div style={css(`position:absolute;left:0;top:0;bottom:0;width:${V.smoothPct};background:rgba(232,145,45,0.25)`)} />
-                                <span style={css("position:absolute;right:8px;top:0;bottom:0;display:flex;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#8a8a8a")}>{V.smoothText}</span>
-                              </div>
-                            </div>
-                            <span style={css("font-size:10px;color:#5c5c5c;padding-top:2px")}>Planned — not implemented yet.</span>
-                          </div>
-                        )}
-
                         {/* Color */}
                         <div onClick={V.onSecC} style={css("display:flex;align-items:center;gap:5px;height:24px;padding:0 8px;background:#262626;border-top:1px solid #0c0c0c;border-bottom:1px solid #0c0c0c;cursor:default")}>
                           <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="${V.secCCaret}" fill="none" stroke="#8f8f8f" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />
@@ -2587,11 +2592,30 @@ export default class App extends React.Component<any, any> {
 
                 {V.isModTab && (
                   <div style={css("display:flex;flex-direction:column;gap:10px;padding:12px 10px")}>
-                    <div style={css("height:22px;display:flex;align-items:center;justify-content:space-between;background:#2a2a2a;border:1px solid #2e2e2e;border-radius:2px;padding:0 8px;font-size:11px;color:#616161;opacity:0.7;cursor:default")}>
-                      <span>Add Modifier</span>
-                      <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="#616161" stroke-width="1.4"></path></svg>`} />
+                    <div style={css("position:relative")}>
+                      <Hv tag="button" onClick={V.toggleModifierMenu} s="width:100%;height:22px;display:flex;align-items:center;justify-content:space-between;background:#2a2a2a;border:1px solid #363636;border-radius:2px;padding:0 8px;font-size:11px;color:#dedede;cursor:pointer" h="background:#333333;border-color:#404040">
+                        <span>Add Modifier</span><Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="M4.5 6.25 8 9.75l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.4"></path></svg>`} />
+                      </Hv>
+                      {V.modifierMenu && <div style={css("position:absolute;top:100%;left:0;right:0;margin-top:2px;background:#232323;border:1px solid #3a3a3a;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,0.55);padding:3px 0;z-index:400")}>
+                        {V.modifierOptions.map((o:any)=><Hv key={o.label} title={o.reason} onClick={()=>{if (!o.disabled) { o.onClick(); V.closeModifierMenu(); }}} s={`padding:4px 10px;font-size:11px;color:${o.disabled ? "#616161" : "#d6d6d6"};opacity:${o.disabled ? .65 : 1};cursor:${o.disabled ? "default" : "pointer"}`} h={o.disabled ? "" : "background:#2e2e2e"}>{o.label}</Hv>)}
+                      </div>}
                     </div>
-                    <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Modifier stack — planned</span>
+
+                    {V.blendNode && <div>
+                      <div onClick={V.toggleBlendOpen} style={css("display:flex;align-items:center;gap:5px;height:24px;padding:0 8px;background:#262626;border-top:1px solid #0c0c0c;border-bottom:1px solid #0c0c0c;cursor:default")}>
+                        <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="${V.blendOpen?this.IC.caretD:this.IC.caretR}" fill="none" stroke="#8f8f8f" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`}/><span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Blend</span><span style={css("flex:1")}/><Hv onClick={(e:any)=>{e.stopPropagation();V.removeBlend();}} s="font-size:10px;color:#a0a0a0;padding:2px 4px;cursor:default" h="color:#c4433b">Remove</Hv>
+                      </div>
+                      {V.blendOpen && <div style={css("padding:8px 10px 10px")}><NumericSliderRow cfg={V.blendCfg} value={V.blendNode.blendRadius} open={!!V.modifierHelp.blend} caretPath={V.modifierHelp.blend?this.IC.caretD:this.IC.caretR} onToggleHelp={()=>V.toggleModifierHelp("blend")} onBegin={()=>V.beginProperty("Change Blend Radius")} onCommit={V.commitProperty} onChange={V.setBlendAmount}/></div>}
+                    </div>}
+
+                    {V.roundnessNode && <div>
+                      <div onClick={V.toggleRoundnessOpen} style={css("display:flex;align-items:center;gap:5px;height:24px;padding:0 8px;background:#262626;border-top:1px solid #0c0c0c;border-bottom:1px solid #0c0c0c;cursor:default")}>
+                        <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="${V.roundnessOpen?this.IC.caretD:this.IC.caretR}" fill="none" stroke="#8f8f8f" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`}/><span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Roundness</span><span style={css("flex:1")}/><Hv onClick={(e:any)=>{e.stopPropagation();V.toggleRoundness();}} s="font-size:10px;color:#a0a0a0;padding:2px 4px;cursor:default" h="color:#dedede">{V.roundnessNode.modifierEnabled?"Enabled":"Disabled"}</Hv><Hv onClick={(e:any)=>{e.stopPropagation();V.removeRoundness();}} s="font-size:10px;color:#a0a0a0;padding:2px 4px;cursor:default" h="color:#c4433b">Remove</Hv>
+                      </div>
+                      {V.roundnessOpen && <div style={css(`padding:8px 10px 10px;opacity:${V.roundnessNode.modifierEnabled?1:.4}`)}><NumericSliderRow cfg={V.roundnessCfg} value={V.roundnessNode.modifierAmount} disabled={!V.roundnessNode.modifierEnabled} open={!!V.modifierHelp.roundness} caretPath={V.modifierHelp.roundness?this.IC.caretD:this.IC.caretR} onToggleHelp={()=>V.toggleModifierHelp("roundness")} onBegin={()=>V.beginProperty("Change Roundness Amount")} onCommit={V.commitProperty} onChange={V.setRoundnessAmount}/></div>}
+                    </div>}
+
+                    {!V.hasModifierTarget && <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Select a supported scene node.</span>}
                   </div>
                 )}
 

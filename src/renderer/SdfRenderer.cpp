@@ -176,7 +176,7 @@ void SdfRenderer::CreateSceneBuffer(
         noop.cmdType = static_cast<CsgCmdType>(-1);
         noop.operand = 0;
         noop.nodeId = -1;
-        noop.pad0 = 0;
+        noop.parameter = 0.0f;
         safeProgram.push_back(noop);
     }
 
@@ -205,6 +205,7 @@ void SdfRenderer::CreateSceneBuffer(
     }
 
     uint64_t bufferSize = safeObjects.size() * sizeof(SdfObjectData);
+    sceneBufferSize = bufferSize;
 
     wgpu::BufferDescriptor bufferDesc{};
     bufferDesc.size = bufferSize;
@@ -223,6 +224,7 @@ void SdfRenderer::CreateSceneBuffer(
 
     // CSG RPN program buffer (parallel to sceneBuffer).
     uint64_t programSize = safeProgram.size() * sizeof(CsgCommand);
+    csgProgramBufferSize = programSize;
 
     wgpu::BufferDescriptor programDesc{};
     programDesc.size = programSize;
@@ -277,6 +279,40 @@ void SdfRenderer::CreateSceneBuffer(
     }
 
     std::cout << "[BILGI]: SceneBuffer ve BindGroup olusturuldu.\n";
+}
+
+void SdfRenderer::UpdateSceneBuffer(
+    wgpu::Device device,
+    wgpu::Queue queue,
+    const std::vector<SdfObjectData>& objects,
+    const std::vector<CsgCommand>& csgProgram)
+{
+    const uint64_t objectBytes = objects.size() * sizeof(SdfObjectData);
+    const uint64_t commandBytes = csgProgram.size() * sizeof(CsgCommand);
+    if (!sceneBuffer || !csgProgramBuffer || objects.empty() || csgProgram.empty() ||
+        objectBytes != sceneBufferSize || commandBytes != csgProgramBufferSize)
+    {
+        CreateSceneBuffer(device, queue, objects, csgProgram);
+        return;
+    }
+
+    queue.writeBuffer(sceneBuffer, 0, objects.data(), objectBytes);
+    queue.writeBuffer(csgProgramBuffer, 0, csgProgram.data(), commandBytes);
+}
+
+void SdfRenderer::UpdateCsgProgramBuffer(
+    wgpu::Device device,
+    wgpu::Queue queue,
+    const std::vector<SdfObjectData>& objects,
+    const std::vector<CsgCommand>& csgProgram)
+{
+    const uint64_t commandBytes = csgProgram.size() * sizeof(CsgCommand);
+    if (!csgProgramBuffer || csgProgram.empty() || commandBytes != csgProgramBufferSize)
+    {
+        CreateSceneBuffer(device, queue, objects, csgProgram);
+        return;
+    }
+    queue.writeBuffer(csgProgramBuffer, 0, csgProgram.data(), commandBytes);
 }
 
 void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32_t height)
@@ -391,6 +427,8 @@ void SdfRenderer::ClearSceneBuffer()
         csgProgramBuffer.release();
         csgProgramBuffer = nullptr;
     }
+    sceneBufferSize = 0;
+    csgProgramBufferSize = 0;
 }
 
 void SdfRenderer::ReadObjectIdAt(wgpu::Device device, wgpu::Queue queue, int x, int y,

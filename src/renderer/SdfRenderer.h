@@ -23,6 +23,18 @@ public:
         const std::vector<SdfObjectData>& objects,
         const std::vector<CsgCommand>& csgProgram
     );
+    void UpdateSceneBuffer(
+        wgpu::Device device,
+        wgpu::Queue queue,
+        const std::vector<SdfObjectData>& objects,
+        const std::vector<CsgCommand>& csgProgram
+    );
+    void UpdateCsgProgramBuffer(
+        wgpu::Device device,
+        wgpu::Queue queue,
+        const std::vector<SdfObjectData>& objects,
+        const std::vector<CsgCommand>& csgProgram
+    );
 
     void ClearSceneBuffer();
 
@@ -72,4 +84,6 @@ private:
 
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;
+    uint64_t sceneBufferSize = 0;
+    uint64_t csgProgramBufferSize = 0;
 };

@@ -51,10 +51,14 @@ public:
     int32_t IndexForNodeId(int32_t nodeId) const;   // vector index of a live node, or -1
     void Detach(int32_t index);                     // unlink from parent, node stays alive
     void Reparent(int32_t childIndex, int32_t newParentIndex);
+    CsgNode* FindNodeById(int32_t nodeId);
+    const CsgNode* FindNodeById(int32_t nodeId) const;
 
 
 private:
     void CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, std::vector<CsgCommand>& outProgram) const;
+    void NormalizeLegacyModifierNodes();
+    bool RemoveLegacyModifierNode(int32_t modifierIndex);
 
     std::vector<CsgNode> m_Nodes;
     int32_t m_Root = -1;

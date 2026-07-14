@@ -80,6 +80,12 @@ public:
     void SelectNode(int nodeId, int mode);   // mode 0 = replace, 1 = toggle
     void ClearSelection();
     int  ApplyOperation(int opType);        
+    void SetBlendMode(int nodeId, int mode);
+    void SetBlendRadius(int nodeId, float value);
+    int  AddRoundnessModifier(int targetNodeId);
+    void SetRoundnessEnabled(int modifierNodeId, bool enabled);
+    void SetRoundnessAmount(int modifierNodeId, float value);
+    void RemoveRoundnessModifier(int modifierNodeId);
     void DeleteSelection();
     void BeginSceneEdit(const char* name);
     void CommitSceneEdit();
@@ -208,6 +214,7 @@ private:
     UndoStack m_UndoStack;
 
     void OnSceneChanged();
+    void OnCsgChanged();
 
     TransformTransaction m_TransformTransaction;
 
@@ -227,6 +234,7 @@ private:
     int m_SceneEditDepth = 0;
     std::string m_SceneEditName;
     SceneEditSnapshot m_SceneEditBefore{};
+    bool m_SceneEditChanged = false;
 
     SceneEditSnapshot CaptureSceneEditSnapshot() const;
     void FinishSceneEdit(const char* name, const SceneEditSnapshot& before);

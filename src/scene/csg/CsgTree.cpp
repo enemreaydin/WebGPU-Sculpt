@@ -2,6 +2,8 @@
 
 #include <fstream>
 #include <iostream>
+#include <algorithm>
+#include <cmath>
 
 namespace
 {
@@ -15,6 +17,17 @@ namespace
             case CsgNodeType::Subtract:     return CsgCmdType::OP_SUBTRACT;
             case CsgNodeType::Intersection: return CsgCmdType::OP_INTERSECTION;
             case CsgNodeType::Group:        return CsgCmdType::OP_UNION;   // pure container == union
+            default:                        return CsgCmdType::OP_UNION;
+        }
+    }
+
+    static CsgCmdType SmoothOpNodeTypeToCmdType(CsgNodeType type)
+    {
+        switch (type)
+        {
+            case CsgNodeType::Union:        return CsgCmdType::OP_SMOOTH_UNION;
+            case CsgNodeType::Subtract:     return CsgCmdType::OP_SMOOTH_SUBTRACT;
+            case CsgNodeType::Intersection: return CsgCmdType::OP_SMOOTH_INTERSECTION;
             default:                        return CsgCmdType::OP_UNION;
         }
     }
@@ -61,6 +74,32 @@ int32_t CsgTree::AddOperationNode(CsgNodeType opType, int32_t parent)
     }
 
     return index;
+}
+
+bool CsgTree::RemoveLegacyModifierNode(int32_t modifierIndex)
+{
+    if (modifierIndex < 0 || modifierIndex >= static_cast<int32_t>(m_Nodes.size())) return false;
+    CsgNode& modifier = m_Nodes[modifierIndex];
+    if (!modifier.alive || modifier.type != CsgNodeType::Modifier || modifier.firstChild == -1) return false;
+    const int32_t child = modifier.firstChild;
+    const int32_t parent = modifier.parent;
+    const int32_t prev = modifier.previousSibling;
+    const int32_t next = modifier.nextSibling;
+    CsgNode& childNode = m_Nodes[child];
+    childNode.parent = parent;
+    childNode.previousSibling = prev;
+    childNode.nextSibling = next;
+    if (parent != -1)
+    {
+        CsgNode& parentNode = m_Nodes[parent];
+        if (prev != -1) m_Nodes[prev].nextSibling = child; else parentNode.firstChild = child;
+        if (next != -1) m_Nodes[next].previousSibling = child; else parentNode.lastChild = child;
+    }
+    else m_Root = child;
+    modifier.firstChild = modifier.lastChild = -1;
+    modifier.parent = modifier.previousSibling = modifier.nextSibling = -1;
+    modifier.alive = false;
+    return true;
 }
 
 void CsgTree::AttachChild(int32_t parentIndex, int32_t childIndex)
@@ -149,7 +188,8 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
         cmd.cmdType = CsgCmdType::PUSH_OBJECT;
         cmd.operand = objectIdToIndex.at(node.objectId);
         cmd.nodeId = node.nodeId;
-        cmd.pad0 = 0;
+        cmd.parameter = node.modifierEnabled && node.modifierType == ModifierType::Roundness
+            ? std::max(node.modifierAmount, 0.0f) : 0.0f;
         outProgram.push_back(cmd);
         return;
     }
@@ -157,7 +197,8 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
     // Operation node: postorder walk of the child sibling chain. After every child
     // past the first, emit one binary op command. N children -> N-1 op commands
     // (n-ary-to-binary folding).
-    const CsgCmdType opCmd = OpNodeTypeToCmdType(node.type);
+    const CsgCmdType opCmd = node.blendMode == BlendMode::Smooth
+        ? SmoothOpNodeTypeToCmdType(node.type) : OpNodeTypeToCmdType(node.type);
     int32_t compiledChildren = 0;
 
     for (int32_t child = node.firstChild; child != -1; child = m_Nodes[child].nextSibling)
@@ -176,10 +217,22 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
             cmd.cmdType = opCmd;
             cmd.operand = 0;
             cmd.nodeId = node.nodeId;
-            cmd.pad0 = 0;
+            cmd.parameter = node.blendMode == BlendMode::Smooth ? std::max(node.blendRadius, 0.0f) : 0.0f;
             outProgram.push_back(cmd);
         }
     }
+}
+
+CsgNode* CsgTree::FindNodeById(int32_t nodeId)
+{
+    const int32_t index = IndexForNodeId(nodeId);
+    return index == -1 ? nullptr : &m_Nodes[index];
+}
+
+const CsgNode* CsgTree::FindNodeById(int32_t nodeId) const
+{
+    const int32_t index = IndexForNodeId(nodeId);
+    return index == -1 ? nullptr : &m_Nodes[index];
 }
 
 void CsgTree::Clear()
@@ -207,7 +260,9 @@ void CsgTree::RestoreState(const State& state)
 
 void CsgTree::WriteToStream(std::ostream& out) const
 {
-    // Size prefix (node count) followed by the raw node array, then the two scalars.
+    // Negative marker distinguishes the extended node layout from legacy raw arrays.
+    const int32_t formatMarker = -2;
+    out.write(reinterpret_cast<const char*>(&formatMarker), sizeof(formatMarker));
     int32_t nodeCount = static_cast<int32_t>(m_Nodes.size());
     out.write(reinterpret_cast<const char*>(&nodeCount), sizeof(int32_t));
     if (nodeCount > 0)
@@ -221,18 +276,49 @@ void CsgTree::WriteToStream(std::ostream& out) const
 void CsgTree::ReadFromStream(std::istream& in)
 {
     // Tolerate EOF gracefully: if the section is absent, leave the tree empty.
-    int32_t nodeCount = 0;
-    in.read(reinterpret_cast<char*>(&nodeCount), sizeof(int32_t));
-    if (!in || nodeCount < 0)
+    int32_t markerOrCount = 0;
+    in.read(reinterpret_cast<char*>(&markerOrCount), sizeof(int32_t));
+    if (!in)
     {
         Clear();
         return;
     }
 
+    const bool extended = markerOrCount == -2;
+    int32_t nodeCount = markerOrCount;
+    if (extended) in.read(reinterpret_cast<char*>(&nodeCount), sizeof(nodeCount));
+    if (!in || nodeCount < 0) { Clear(); return; }
+
     m_Nodes.assign(static_cast<size_t>(nodeCount), CsgNode{});
-    if (nodeCount > 0)
+    if (extended && nodeCount > 0)
     {
         in.read(reinterpret_cast<char*>(m_Nodes.data()), nodeCount * sizeof(CsgNode));
+    }
+    else if (nodeCount > 0)
+    {
+        struct LegacyCsgNode
+        {
+            CsgNodeType type;
+            int32_t nodeId;
+            int32_t objectId;
+            int32_t parent;
+            int32_t previousSibling;
+            int32_t nextSibling;
+            int32_t firstChild;
+            int32_t lastChild;
+            bool alive;
+        };
+        std::vector<LegacyCsgNode> legacy(static_cast<size_t>(nodeCount));
+        in.read(reinterpret_cast<char*>(legacy.data()), nodeCount * sizeof(LegacyCsgNode));
+        for (int32_t i = 0; i < nodeCount; ++i)
+        {
+            CsgNode& n = m_Nodes[static_cast<size_t>(i)];
+            const LegacyCsgNode& old = legacy[static_cast<size_t>(i)];
+            n.type = old.type; n.nodeId = old.nodeId; n.objectId = old.objectId;
+            n.parent = old.parent; n.previousSibling = old.previousSibling;
+            n.nextSibling = old.nextSibling; n.firstChild = old.firstChild;
+            n.lastChild = old.lastChild; n.alive = old.alive;
+        }
     }
     in.read(reinterpret_cast<char*>(&m_Root), sizeof(int32_t));
     in.read(reinterpret_cast<char*>(&m_NextNodeId), sizeof(int32_t));
@@ -241,6 +327,24 @@ void CsgTree::ReadFromStream(std::istream& in)
     {
         // Truncated/partial section — fall back to an empty tree.
         Clear();
+    }
+    else
+    {
+        NormalizeLegacyModifierNodes();
+    }
+}
+
+void CsgTree::NormalizeLegacyModifierNodes()
+{
+    for (int32_t i = 0; i < static_cast<int32_t>(m_Nodes.size()); ++i)
+    {
+        CsgNode& legacy = m_Nodes[i];
+        if (!legacy.alive || legacy.type != CsgNodeType::Modifier || legacy.firstChild == -1) continue;
+        CsgNode& target = m_Nodes[legacy.firstChild];
+        target.modifierType = legacy.modifierType;
+        target.modifierAmount = legacy.modifierAmount;
+        target.modifierEnabled = legacy.modifierEnabled;
+        RemoveLegacyModifierNode(i);
     }
 }
 

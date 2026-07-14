@@ -184,6 +184,14 @@ endif()
 # ============================================================
 
 if (NOT EMSCRIPTEN)
+    add_executable(csg_features_test
+        tests/CsgFeaturesTest.cpp
+        src/scene/SceneManager.cpp
+        src/scene/csg/CsgTree.cpp
+        src/editor/command/UndoStack.cpp
+    )
+    target_include_directories(csg_features_test PRIVATE src)
+
     add_executable(create_test_sdfo
         src/tools/create_test_sdfo.cpp
         src/serialization/ExtensionLoader.cpp
