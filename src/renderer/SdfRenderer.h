@@ -51,6 +51,17 @@ public:
     uint32_t GetRenderWidth() const;
     uint32_t GetRenderHeight() const;
 
+    // One-shot final image render. Reuses this renderer's pipeline, scene/CSG
+    // buffers and bind-group layout; only the target and globals snapshot are
+    // dedicated to the image request.
+    bool StartFinalRender(wgpu::Device device, wgpu::Queue queue,
+                          const GlobalsData& globals, uint32_t width, uint32_t height);
+    int GetFinalRenderState() const { return finalRenderState; }
+    const std::vector<uint8_t>& GetFinalPixels() const { return finalPixels; }
+    uint32_t GetFinalWidth() const { return finalWidth; }
+    uint32_t GetFinalHeight() const { return finalHeight; }
+    void ReleaseFinalRender();
+
     void Destroy();
 
 public:
@@ -81,6 +92,20 @@ private:
     // dropping it frees the std::function while the GPU still holds a pointer
     // to it, which corrupts the indirect call when the map completes.
     std::unique_ptr<wgpu::BufferMapCallback> pickMapCallback = nullptr;
+    std::unique_ptr<wgpu::BufferMapCallback> finalMapCallback = nullptr;
+
+    wgpu::Texture finalTexture = nullptr;
+    wgpu::TextureView finalView = nullptr;
+    wgpu::Texture finalIdTexture = nullptr;
+    wgpu::TextureView finalIdView = nullptr;
+    wgpu::Buffer finalGlobalsBuffer = nullptr;
+    wgpu::BindGroup finalBindGroup = nullptr;
+    wgpu::Buffer finalReadbackBuffer = nullptr;
+    std::vector<uint8_t> finalPixels;
+    int finalRenderState = 0; // 0 idle, 1 rendering, 2 reading, 3 ready, 4 failed
+    uint32_t finalWidth = 0;
+    uint32_t finalHeight = 0;
+    uint32_t finalPaddedBytesPerRow = 0;
 
     uint32_t renderWidth = 0;
     uint32_t renderHeight = 0;

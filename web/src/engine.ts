@@ -160,6 +160,7 @@ export interface SceneState {
 // Minimal shape of the Emscripten module we rely on.
 interface EmscriptenModule {
   canvas: HTMLCanvasElement;
+  HEAPU8: Uint8Array;
   // Resolves runtime asset URLs (.wasm, and the preloaded .data package).
   locateFile: (path: string, prefix: string) => string;
   ccall: (
@@ -517,6 +518,28 @@ export class Engine {
   // getScene().render.
   setRenderSetting(id: RenderSetting, value: number): void {
     this.call("sdf_set_render_setting", null, ["number", "number"], [id, value]);
+  }
+  setSelectionVisuals(show: boolean): void {
+    this.call("sdf_set_selection_visuals", null, ["number"], [show ? 1 : 0]);
+  }
+
+  async renderImage(width: number, height: number): Promise<Uint8ClampedArray> {
+    const started = this.call("sdf_start_final_render", "number", ["number", "number"], [width, height]) as number;
+    if (!started) throw new Error("The image render could not be started.");
+    try {
+      for (;;) {
+        const state = this.call("sdf_final_render_state", "number", [], []) as number;
+        if (state === 3) break;
+        if (state === 4) throw new Error("WebGPU image readback failed.");
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      }
+      const ptr = this.call("sdf_final_render_pixels", "number", [], []) as number;
+      const size = this.call("sdf_final_render_byte_size", "number", [], []) as number;
+      if (!ptr || size !== width * height * 4) throw new Error("The rendered pixel buffer is invalid.");
+      return new Uint8ClampedArray(this.module.HEAPU8.slice(ptr, ptr + size));
+    } finally {
+      this.call("sdf_release_final_render", null, [], []);
+    }
   }
 
   // ---- Translate gizmo ----------------------------------------------------

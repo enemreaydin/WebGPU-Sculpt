@@ -164,7 +164,7 @@ void SHORTCUTS_GRID_HTML;
 const SHORTCUT_ROW = (key: string, label: string) => `<div style="display:flex;align-items:center;gap:8px"><span style="display:inline-flex;min-width:22px;justify-content:center;padding:1px 6px;background:#2a2a2a;border:1px solid #3d3d3d;border-bottom-color:#0c0c0c;border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:#c9c9c9;white-space:nowrap">${key}</span><span style="font-size:11px;color:#a0a0a0">${label}</span></div>`;
 const SHORTCUT_COLUMN = (title: string, rows: string[][]) => `<div style="display:flex;flex-direction:column;gap:7px"><span style="font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#e8912d;margin-bottom:2px">${title}</span>${rows.map((r) => SHORTCUT_ROW(r[0], r[1])).join("")}</div>`;
 const ACTIVE_SHORTCUTS_GRID_HTML = `<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:26px">${SHORTCUT_COLUMN("General", [
-  ["F1", "Shortcut overlay"], ["Alt N", "New scene"], ["Ctrl O", "Open scene"],
+  ["F1", "Shortcut overlay"], ["F12", "Render Image"], ["Alt N", "New scene"], ["Ctrl O", "Open scene"],
   ["Ctrl S", "Save scene"], ["Ctrl Z", "Undo"], ["Ctrl Shift Z / Ctrl Y", "Redo"], ["Esc", "Cancel / Close"],
 ])}${SHORTCUT_COLUMN("Camera", [
   ["MMB", "Orbit"], ["Shift MMB", "Pan"], ["Wheel", "Zoom"],
@@ -331,6 +331,10 @@ export default class App extends React.Component<any, any> {
   _downPos: { x: number; y: number } | null = null;
   _didDrag = false;
   _gizmoDrag = false;                // dragging a gizmo axis
+  _cleanSnapshot: { renderedPreview: boolean; showOverlays: boolean; showObjectGizmos: boolean; tool: string; propsTab: string | null } | null = null;
+  _renderUrl: string | null = null;
+  _renderGeneration = 0;
+  _mounted = false;
   // The .sdfp project file the user is editing (File System Access API handle).
   // null until the first Save names one; kept so later Saves overwrite it silently.
   _fileHandle: FileSystemFileHandle | null = null;
@@ -358,6 +362,16 @@ export default class App extends React.Component<any, any> {
     // a viewport DISPLAY preference (like DPR), not scene state — it lives here,
     // not in the engine, and modulates what syncCanvasSize tells the engine to render.
     renderScale: 1,
+    renderedPreview: false,
+    showOverlays: true,
+    showObjectGizmos: true,
+    cleanPreview: false,
+    outputX: 1920,
+    outputY: 1080,
+    outputScale: 1,
+    renderStage: "idle",
+    renderResult: null as null | { url: string; width: number; height: number; fromClean: boolean },
+    resultFit: true,
     rightW: 300,
     dockH: 200,
     outlH: 300,
@@ -424,6 +438,7 @@ export default class App extends React.Component<any, any> {
   };
 
   componentDidMount() {
+    this._mounted = true;
     this._kd = (e: KeyboardEvent) => {
             const target = e.target as HTMLElement | null;
             const isEditable =
@@ -459,6 +474,16 @@ export default class App extends React.Component<any, any> {
             }
 
             if (e.repeat) return;
+
+            if (e.key === "F12") { e.preventDefault(); this.renderImage(); return; }
+
+            // Clean Preview is a camera-only input context. Keep framing and the
+            // render/exit commands, but never route edit shortcuts to the scene.
+            if (this.state.cleanPreview) {
+              if (e.code === "KeyF") { if (this.engine?.cameraFrameSelected()) e.preventDefault(); }
+              else if (e.code === "Home") { if (this.engine?.cameraFrameAll()) e.preventDefault(); }
+              return;
+            }
 
             const k = e.key.toLowerCase();
             const isCtrlOrCmd = e.ctrlKey || e.metaKey;
@@ -566,6 +591,8 @@ export default class App extends React.Component<any, any> {
   }
 
   componentWillUnmount() {
+    this._mounted = false;
+    this._renderGeneration++;
     window.removeEventListener("keydown", this._kd);
     if (this._pt) clearInterval(this._pt);
     if (this._ro) this._ro.disconnect();
@@ -573,6 +600,7 @@ export default class App extends React.Component<any, any> {
     if (this._navFrame !== null) cancelAnimationFrame(this._navFrame);
 
     if (this._rafId !== null) cancelAnimationFrame(this._rafId);
+    if (this._renderUrl) URL.revokeObjectURL(this._renderUrl);
 
   }
 
@@ -580,8 +608,10 @@ export default class App extends React.Component<any, any> {
   // drawn by the engine shader; it only shows for the move and rotate tools).
   componentDidUpdate(_prevProps: any, prevState: any) {
     if (!this.engine) return;
-    if (prevState.tool !== this.state.tool || prevState.gizmoSpace !== this.state.gizmoSpace) {
-      this.syncGizmo();
+    if (prevState.tool !== this.state.tool || prevState.gizmoSpace !== this.state.gizmoSpace ||
+        prevState.grid !== this.state.grid || prevState.showOverlays !== this.state.showOverlays ||
+        prevState.showObjectGizmos !== this.state.showObjectGizmos || prevState.cleanPreview !== this.state.cleanPreview) {
+      this.syncPreviewVisibility();
     }
     // Reset the transient group controls when the selection changes.
     if (prevState.sel !== this.state.sel && (this.state.groupHsv !== null || this.state.groupScaleUI !== 1)) {
@@ -594,7 +624,7 @@ export default class App extends React.Component<any, any> {
   syncGizmo() {
     if (!this.engine) return;
     const tool = this.state.tool;
-    this.engine.setGizmoEnabled(tool === "move" || tool === "rotate");
+    this.engine.setGizmoEnabled(!this.state.cleanPreview && this.state.showObjectGizmos && (tool === "move" || tool === "rotate"));
     this.engine.setGizmoMode(tool === "rotate" ? GizmoMode.Rotate : GizmoMode.Translate);
     this.engine.setGizmoSpace(this.state.gizmoSpace === "local" ? GizmoSpace.Local : GizmoSpace.World);
   }
@@ -613,8 +643,7 @@ export default class App extends React.Component<any, any> {
         this._ro = new ResizeObserver(() => this.syncCanvasSize());
         this._ro.observe(viewport);
         this.log("engine", "WebGPU device acquired — viewport ready");
-        engine.setShowGrid(this.state.grid);
-        this.syncGizmo();
+        this.syncPreviewVisibility();
         this.seedDemo();
         this.startFpsMeter();
       })
@@ -703,6 +732,7 @@ export default class App extends React.Component<any, any> {
   // (The engine draws the gizmo and computes its target; this only gates whether a
   // viewport press grabs an axis instead of orbiting.)
   gizmoActive(): boolean {
+    if (this.state.cleanPreview || !this.state.showObjectGizmos) return false;
     const tool = this.state.tool;
     if (!(tool === "move" || tool === "rotate") || !this.engine) return false;
     return !!this.selObj() || this.isGroupKey(this.state.sel);
@@ -750,7 +780,7 @@ export default class App extends React.Component<any, any> {
       (e.target as HTMLElement).releasePointerCapture(e.pointerId);
     } catch (_) {}
 
-    if (wasClick && this.engine && !this._pickInFlight) {
+    if (wasClick && !this.state.cleanPreview && this.engine && !this._pickInFlight) {
       // Pick in render (device) pixels — the same space the engine's object-id
       // target lives in. Using raw CSS coords (clientX - rect.left) mis-picks
       // whenever the canvas render size differs from its displayed CSS size.
@@ -800,6 +830,81 @@ export default class App extends React.Component<any, any> {
   snapCamera(x: number, y: number, z: number) {
     this.engine?.cameraSnap(x, y, z);
   }
+
+  // Derive temporary viewport visibility from persistent user preferences in
+  // one place so Clean Preview and async render UI cannot restore stale values.
+  syncPreviewVisibility() {
+    if (!this.engine) return;
+    const overlays = this.state.showOverlays && !this.state.cleanPreview;
+    this.engine.setShowGrid(!!this.state.grid && overlays);
+    this.engine.setSelectionVisuals(overlays);
+    this.syncGizmo();
+  }
+
+  setRenderedPreview(value: boolean) { this.setState({ renderedPreview: value, shading: value ? "rendered" : "solid" }); }
+  setOverlays(value: boolean) {
+    this.setState({ showOverlays: value });
+  }
+  setObjectGizmos(value: boolean) { this.setState({ showObjectGizmos: value }, () => this.syncGizmo()); }
+  enterCleanPreview = () => {
+    if (this.state.cleanPreview) return;
+    this._cleanSnapshot = { renderedPreview: this.state.renderedPreview, showOverlays: this.state.showOverlays,
+      showObjectGizmos: this.state.showObjectGizmos, tool: this.state.tool, propsTab: this.state.propsTab };
+    if (this._gizmoDrag) this.cancelGizmoDrag();
+    this.setState({ cleanPreview: true, renderedPreview: true, shading: "rendered", showOverlays: false,
+      showObjectGizmos: false, propsTab: "render", openMenu: null, ctx: null });
+  };
+  exitCleanPreview = () => {
+    const p = this._cleanSnapshot;
+    if (!p) return;
+    this._cleanSnapshot = null;
+    this.setState({ cleanPreview: false, renderedPreview: p.renderedPreview,
+      shading: p.renderedPreview ? "rendered" : "solid", showOverlays: p.showOverlays,
+      showObjectGizmos: p.showObjectGizmos, tool: p.tool, propsTab: p.propsTab });
+  };
+
+  outputSize() {
+    const w = Math.round(Number(this.state.outputX) * this.state.outputScale);
+    const h = Math.round(Number(this.state.outputY) * this.state.outputScale);
+    return { w, h, valid: Number.isInteger(Number(this.state.outputX)) && Number.isInteger(Number(this.state.outputY)) && w >= 64 && h >= 64 && w <= 4096 && h <= 4096 };
+  }
+  renderImage = async () => {
+    if (!this.engine || this.state.renderStage !== "idle") return;
+    const { w, h, valid } = this.outputSize();
+    if (!valid) return;
+    const fromClean = !!this.state.cleanPreview;
+    const generation = ++this._renderGeneration;
+    this.setState({ renderStage: "rendering", openMenu: null });
+    try {
+      const pixels = await this.engine.renderImage(w, h);
+      if (!this._mounted || generation !== this._renderGeneration) return;
+      this.setState({ renderStage: "reading" });
+      const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("PNG conversion is unavailable.");
+      const imageData = context.createImageData(w, h);
+      imageData.data.set(pixels);
+      context.putImageData(imageData, 0, 0);
+      const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((b) => b ? resolve(b) : reject(new Error("PNG conversion failed.")), "image/png"));
+      if (!this._mounted || generation !== this._renderGeneration) return;
+      if (this._renderUrl) URL.revokeObjectURL(this._renderUrl);
+      this._renderUrl = URL.createObjectURL(blob);
+      this.setState({ renderStage: "idle", resultFit: true, renderResult: { url: this._renderUrl, width: w, height: h, fromClean } });
+    } catch (error) {
+      if (!this._mounted || generation !== this._renderGeneration) return;
+      this.status("Render failed — " + String(error));
+      this.setState({ renderStage: "idle", renderResult: null });
+    }
+  };
+  closeRenderResult = () => {
+    // Keep the single latest result cached. Revoking a large decoded image at
+    // the same instant as revealing WebGPU caused avoidable compositor/GC work.
+    this.setState({ renderResult: null });
+  };
+  downloadRender = () => {
+    if (!this.state.renderResult) return;
+    const a = document.createElement("a"); a.href = this.state.renderResult.url; a.download = "sdf-render.png"; a.click();
+  };
 
   selectAll() {
     const tree = this.state.tree;
@@ -1697,7 +1802,6 @@ export default class App extends React.Component<any, any> {
   }
   toggleGrid() {
     const grid = !this.state.grid;
-    this.engine?.setShowGrid(grid);
     this.setState({ grid });
   }
 
@@ -2190,7 +2294,8 @@ export default class App extends React.Component<any, any> {
       ],
       mRender: { bg: mR.bg }, renderOpen: mR.open, mtRender: mR.mt, mhRender: mR.mh,
       renderItems: [
-        mi("Render Image", "F12", () => {}, true),
+        mi("Render Image", "F12", this.renderImage, S.renderStage !== "idle"),
+        mi(S.cleanPreview ? "Exit Clean Preview" : "Enter Clean Preview", "", S.cleanPreview ? this.exitCleanPreview : this.enterCleanPreview),
         mi("Render Animation", "", () => {}, true),
         sep,
         mi("Render Settings…", "", () => this.setState({ propsTab: "render" })),
@@ -2550,7 +2655,7 @@ export default class App extends React.Component<any, any> {
         {/* ============ MAIN ROW ============ */}
         <div style={css("flex:1 1 auto;display:flex;min-height:0")}>
           {/* Left toolbar */}
-          <div style={css("flex:0 0 34px;background:#1f1f1f;border-right:1px solid #0c0c0c;display:flex;flex-direction:column;align-items:center;padding-top:6px;gap:2px")}>
+          <div style={css(`flex:0 0 34px;background:#1f1f1f;border-right:1px solid #0c0c0c;display:flex;flex-direction:column;align-items:center;padding-top:6px;gap:2px;pointer-events:${this.state.cleanPreview ? "none" : "auto"};opacity:${this.state.cleanPreview ? .45 : 1}`)}>
             {[
               ["Add Sphere", V.addSphere, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
               ["Add Box", V.addBox, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75 14 4.9v6.2L8 14.25 2 11.1V4.9L8 1.75z M2 4.9l6 3.1 6-3.1 M8 8v6.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
@@ -2638,16 +2743,34 @@ export default class App extends React.Component<any, any> {
                 style={css("position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;background:#101010")}
               />
 
+              {this.state.renderStage !== "idle" && (
+                <div style={css("position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#101010") }>
+                  <span style={css("font-size:13px;color:#dedede")}>Rendering Image…</span>
+                  <span style={css("font-size:11px;color:#7a7a7a")}>{this.state.renderStage === "reading" ? "Reading image" : "Rendering"}</span>
+                </div>
+              )}
+              {this.state.renderResult && this.state.renderStage === "idle" && (
+                <div style={css("position:absolute;inset:0;display:flex;flex-direction:column;background:#101010") }>
+                  <div style={css("height:30px;flex:0 0 auto;display:flex;align-items:center;gap:4px;background:#1c1c1c;border-bottom:1px solid #333;padding:0 8px") }>
+                    <span style={css("font-size:11px;font-weight:600;margin-right:8px")}>Render Result</span>
+                    {[['Fit',()=>this.setState({resultFit:true}),this.state.resultFit],['1:1',()=>this.setState({resultFit:false}),!this.state.resultFit],['Download PNG',this.downloadRender,false],['Back',this.closeRenderResult,false]].map(([label,fn,on]:any)=><Hv key={label} tag="button" onClick={fn} s={`height:22px;padding:0 9px;background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};border:1px solid ${on?'#e8912d':'#363636'};border-radius:2px;font-size:11px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>)}
+                  </div>
+                  <div style={css(`flex:1;min-height:0;${this.state.resultFit ? 'display:flex;align-items:center;justify-content:center;overflow:hidden' : 'overflow:auto'}`)}>
+                    <img src={this.state.renderResult.url} draggable={false} style={this.state.resultFit ? css("display:block;max-width:100%;max-height:100%;width:auto;height:auto") : css(`display:block;width:${this.state.renderResult.width}px;height:${this.state.renderResult.height}px;margin:auto`)} />
+                  </div>
+                </div>
+              )}
+
               {/* The translate gizmo is drawn by the engine's SDF shader (same
                   frame as the scene), so there is no HTML/SVG overlay here. */}
 
-              <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>User Perspective</span>
+              {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>{this.state.cleanPreview ? "Clean Preview" : "User Perspective"}</span>}
 
               {/* FPS readout (top-right). Green >=50, amber 30-49, red <30. */}
-              <span style={css(`position:absolute;top:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;color:${this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps} FPS</span>
+              {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css(`position:absolute;top:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;color:${this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps} FPS</span>}
 
               {/* Viewport overlay toolbar */}
-              <div style={css("position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;background:rgba(28,28,28,0.92);border:1px solid #333333;border-radius:3px;padding:2px")}>
+              {this.state.showOverlays && !this.state.cleanPreview && !this.state.renderResult && this.state.renderStage === "idle" && <div style={css("position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;background:rgba(28,28,28,0.92);border:1px solid #333333;border-radius:3px;padding:2px")}>
                 {this.toolButton("Select (Q)", V.setSel, V.tSel, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M5.25 2.25v10.25l2.65-2.4 1.7 3.65 1.7-.8-1.7-3.55 3.4-.3z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>`)}
                 {this.toolButton("Move (G)", V.setMove, V.tMove, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.5v13 M1.5 8h13 M8 1.5 6.2 3.3 M8 1.5l1.8 1.8 M8 14.5l-1.8-1.8 M8 14.5l1.8-1.8 M1.5 8l1.8-1.8 M1.5 8l1.8 1.8 M14.5 8l-1.8-1.8 M14.5 8l-1.8 1.8" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round"></path></svg>`)}
                 {this.toolButton("Rotate (R)", V.setRot, V.tRot, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-2.05-4.28 M11.6 1.7l.25 2.45 2.45-.35" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg>`)}
@@ -2661,10 +2784,10 @@ export default class App extends React.Component<any, any> {
                 <div style={css("width:1px;height:14px;background:#333333;margin:0 4px")} />
                 {this.toolButton("Toggle Grid", V.onGrid, V.tgGrid, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M2.25 2.25h11.5v11.5H2.25z M2.25 6.08h11.5 M2.25 9.92h11.5 M6.08 2.25v11.5 M9.92 2.25v11.5" fill="none" stroke="currentColor" stroke-width="1"></path></svg>`)}
                 {this.toolButton("Snap", V.onSnap, V.tgSnap, `<svg width="15" height="15" viewBox="0 0 16 16"><path d="M3 2.25h3.25V7.5a1.75 1.75 0 0 0 3.5 0V2.25H13V7.5a5 5 0 0 1-10 0V2.25z M3 5h3.25 M9.75 5H13" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"></path></svg>`)}
-              </div>
+              </div>}
 
               {/* Axis gizmo */}
-              {V.showGizmo && (
+              {V.showGizmo && !this.state.renderResult && this.state.renderStage === "idle" && (
                 <NavigationGizmo yaw={this.state.navYaw} pitch={this.state.navPitch} onSnap={(x, y, z) => this.snapCamera(x, y, z)} />
               )}
             </div>
@@ -2777,7 +2900,7 @@ export default class App extends React.Component<any, any> {
           {/* Right column */}
           <div style={css(`flex:0 0 auto;width:${V.rightW};display:flex;flex-direction:column;min-width:0`)}>
             {/* Outliner */}
-            <div style={css(`flex:0 0 auto;height:${V.outlH};background:#1f1f1f;display:flex;flex-direction:column;min-height:0`)}>
+            <div style={css(`flex:0 0 auto;height:${V.outlH};background:#1f1f1f;display:flex;flex-direction:column;min-height:0;pointer-events:${this.state.cleanPreview ? 'none' : 'auto'};opacity:${this.state.cleanPreview ? .55 : 1}`)}>
               <div style={css("height:28px;flex:0 0 auto;display:flex;align-items:stretch;background:#1a1a1a;border-bottom:1px solid #0c0c0c")}>
                 <div style={css("display:flex;align-items:center;padding:0 14px;font-size:11px;background:#1f1f1f;color:#dedede;border-bottom:2px solid #e8912d;border-right:1px solid #0c0c0c")}>Outliner</div>
                 <div style={css("flex:1")} />
@@ -3005,6 +3128,26 @@ export default class App extends React.Component<any, any> {
                       <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Loading render settings…</span>
                     ) : (
                       <>
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Preview</span>
+                        {this.state.cleanPreview ? <>
+                          <span style={css("font-size:11px;color:#e8912d")}>Clean Preview Active</span>
+                          <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Camera navigation is enabled.<br/>Scene editing is disabled.</span>
+                          <div style={css("display:flex;gap:5px")}>
+                            <Hv tag="button" onClick={this.exitCleanPreview} s="flex:1;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Back to Editor</Hv>
+                            <Hv tag="button" onClick={this.renderImage} s="flex:1;height:24px;background:#e8912d;color:#151515;border:1px solid #e8912d;border-radius:2px;font-size:11px;cursor:pointer" h="background:#f0a24a">Render Image</Hv>
+                          </div>
+                        </> : <>
+                          {[["Rendered Preview","renderedPreview",(v:boolean)=>this.setRenderedPreview(v)],["Show Overlays","showOverlays",(v:boolean)=>this.setOverlays(v)],["Show Object Gizmos","showObjectGizmos",(v:boolean)=>this.setObjectGizmos(v)]].map(([label,key,setter]:any)=>{const on=!!this.state[key];return <div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><Hv onClick={()=>setter(!on)} s={`width:34px;height:18px;border-radius:9px;cursor:pointer;position:relative;background:${on?'#e8912d':'#3a3a3a'}`} h=""><span style={css(`position:absolute;top:2px;left:${on?'18px':'2px'};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)}/></Hv></div>})}
+                          <Hv tag="button" onClick={this.enterCleanPreview} s="width:100%;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Enter Clean Preview</Hv>
+                        </>}
+
+                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9;margin-top:4px")}>Output</span>
+                        {[['Resolution X','outputX'],['Resolution Y','outputY']].map(([label,key])=><div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><input type="number" min="64" max="4096" step="1" value={this.state[key]} onChange={(e)=>this.setState({[key]:e.target.value === '' ? '' : Number(e.target.value)})} style={css("width:86px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 7px")}/></div>)}
+                        <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>Output Scale</span><div style={css("display:flex;gap:3px")}>{[["50%",.5],["75%",.75],["100%",1]].map(([label,scale]:any)=>{const on=this.state.outputScale===scale;return <Hv key={label} onClick={()=>this.setState({outputScale:scale})} s={`height:22px;padding:0 7px;border:1px solid ${on?'#e8912d':'#363636'};background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};font-size:10px;border-radius:2px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>})}</div></div>
+                        <div style={css("display:flex;justify-content:space-between;font-size:10px;color:#7a7a7a")}><span>Calculated Size</span><span>{this.outputSize().valid ? `${this.outputSize().w} × ${this.outputSize().h}` : '64–4096 px required'}</span></div>
+                        <div style={css("display:flex;align-items:center;justify-content:space-between")}><span style={css("font-size:11px;color:#c0c0c0")}>File Format</span><span style={css("width:86px;height:22px;display:flex;align-items:center;padding:0 7px;background:#151515;border:1px solid #303030;border-radius:2px;font-size:11px")}>PNG</span></div>
+                        <Hv tag="button" onClick={this.outputSize().valid && this.state.renderStage==='idle' ? this.renderImage : undefined} s={`width:100%;height:24px;border-radius:2px;font-size:11px;border:1px solid ${this.outputSize().valid?'#e8912d':'#2e2e2e'};background:${this.outputSize().valid?'#e8912d':'#2a2a2a'};color:${this.outputSize().valid?'#151515':'#616161'};cursor:${this.outputSize().valid?'pointer':'default'}`} h={this.outputSize().valid?'background:#f0a24a':''}>Render Image</Hv>
+
                         <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Performance</span>
                         <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Render Resolution — the fastest way to speed up a slow viewport. Lower renders fewer pixels (the biggest cost) and upscales; the image gets softer but the framerate climbs.</span>
                         <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>

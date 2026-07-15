@@ -476,8 +476,125 @@ void SdfRenderer::ReadObjectIdAt(wgpu::Device device, wgpu::Queue queue, int x, 
     );
 }
 
+bool SdfRenderer::StartFinalRender(wgpu::Device device, wgpu::Queue queue,
+                                   const GlobalsData& snapshot, uint32_t width, uint32_t height)
+{
+    if (!device || !queue || !pipeline || !sceneBuffer || !csgProgramBuffer ||
+        finalRenderState == 1 || finalRenderState == 2 || width == 0 || height == 0)
+        return false;
+
+    ReleaseFinalRender();
+    finalWidth = width;
+    finalHeight = height;
+    finalPaddedBytesPerRow = ((width * 4u + 255u) / 256u) * 256u;
+
+    wgpu::TextureDescriptor colorDesc{};
+    colorDesc.size = { width, height, 1 };
+    colorDesc.format = renderTargetFormat;
+    colorDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
+    colorDesc.dimension = wgpu::TextureDimension::_2D;
+    colorDesc.mipLevelCount = 1;
+    colorDesc.sampleCount = 1;
+    finalTexture = device.createTexture(colorDesc);
+    finalView = finalTexture.createView();
+
+    wgpu::TextureDescriptor idDesc = colorDesc;
+    idDesc.format = objectIdTargetFormat;
+    idDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    finalIdTexture = device.createTexture(idDesc);
+    finalIdView = finalIdTexture.createView();
+
+    wgpu::BufferDescriptor globalsDesc{};
+    globalsDesc.size = sizeof(GlobalsData);
+    globalsDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    finalGlobalsBuffer = device.createBuffer(globalsDesc);
+    queue.writeBuffer(finalGlobalsBuffer, 0, &snapshot, sizeof(snapshot));
+
+    wgpu::BindGroupEntry entries[3]{};
+    entries[0].binding = 0; entries[0].buffer = sceneBuffer; entries[0].size = sceneBufferSize;
+    entries[1].binding = 1; entries[1].buffer = finalGlobalsBuffer; entries[1].size = sizeof(GlobalsData);
+    entries[2].binding = 2; entries[2].buffer = csgProgramBuffer; entries[2].size = csgProgramBufferSize;
+    wgpu::BindGroupDescriptor bgDesc{};
+    bgDesc.layout = bindGroupLayout; bgDesc.entryCount = 3; bgDesc.entries = entries;
+    finalBindGroup = device.createBindGroup(bgDesc);
+
+    wgpu::BufferDescriptor readDesc{};
+    readDesc.size = static_cast<uint64_t>(finalPaddedBytesPerRow) * height;
+    readDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    finalReadbackBuffer = device.createBuffer(readDesc);
+    if (!finalTexture || !finalView || !finalIdTexture || !finalIdView ||
+        !finalGlobalsBuffer || !finalBindGroup || !finalReadbackBuffer) {
+        ReleaseFinalRender();
+        return false;
+    }
+
+    wgpu::RenderPassColorAttachment attachments[2]{};
+    attachments[0].view = finalView;
+    attachments[0].loadOp = wgpu::LoadOp::Clear;
+    attachments[0].storeOp = wgpu::StoreOp::Store;
+    attachments[0].clearValue = WGPUColor{0.1, 0.1, 0.12, 1.0};
+    attachments[1].view = finalIdView;
+    attachments[1].loadOp = wgpu::LoadOp::Clear;
+    attachments[1].storeOp = wgpu::StoreOp::Discard;
+    attachments[1].clearValue = WGPUColor{4294967295.0, 0, 0, 0};
+#ifdef __EMSCRIPTEN__
+    attachments[0].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    attachments[1].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
+    wgpu::RenderPassDescriptor passDesc{};
+    passDesc.colorAttachmentCount = 2; passDesc.colorAttachments = attachments;
+    wgpu::CommandEncoder encoder = device.createCommandEncoder();
+    wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
+    pass.setPipeline(pipeline); pass.setBindGroup(0, finalBindGroup, 0, nullptr); pass.draw(6, 1, 0, 0);
+    pass.end(); pass.release();
+
+    wgpu::ImageCopyTexture src{}; src.texture = finalTexture;
+    wgpu::ImageCopyBuffer dst{}; dst.buffer = finalReadbackBuffer;
+    dst.layout.bytesPerRow = finalPaddedBytesPerRow; dst.layout.rowsPerImage = height;
+    encoder.copyTextureToBuffer(src, dst, {width, height, 1});
+    wgpu::CommandBuffer commands = encoder.finish(); encoder.release();
+    queue.submit(1, &commands); commands.release();
+
+    finalRenderState = 2;
+    const uint64_t mappedSize = static_cast<uint64_t>(finalPaddedBytesPerRow) * height;
+    wgpu::Buffer bufferRef = finalReadbackBuffer;
+    finalMapCallback = bufferRef.mapAsync(wgpu::MapMode::Read, 0, mappedSize,
+        [this, bufferRef, mappedSize](wgpu::BufferMapAsyncStatus status) mutable {
+            if (status != wgpu::BufferMapAsyncStatus::Success) { finalRenderState = 4; return; }
+            const auto* source = static_cast<const uint8_t*>(bufferRef.getConstMappedRange(0, mappedSize));
+            finalPixels.resize(static_cast<size_t>(finalWidth) * finalHeight * 4u);
+            for (uint32_t y = 0; y < finalHeight; ++y) {
+                const uint8_t* row = source + static_cast<size_t>(y) * finalPaddedBytesPerRow;
+                uint8_t* out = finalPixels.data() + static_cast<size_t>(y) * finalWidth * 4u;
+                for (uint32_t x = 0; x < finalWidth; ++x) {
+                    // The configured browser surface is BGRA8; expose portable RGBA.
+                    out[x*4+0] = row[x*4+2]; out[x*4+1] = row[x*4+1];
+                    out[x*4+2] = row[x*4+0]; out[x*4+3] = row[x*4+3];
+                }
+            }
+            bufferRef.unmap();
+            finalRenderState = 3;
+        });
+    return true;
+}
+
+void SdfRenderer::ReleaseFinalRender()
+{
+    finalMapCallback.reset();
+    if (finalBindGroup) { finalBindGroup.release(); finalBindGroup = nullptr; }
+    if (finalGlobalsBuffer) { finalGlobalsBuffer.release(); finalGlobalsBuffer = nullptr; }
+    if (finalReadbackBuffer) { finalReadbackBuffer.release(); finalReadbackBuffer = nullptr; }
+    if (finalView) { finalView.release(); finalView = nullptr; }
+    if (finalTexture) { finalTexture.release(); finalTexture = nullptr; }
+    if (finalIdView) { finalIdView.release(); finalIdView = nullptr; }
+    if (finalIdTexture) { finalIdTexture.release(); finalIdTexture = nullptr; }
+    finalPixels.clear(); finalWidth = finalHeight = finalPaddedBytesPerRow = 0;
+    finalRenderState = 0;
+}
+
 void SdfRenderer::Destroy()
 {
+    ReleaseFinalRender();
     if (renderTargetView)
     {
         renderTargetView.release();

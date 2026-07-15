@@ -152,6 +152,29 @@ void Application::OnResize(int newWidth, int newHeight) {
     renderer.CreateRenderTarget(graphics.device, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 }
 
+bool Application::StartFinalRender(uint32_t outWidth, uint32_t outHeight) {
+    if (outWidth < 1 || outHeight < 1 || outWidth > 4096 || outHeight > 4096) return false;
+    GlobalsData finalGlobals = globals;
+    const float aspect = static_cast<float>(outWidth) / static_cast<float>(outHeight);
+    view = camera.GetViewMatrix();
+    proj = camera.GetProjectionMatrix(aspect);
+    finalGlobals.resolution[0] = static_cast<float>(outWidth);
+    finalGlobals.resolution[1] = static_cast<float>(outHeight);
+    finalGlobals.showGrid = 0;
+    finalGlobals.selectedIndex = -1;
+    finalGlobals.gizmoVisible = 0;
+    finalGlobals.qualityPad1 = 1;
+    glm::vec3 pos = camera.GetPosition(), target = camera.GetTargetPosition();
+    finalGlobals.cameraPos[0]=pos.x; finalGlobals.cameraPos[1]=pos.y; finalGlobals.cameraPos[2]=pos.z;
+    finalGlobals.cameraTarget[0]=target.x; finalGlobals.cameraTarget[1]=target.y; finalGlobals.cameraTarget[2]=target.z;
+    SyncRenderGlobals();
+    // SyncRenderGlobals writes the member; copy the current lighting values too.
+    finalGlobals = globals;
+    finalGlobals.resolution[0]=static_cast<float>(outWidth); finalGlobals.resolution[1]=static_cast<float>(outHeight);
+    finalGlobals.showGrid=0; finalGlobals.selectedIndex=-1; finalGlobals.gizmoVisible=0; finalGlobals.qualityPad1=1;
+    return renderer.StartFinalRender(graphics.device, graphics.queue, finalGlobals, outWidth, outHeight);
+}
+
 TextureView Application::GetNextSurfaceTextureView() {
     SurfaceTexture surfaceTexture;
     graphics.surface.getCurrentTexture(&surfaceTexture);
