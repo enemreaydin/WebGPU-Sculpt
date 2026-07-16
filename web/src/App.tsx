@@ -403,12 +403,15 @@ export default class App extends React.Component<any, any> {
     // id). Undefined = use the section's default; most default closed so the tab
     // opens compact (only the quick-setup block is always visible).
     rsec: {} as Record<string, boolean>,
+    // Left palette: false = compact icon rail, true = labeled panel with names.
+    leftExpanded: false,
     // Which render-setting rows have their explanation expanded (keyed by setting key).
     renderHelp: {} as Record<string, boolean>,
     modifierHelp: {} as Record<string, boolean>,
     modifierMenu: false,
-    // Toolbar "Smooth Boolean" flyout (Smooth Union/Subtract/Intersect).
-    smoothMenu: false,
+    // Left-rail flyout that is currently open ("add" | "bool"), or null. Used by the
+    // collapsed tool rail's Add / Boolean pop-out menus.
+    railFlyout: null as string | null,
     // Transient group-panel controls (groups store no color/scale of their own).
     // groupHsv = last colour picked for the group; groupScaleUI = the scale slider's
     // session-relative factor (1 = the size the group had when selected). Both reset
@@ -1161,6 +1164,35 @@ export default class App extends React.Component<any, any> {
   // scene JSON `render` object, `help` is the standard-user explanation, min/max
   // are the clamp bounds. General ("look") settings are cheap/free; the advanced
   // set trades speed for quality.
+  // Left palette data. Icons live here once and are shared by the collapsed icon
+  // rail and the expanded labeled panel. Primitives dispatch through addPrimitive(key);
+  // operations through runOp(key, smooth).
+  LEFT_PRIMS: Array<{ key: string; name: string; svg: string }> = [
+    { key: "sphere", name: "Sphere", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "box", name: "Box", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75 14 4.9v6.2L8 14.25 2 11.1V4.9L8 1.75z M2 4.9l6 3.1 6-3.1 M8 8v6.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "cylinder", name: "Cylinder", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3.75 4.2C3.75 3 5.65 2 8 2s4.25 1 4.25 2.2v7.6C12.25 13 10.35 14 8 14s-4.25-1-4.25-2.2V4.2z M3.75 4.2C3.75 5.4 5.65 6.4 8 6.4s4.25-1 4.25-2.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "torus", name: "Torus", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 4.25c3.7 0 6.75 1.7 6.75 3.75S11.7 11.75 8 11.75 1.25 10.05 1.25 8 4.3 4.25 8 4.25z M5.75 8c0-.7 1-1.25 2.25-1.25S10.25 7.3 10.25 8 9.25 9.25 8 9.25 5.75 8.7 5.75 8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "link", name: "Link", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M10 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "cone", name: "Cone", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2 14 13H2L8 2z M2 13c0 .8 2.7 1.5 6 1.5s6-.7 6-1.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "capsule", name: "Capsule", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2.25c-1.8 0-3.25 1.45-3.25 3.25v5c0 1.8 1.45 3.25 3.25 3.25s3.25-1.45 3.25-3.25v-5C11.25 3.7 9.8 2.25 8 2.25z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "solidAngle", name: "Solid Angle", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 8 8 2A6 6 0 0 1 13.2 5z M8 8 2.8 5A6 6 0 0 1 8 2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+    { key: "pyramid", name: "Pyramid", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2 14.5 12.5H1.5L8 2z M1.5 12.5 8 9.5l6.5 3 M8 2v7.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>` },
+  ];
+  LEFT_OPS: Array<{ key: string; name: string; svg: string }> = [
+    { key: "group", name: "Group", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2.75" width="12" height="10.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.6"></rect><circle cx="6.2" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.1"></circle><circle cx="9.8" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.1"></circle></svg>` },
+    { key: "union", name: "Union", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>` },
+    { key: "subtract", name: "Subtract", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path><path d="M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"></path></svg>` },
+    { key: "intersect", name: "Intersect", svg: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.55"></path><path d="M8 4.83A3.75 3.75 0 0 1 8 11.17A3.75 3.75 0 0 1 8 4.83z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>` },
+  ];
+
+  // Dispatch a left-palette operation. Group has no smooth variant.
+  runOp(key: string, smooth: boolean) {
+    if (key === "group") { this.csg("Group"); return; }
+    const name = key === "union" ? "Union" : key === "subtract" ? "Subtract" : "Intersect";
+    if (smooth) this.csgSmooth(name as "Union" | "Subtract" | "Intersect");
+    else this.csg(name);
+  }
+
   RENDER_SETTINGS = [
         {
             id: RenderSetting.LightIntensity, key: "lightIntensity", label: "Light Intensity", min: 0, max: 3, step: 0.05,
@@ -1871,7 +1903,7 @@ export default class App extends React.Component<any, any> {
     if (!e) return;
     const count = (this.state.selSet || []).filter((k: string) => k !== "scene").length;
     if (count < 2) {
-      this.setState({ smoothMenu: false });
+      this.setState({ railFlyout: null });
       this.status("Smooth " + op + " needs 2 or more selected objects");
       return;
     }
@@ -1890,20 +1922,20 @@ export default class App extends React.Component<any, any> {
         e.commitSceneEdit();
       }
     } catch (err) {
-      this.setState({ smoothMenu: false });
+      this.setState({ railFlyout: null });
       this.status("Smooth " + op + " failed — engine bridge missing");
       this.log("error", "Smooth " + op + ": " + String(err));
       return;
     }
     this.refresh();
     if (newNodeId < 0) {
-      this.setState({ smoothMenu: false });
+      this.setState({ railFlyout: null });
       this.status("Smooth " + op + " needs 2 or more selected objects");
       return;
     }
     this.setState((s: any) => ({
       saved: false,
-      smoothMenu: false,
+      railFlyout: null,
       expanded: { ...s.expanded, ["g" + newNodeId]: true },
     }));
     this.log("scene", "Smooth " + op + " applied");
@@ -1912,6 +1944,13 @@ export default class App extends React.Component<any, any> {
   toggleGrid() {
     const grid = !this.state.grid;
     this.setState({ grid });
+  }
+  // Frame the current selection in the viewport (falls back to framing the whole
+  // scene when nothing is selected). Engine owns the camera move.
+  frameSelected() {
+    const e = this.engine;
+    if (!e) return;
+    if (!e.cameraFrameSelected()) e.cameraFrameAll();
   }
 
     undo() {
@@ -2419,26 +2458,6 @@ export default class App extends React.Component<any, any> {
       unsaved: !S.saved,
       fileName: S.fileName || "untitled.sdfp",
 
-      // left toolbar
-      addSphere: () => this.addPrimitive("sphere"),
-      addBox: () => this.addPrimitive("box"),
-      addCyl: () => this.addPrimitive("cylinder"),
-      addTor: () => this.addPrimitive("torus"),
-      addLink: () => this.addPrimitive("link"),
-      addCone: () => this.addPrimitive("cone"),
-      addCaps: () => this.addPrimitive("capsule"),
-      addSolid: () => this.addPrimitive("solidAngle"),
-      addPyr: () => this.addPrimitive("pyramid"),
-      csgGroup: () => this.csg("Group"),
-      csgUnion: () => this.csg("Union"),
-      csgSub: () => this.csg("Subtract"),
-      csgInt: () => this.csg("Intersect"),
-      smoothMenu: S.smoothMenu,
-      csgSmoothToggle: () => this.setState((s: any) => ({ smoothMenu: !s.smoothMenu, dd: false, opDd: false, modifierMenu: false, openMenu: null })),
-      csgSmoothUnion: () => this.csgSmooth("Union"),
-      csgSmoothSub: () => this.csgSmooth("Subtract"),
-      csgSmoothInt: () => this.csgSmooth("Intersect"),
-
       // viewport
       vpCtx: (e: any) => {
         e.preventDefault();
@@ -2598,8 +2617,8 @@ export default class App extends React.Component<any, any> {
       objCountText: this.countObjects() + " objects",
 
       // popups
-      anyPopup: !!(S.openMenu || S.ctx || S.picker || S.dd || S.opDd || S.modifierMenu || S.smoothMenu),
-      closeAll: () => this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false, modifierMenu: false, smoothMenu: false }),
+      anyPopup: !!(S.openMenu || S.ctx || S.picker || S.dd || S.opDd || S.modifierMenu || S.railFlyout),
+      closeAll: () => this.setState({ openMenu: null, ctx: null, picker: null, dd: false, opDd: false, modifierMenu: false, railFlyout: null }),
       ctxOpen: !!S.ctx,
       ctxX: S.ctx ? Math.min(S.ctx.x, window.innerWidth - 200) + "px" : "0px",
       ctxY: S.ctx ? Math.min(S.ctx.y, window.innerHeight - 240) + "px" : "0px",
@@ -2763,76 +2782,127 @@ export default class App extends React.Component<any, any> {
 
         {/* ============ MAIN ROW ============ */}
         <div style={css("flex:1 1 auto;display:flex;min-height:0")}>
-          {/* Left toolbar */}
-          <div style={css(`flex:0 0 34px;background:#1f1f1f;border-right:1px solid #0c0c0c;display:flex;flex-direction:column;align-items:center;padding-top:6px;gap:2px;pointer-events:${this.state.cleanPreview ? "none" : "auto"};opacity:${this.state.cleanPreview ? .45 : 1}`)}>
-            {[
-              ["Add Sphere", V.addSphere, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75a6.25 6.25 0 1 0 0 12.5 6.25 6.25 0 0 0 0-12.5z M1.9 8c1.5 1.7 3.7 2.5 6.1 2.5s4.6-.8 6.1-2.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Box", V.addBox, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.75 14 4.9v6.2L8 14.25 2 11.1V4.9L8 1.75z M2 4.9l6 3.1 6-3.1 M8 8v6.25" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Cylinder", V.addCyl, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3.75 4.2C3.75 3 5.65 2 8 2s4.25 1 4.25 2.2v7.6C12.25 13 10.35 14 8 14s-4.25-1-4.25-2.2V4.2z M3.75 4.2C3.75 5.4 5.65 6.4 8 6.4s4.25-1 4.25-2.2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Torus", V.addTor, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 4.25c3.7 0 6.75 1.7 6.75 3.75S11.7 11.75 8 11.75 1.25 10.05 1.25 8 4.3 4.25 8 4.25z M5.75 8c0-.7 1-1.25 2.25-1.25S10.25 7.3 10.25 8 9.25 9.25 8 9.25 5.75 8.7 5.75 8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Link", V.addLink, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 5a2 2 0 1 0 0 4 2 2 0 0 0 0-4z M10 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Cone", V.addCone, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2 14 13H2L8 2z M2 13c0 .8 2.7 1.5 6 1.5s6-.7 6-1.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Capsule", V.addCaps, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2.25c-1.8 0-3.25 1.45-3.25 3.25v5c0 1.8 1.45 3.25 3.25 3.25s3.25-1.45 3.25-3.25v-5C11.25 3.7 9.8 2.25 8 2.25z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Solid Angle", V.addSolid, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 8 8 2A6 6 0 0 1 13.2 5z M8 8 2.8 5A6 6 0 0 1 8 2" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-              ["Add Pyramid", V.addPyr, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 2 14.5 12.5H1.5L8 2z M1.5 12.5 8 9.5l6.5 3 M8 2v7.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`],
-            ].map(([title, onClick, svg]: any, i) => (
-              <Hv
-                key={i}
-                tag="button"
-                title={title}
-                onClick={onClick}
-                s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:2px;color:#a8a8a8;cursor:pointer;padding:0"
-                h="background:#2e2e2e;color:#dedede"
-              >
+          {/* Left tool column — a Blender-style tool rail (transform tools, Add /
+              Boolean flyouts, object actions, view toggles) that expands into a
+              labeled, collapsible panel. */}
+          {(() => {
+            const lx = !!this.state.leftExpanded;
+            const cp = this.state.cleanPreview;
+            const tool = this.state.tool;
+            const fly = this.state.railFlyout;
+            const setFly = (k: string) => this.setState((s: any) => ({ railFlyout: s.railFlyout === k ? null : k }));
+            const chevron = (dir: "l" | "r") => `<svg width="12" height="12" viewBox="0 0 16 16"><path d="${dir === "r" ? "M6.25 4.5 9.75 8l-3.5 3.5" : "M9.75 4.5 6.25 8l3.5 3.5"}" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`;
+            const ICO: Record<string, string> = {
+              select: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3.5 2.6 12.2 8.1l-3.7.7 2.1 4.2-1.7.8-2.1-4.2-2.8 2.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>`,
+              move: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.6v12.8 M1.6 8h12.8 M8 1.6 6.1 3.6 M8 1.6l1.9 2 M8 14.4l-1.9-2 M8 14.4l1.9-2 M1.6 8l2-1.9 M1.6 8l2 1.9 M14.4 8l-2-1.9 M14.4 8l-2 1.9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>`,
+              rotate: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M12.6 5.2A5 5 0 1 0 13 8.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path><path d="M12.9 2.6 12.9 5.4 10.1 5.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`,
+              add: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 3v10 M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>`,
+              bool: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`,
+              frame: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 5.2V2.5h2.7 M13.5 5.2V2.5h-2.7 M2.5 10.8v2.7h2.7 M13.5 10.8v2.7h-2.7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path><circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.2"></circle></svg>`,
+              dup: `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"></rect><rect x="5.5" y="5.5" width="8" height="8" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"></rect></svg>`,
+              del: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3.5 4.5h9 M6.2 4.5V3h3.6v1.5 M4.6 4.5l.6 8.4a1 1 0 0 0 1 .9h3.6a1 1 0 0 0 1-.9l.6-8.4 M6.6 6.8v4.4 M9.4 6.8v4.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`,
+              grid: `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.1"></rect><path d="M6.17 2.5v11 M9.83 2.5v11 M2.5 6.17h11 M2.5 9.83h11" fill="none" stroke="currentColor" stroke-width="1.1"></path></svg>`,
+              snap: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M4.3 2.8v4.7a3.7 3.7 0 0 0 7.4 0V2.8H9v4.7a1.3 1.3 0 0 1-2.6 0V2.8z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path><path d="M4.3 5.4H6.4 M9 5.4h2.7" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`,
+            };
+            // Collapsed-rail icon button (26px). active = highlighted (tool/toggle on).
+            const rail = (title: string, svg: string, onClick: () => void, active: boolean) => (
+              <Hv tag="button" title={title} onClick={onClick}
+                s={`width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:${active ? "#2e2e2e" : "transparent"};border:none;border-radius:2px;color:${active ? "#e8912d" : "#a8a8a8"};cursor:pointer;padding:0;flex:0 0 auto`}
+                h="background:#2e2e2e;color:#dedede">
                 <Ico d={svg} />
               </Hv>
-            ))}
-            <div style={css("width:18px;height:1px;background:#333333;margin:4px 0")} />
-            {[
-              ["Group Selection", V.csgGroup, `<svg width="16" height="16" viewBox="0 0 16 16"><rect x="2" y="2.75" width="12" height="10.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.1" stroke-dasharray="2 1.6"></rect><circle cx="6.2" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.1"></circle><circle cx="9.8" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.1"></circle></svg>`],
-              ["Boolean Union", V.csgUnion, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
-              ["Boolean Subtract", V.csgSub, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path><path d="M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"></path></svg>`],
-              ["Boolean Intersect", V.csgInt, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.55"></path><path d="M8 4.83A3.75 3.75 0 0 1 8 11.17A3.75 3.75 0 0 1 8 4.83z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
-            ].map(([title, onClick, svg]: any, i) => (
-              <Hv
-                key={i}
-                tag="button"
-                title={title}
-                onClick={onClick}
-                s="width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:transparent;border:none;border-radius:2px;color:#a8a8a8;cursor:pointer;padding:0"
-                h="background:#2e2e2e;color:#dedede"
-              >
-                <Ico d={svg} />
+            );
+            const divRail = () => <div style={css("width:18px;height:1px;background:#333333;margin:3px 0;flex:0 0 auto")} />;
+            // One row inside a flyout / expanded group (icon + label). Closes any open flyout.
+            const item = (name: string, svg: string, onClick: () => void) => (
+              <Hv key={name} tag="button" title={name} onClick={() => { this.setState({ railFlyout: null }); onClick(); }}
+                s="width:100%;display:flex;align-items:center;gap:8px;padding:5px 10px;background:transparent;border:none;font-size:11px;color:#d6d6d6;cursor:pointer;text-align:left" h="background:#2e2e2e;color:#ffffff">
+                <span style={css("flex:0 0 16px;height:16px;display:flex;align-items:center;justify-content:center;color:#a8a8a8")}><Ico d={svg} /></span>
+                <span>{name}</span>
               </Hv>
-            ))}
-            {/* Smooth Boolean — opens a flyout of the smooth variants; the engine
-                owns them via blendMode/blendRadius (see csgSmooth). */}
-            <div style={css("position:relative")}>
-              <Hv
-                tag="button"
-                title="Smooth Boolean"
-                onClick={V.csgSmoothToggle}
-                s={`width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:${V.smoothMenu ? "#2e2e2e" : "transparent"};border:none;border-radius:2px;color:${V.smoothMenu ? "#e8912d" : "#a8a8a8"};cursor:pointer;padding:0`}
-                h="background:#2e2e2e;color:#dedede"
-              >
-                <Ico d={`<svg width="16" height="16" viewBox="0 0 16 16"><path d="M5.5 4.5a3.5 3.5 0 0 0 0 7c.9 0 1.8-.3 2.5-.9.7.6 1.6.9 2.5.9a3.5 3.5 0 0 0 0-7c-.9 0-1.8.3-2.5.9C7.3 4.8 6.4 4.5 5.5 4.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>`} />
+            );
+            // Collapsed-rail flyout button: 26px icon that pops a menu to the right.
+            const flyBtn = (fkey: string, title: string, svg: string, items: any) => (
+              <div style={css("position:relative;flex:0 0 auto")}>
+                {rail(title, svg, () => setFly(fkey), fly === fkey)}
+                {fly === fkey && (
+                  <div style={css("position:absolute;left:calc(100% + 8px);top:0;min-width:154px;background:#232323;border:1px solid #3a3a3a;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,0.55);padding:3px 0;z-index:400")}>
+                    {items}
+                  </div>
+                )}
+              </div>
+            );
+            // Expanded-panel labeled row (highlights when active).
+            const prow = (name: string, svg: string, onClick: () => void, active: boolean) => (
+              <Hv key={name} tag="button" title={name} onClick={onClick}
+                s={`width:100%;display:flex;align-items:center;gap:9px;padding:5px 10px 5px 8px;background:${active ? "#2a2a2a" : "transparent"};border:none;border-left:2px solid ${active ? "#e8912d" : "transparent"};color:${active ? "#ffffff" : "#c2c2c2"};cursor:pointer;text-align:left;font-size:11px`}
+                h="background:#2e2e2e;color:#ffffff">
+                <span style={css(`flex:0 0 16px;height:16px;display:flex;align-items:center;justify-content:center;color:${active ? "#e8912d" : "#9a9a9a"}`)}><Ico d={svg} /></span>
+                <span>{name}</span>
               </Hv>
-              {V.smoothMenu && (
-                <div style={css("position:absolute;left:calc(100% + 8px);top:0;min-width:152px;background:#232323;border:1px solid #3a3a3a;border-radius:2px;box-shadow:0 8px 24px rgba(0,0,0,0.55);padding:3px 0;z-index:400")}>
-                  {[
-                    ["Smooth Union", V.csgSmoothUnion, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
-                    ["Smooth Subtract", V.csgSmoothSub, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path><path d="M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 2"></path></svg>`],
-                    ["Smooth Intersect", V.csgSmoothInt, `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.55"></path><path d="M8 4.83A3.75 3.75 0 0 1 8 11.17A3.75 3.75 0 0 1 8 4.83z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`],
-                  ].map(([label, onClick, svg]: any) => (
-                    <Hv key={label} tag="button" onClick={onClick} s="width:100%;display:flex;align-items:center;gap:8px;padding:5px 10px;background:transparent;border:none;font-size:11px;color:#d6d6d6;cursor:pointer;text-align:left" h="background:#2e2e2e;color:#ffffff">
-                      <span style={css("flex:0 0 16px;height:16px;display:flex;align-items:center;justify-content:center;color:#a8a8a8")}><Ico d={svg} /></span>
-                      <span>{label}</span>
-                    </Hv>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+            );
+            const pgroup = (key: string, title: string, rows: any) => (
+              <>
+                {this.rsecHeader(key, title, true)}
+                {this.rsecOpen(key, true) && <div style={css("display:flex;flex-direction:column;padding:3px 0 5px")}>{rows}</div>}
+              </>
+            );
+            return (
+              <div style={css(`flex:0 0 ${lx ? "184px" : "36px"};background:#1f1f1f;border-right:1px solid #0c0c0c;display:flex;flex-direction:column;pointer-events:${cp ? "none" : "auto"};opacity:${cp ? .45 : 1}`)}>
+                <Hv tag="button" title={lx ? "Collapse tools" : "Expand tools"}
+                  onClick={() => this.setState((s: any) => ({ leftExpanded: !s.leftExpanded, railFlyout: null }))}
+                  s={`display:flex;align-items:center;${lx ? "justify-content:space-between;padding:0 8px 0 10px" : "justify-content:center;padding:0"};height:28px;flex:0 0 auto;background:transparent;border:none;border-bottom:1px solid #141414;color:#8a8a8a;cursor:pointer`}
+                  h="color:#dedede">
+                  {lx && <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Tools</span>}
+                  <Ico d={chevron(lx ? "l" : "r")} />
+                </Hv>
+
+                {lx ? (
+                  <div style={css("flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column")}>
+                    {pgroup("lpTools", "Tools", [
+                      prow("Select", ICO.select, () => this.setState({ tool: "select" }), tool === "select"),
+                      prow("Move", ICO.move, () => this.setState({ tool: "move" }), tool === "move"),
+                      prow("Rotate", ICO.rotate, () => this.setState({ tool: "rotate" }), tool === "rotate"),
+                    ])}
+                    {pgroup("lpPrim", "Primitives", this.LEFT_PRIMS.map((p) => prow(p.name, p.svg, () => this.addPrimitive(p.key), false)))}
+                    {pgroup("lpBool", "Boolean", this.LEFT_OPS.map((o) => prow(o.name, o.svg, () => this.runOp(o.key, false), false)))}
+                    {pgroup("lpSmooth", "Smooth Boolean", this.LEFT_OPS.filter((o) => o.key !== "group").map((o) => prow("Smooth " + o.name, o.svg, () => this.runOp(o.key, true), false)))}
+                    {pgroup("lpAct", "Object", [
+                      prow("Frame Selected", ICO.frame, () => this.frameSelected(), false),
+                      prow("Duplicate", ICO.dup, () => this.duplicateSel(), false),
+                      prow("Delete", ICO.del, () => this.deleteSel(), false),
+                    ])}
+                    {pgroup("lpView", "View", [
+                      prow("Grid", ICO.grid, () => this.toggleGrid(), this.state.grid),
+                      prow("Snap", ICO.snap, () => this.setState((s: any) => ({ snap: !s.snap })), this.state.snap),
+                    ])}
+                  </div>
+                ) : (
+                  <div style={css("flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;padding:6px 0;gap:2px")}>
+                    {rail("Select", ICO.select, () => this.setState({ tool: "select" }), tool === "select")}
+                    {rail("Move", ICO.move, () => this.setState({ tool: "move" }), tool === "move")}
+                    {rail("Rotate", ICO.rotate, () => this.setState({ tool: "rotate" }), tool === "rotate")}
+                    {divRail()}
+                    {flyBtn("add", "Add primitive", ICO.add, this.LEFT_PRIMS.map((p) => item(p.name, p.svg, () => this.addPrimitive(p.key))))}
+                    {flyBtn("bool", "Boolean / Group", ICO.bool, [
+                      ...this.LEFT_OPS.map((o) => item(o.name, o.svg, () => this.runOp(o.key, false))),
+                      <div key="_sep" style={css("height:1px;background:#333333;margin:3px 8px")} />,
+                      ...this.LEFT_OPS.filter((o) => o.key !== "group").map((o) => item("Smooth " + o.name, o.svg, () => this.runOp(o.key, true))),
+                    ])}
+                    {divRail()}
+                    {rail("Frame Selected", ICO.frame, () => this.frameSelected(), false)}
+                    {rail("Duplicate", ICO.dup, () => this.duplicateSel(), false)}
+                    {rail("Delete", ICO.del, () => this.deleteSel(), false)}
+                    <div style={css("flex:1 1 auto;min-height:6px")} />
+                    {divRail()}
+                    {rail("Toggle Grid", ICO.grid, () => this.toggleGrid(), this.state.grid)}
+                    {rail("Toggle Snap", ICO.snap, () => this.setState((s: any) => ({ snap: !s.snap })), this.state.snap)}
+                    <div style={css("height:4px;flex:0 0 auto")} />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Center: viewport + bottom dock */}
           <div style={css("flex:1 1 auto;min-width:0;display:flex;flex-direction:column")}>
