@@ -39,6 +39,8 @@ struct Settings
     int   shadowSteps       = 64;     // shadow-ray step budget
     float shadowDistance    = 30.0f;  // how far shadow rays search for occluders
     int   aoSamples         = 5;      // ambient-occlusion taps (>= 2)
+    int   aaSamples         = 1;      // supersampling grid dimension N: NxN sub-pixel rays per pixel,
+                                      // averaged for anti-aliased silhouettes (1 = off; cost ~ N*N)
 };
 
 // Ids for Application::SetRenderSetting — shared with the web front-end
@@ -61,4 +63,5 @@ enum class RenderSetting : int
     AoSamples = 17,
     ShadowsEnabled = 18,
     AoEnabled = 19,
+    AaSamples = 20,
 };

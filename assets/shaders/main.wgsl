@@ -28,7 +28,7 @@ struct Globals {
     shadowMaxSteps : i32,
     shadowMaxDistance : f32,
     aoSamples : i32,
-    qualityPad0 : i32,
+    aaSamples : i32,
     shadowsEnabled : i32,
     aoEnabled : i32,
     qualityPad1 : i32,
@@ -77,25 +77,17 @@ fn toneMapAndEncode(linearColor : vec3f) -> vec3f {
     return pow(mapped, vec3f(1.0 / 2.2));
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> FragmentOutput {
+struct RayShade {
+    color : vec3f,
+    id : u32,
+}
+
+fn shadeRay(uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focalLength : f32) -> RayShade {
     let lightDirection = normalize(globals.lightDirection.xyz);
     let lightColor = globals.lightColor.xyz;
     let intensity = globals.lightIntensity;
     let ambient = globals.ambientColor.xyz;
 
-    let ratio = globals.resolution.x / globals.resolution.y;
-    let uv = vec2f(in.uv.x * ratio, in.uv.y);
-
-    let ro = globals.cameraPos.xyz;
-    let targetPoint = globals.cameraTarget.xyz;
-    let worldUp = vec3f(0.0, 1.0, 0.0);
-
-    let forward = normalize(targetPoint - ro);
-    let right = normalize(cross(forward, worldUp));
-    let up = cross(right, forward);
-
-    let focalLength = 2.414;
     let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
 
     var t = 0.0;
@@ -148,8 +140,52 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
         }
     }
 
+    var r : RayShade;
+    r.color = col;
+    r.id = id;
+    return r;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> FragmentOutput {
+    let ratio = globals.resolution.x / globals.resolution.y;
+    let uv = vec2f(in.uv.x * ratio, in.uv.y);
+
+    let ro = globals.cameraPos.xyz;
+    let targetPoint = globals.cameraTarget.xyz;
+    let worldUp = vec3f(0.0, 1.0, 0.0);
+
+    let forward = normalize(targetPoint - ro);
+    let right = normalize(cross(forward, worldUp));
+    let up = cross(right, forward);
+
+    let focalLength = 2.414;
+
+    let n = clamp(globals.aaSamples, 1, 8);
+
+    let center = shadeRay(uv, ro, right, up, forward, focalLength);
+    let id = center.id;
+
+    var col : vec3f;
+    if (n <= 1) {
+        col = center.color;
+    } else {
+        let uvPerPx = 2.0 / globals.resolution.y;
+        let inv = 1.0 / f32(n);
+        var accum = vec3f(0.0);
+        for (var sy = 0; sy < n; sy++) {
+            for (var sx = 0; sx < n; sx++) {
+                let off = (vec2f(f32(sx), f32(sy)) + 0.5) * inv - 0.5;
+                let uvS = uv + off * uvPerPx;
+                accum += shadeRay(uvS, ro, right, up, forward, focalLength).color;
+            }
+        }
+        col = accum * inv * inv;
+    }
+
     col = toneMapAndEncode(col);
 
+    let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
     col = overlayGizmo(col, uv, ro, rd, right, up, forward, focalLength);
 
     var out : FragmentOutput;

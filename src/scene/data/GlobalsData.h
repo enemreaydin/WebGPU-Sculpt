@@ -59,7 +59,9 @@ struct alignas(16) GlobalsData
     int32_t shadowMaxSteps    = 64;     // soft-shadow march iteration cap
     float   shadowMaxDistance = 30.0f;  // how far the shadow ray searches for occluders
     int32_t aoSamples         = 5;      // ambient-occlusion taps along the normal (keep >= 2)
-    int32_t qualityPad0       = 0;      // padding to 16-byte alignment
+    int32_t aaSamples         = 1;      // supersampling grid dimension N: fs_main fires NxN sub-pixel
+                                        // rays and averages them (1 = off / one ray = original look).
+                                        // Reuses a former pad slot, so the 240-byte layout is unchanged.
 
     // Feature toggles — let the user drop the two biggest optional per-pixel costs.
     // The shader guards the shadow/AO marches behind these uniform flags, so an

@@ -1088,6 +1088,7 @@ std::string Application::GetSceneJson() const {
         << ",\"shadowSteps\":" << rs.shadowSteps
         << ",\"shadowDistance\":" << rs.shadowDistance
         << ",\"aoSamples\":" << rs.aoSamples
+        << ",\"aaSamples\":" << rs.aaSamples
         << ",\"shadowsEnabled\":" << (rs.shadowsEnabled ? "true" : "false")
         << ",\"aoEnabled\":" << (rs.aoEnabled ? "true" : "false")
         << "}";
@@ -1454,6 +1455,7 @@ void Application::SyncRenderGlobals() {
     globals.shadowMaxSteps    = s.shadowSteps;
     globals.shadowMaxDistance = s.shadowDistance;
     globals.aoSamples         = s.aoSamples;
+    globals.aaSamples         = s.aaSamples;
     globals.shadowsEnabled    = s.shadowsEnabled ? 1 : 0;
     globals.aoEnabled         = s.aoEnabled ? 1 : 0;
 }
@@ -1488,6 +1490,9 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 1024); break;
     case RenderSetting::ShadowDistance:   appSettings.shadowDistance = std::clamp(value, 0.1f, 100000.0f); break;
     case RenderSetting::AoSamples:        appSettings.aoSamples = std::clamp(static_cast<int>(value + 0.5f), 2, 128); break;
+    // NxN supersampling grid dimension. Cost is O(N^2) rays/pixel, so the safety cap is low
+    // (well above the UI max of 4) to keep a rogue call from stalling the GPU.
+    case RenderSetting::AaSamples:        appSettings.aaSamples = std::clamp(static_cast<int>(value + 0.5f), 1, 8); break;
     case RenderSetting::ShadowsEnabled:   appSettings.shadowsEnabled = value != 0.0f; break;
     case RenderSetting::AoEnabled:         appSettings.aoEnabled = value != 0.0f; break;
     default: break;

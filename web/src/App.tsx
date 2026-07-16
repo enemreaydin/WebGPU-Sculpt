@@ -1228,6 +1228,10 @@ export default class App extends React.Component<any, any> {
 
   RENDER_ADVANCED = [
         {
+            id: RenderSetting.AaSamples, key: "aaSamples", label: "Anti-Aliasing", min: 1, max: 4, step: 1, int: true,
+            help: "Supersampling: rays fired per pixel along each axis (NxN). 1 = off (one ray, jagged edges). Higher fires more rays per pixel and averages them, smoothing silhouettes — 2 = 4 rays/pixel, 4 = 16. Big quality gain, but cost grows with the square, so it's a render-time dial rather than a realtime one."
+        },
+        {
             id: RenderSetting.MaxSteps, key: "maxSteps", label: "Max Ray Steps", min: 16, max: 512, step: 1, int: true,
             help: "How many steps each view ray may take. This is the MAIN performance dial: higher renders distant and thin shapes correctly but costs speed; too low and object edges dissolve or vanish."
         },
@@ -1293,6 +1297,7 @@ export default class App extends React.Component<any, any> {
         [RenderSetting.ShadowsEnabled, 0], [RenderSetting.AoEnabled, 0],
         [RenderSetting.MaxSteps, 64], [RenderSetting.HitEpsilon, 0.002], [RenderSetting.MaxDistance, 40],
         [RenderSetting.ShadowSteps, 16], [RenderSetting.ShadowDistance, 20], [RenderSetting.AoSamples, 3],
+        [RenderSetting.AaSamples, 1],
       ],
     },
     balanced: {
@@ -1301,6 +1306,7 @@ export default class App extends React.Component<any, any> {
         [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
         [RenderSetting.MaxSteps, 96], [RenderSetting.HitEpsilon, 0.001], [RenderSetting.MaxDistance, 50],
         [RenderSetting.ShadowSteps, 32], [RenderSetting.ShadowDistance, 30], [RenderSetting.AoSamples, 4],
+        [RenderSetting.AaSamples, 1],
       ],
     },
     high: {
@@ -1309,6 +1315,7 @@ export default class App extends React.Component<any, any> {
         [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
         [RenderSetting.MaxSteps, 128], [RenderSetting.HitEpsilon, 0.0008], [RenderSetting.MaxDistance, 60],
         [RenderSetting.ShadowSteps, 48], [RenderSetting.ShadowDistance, 30], [RenderSetting.AoSamples, 5],
+        [RenderSetting.AaSamples, 2],
       ],
     },
     ultra: {
@@ -1317,6 +1324,7 @@ export default class App extends React.Component<any, any> {
         [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
         [RenderSetting.MaxSteps, 256], [RenderSetting.HitEpsilon, 0.0004], [RenderSetting.MaxDistance, 80],
         [RenderSetting.ShadowSteps, 96], [RenderSetting.ShadowDistance, 40], [RenderSetting.AoSamples, 8],
+        [RenderSetting.AaSamples, 4],
       ],
     },
   };
