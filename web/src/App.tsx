@@ -399,6 +399,10 @@ export default class App extends React.Component<any, any> {
     render: null as any,
     // Whether the advanced (quality/performance) render settings are shown.
     advancedRender: false,
+    // Open/closed state of the Render tab's collapsible sections (keyed by section
+    // id). Undefined = use the section's default; most default closed so the tab
+    // opens compact (only the quick-setup block is always visible).
+    rsec: {} as Record<string, boolean>,
     // Which render-setting rows have their explanation expanded (keyed by setting key).
     renderHelp: {} as Record<string, boolean>,
     modifierHelp: {} as Record<string, boolean>,
@@ -1319,6 +1323,38 @@ export default class App extends React.Component<any, any> {
         onBegin={() => this.engine?.beginSceneEdit("Change Render Setting")}
         onCommit={() => this.engine?.commitSceneEdit()}
         onChange={(value: number) => this.rsSet(cfg, value)} />
+    );
+  }
+
+  // Render-tab collapsible sections. `def` is the fallback open-state used until
+  // the user first toggles the section (undefined in state = untouched).
+  rsecOpen(key: string, def: boolean) {
+    const v = (this.state.rsec || {})[key];
+    return v === undefined ? def : v;
+  }
+  rsecToggle(key: string, def: boolean) {
+    const next = !this.rsecOpen(key, def);
+    this.setState((s: any) => ({ rsec: { ...s.rsec, [key]: next } }));
+  }
+  // A full-width collapsible section header bar (matches the Object-tab section style).
+  rsecHeader(key: string, title: string, def: boolean) {
+    const open = this.rsecOpen(key, def);
+    return (
+      <div onClick={() => this.rsecToggle(key, def)} style={css("display:flex;align-items:center;gap:5px;height:24px;padding:0 8px;background:#262626;border-top:1px solid #0c0c0c;border-bottom:1px solid #0c0c0c;cursor:default")}>
+        <Ico d={`<svg width="11" height="11" viewBox="0 0 16 16"><path d="${open ? this.IC.caretD : this.IC.caretR}" fill="none" stroke="#8f8f8f" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />
+        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>{title}</span>
+      </div>
+    );
+  }
+  // Compact "label + pill switch" row used throughout the Render tab.
+  rsToggleRow(label: string, on: boolean, onClick: () => void) {
+    return (
+      <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+        <span style={css("font-size:11px;color:#c0c0c0")}>{label}</span>
+        <Hv onClick={onClick} s={`width:34px;height:18px;border-radius:9px;cursor:default;position:relative;flex:0 0 auto;background:${on ? "#e8912d" : "#3a3a3a"}`} h="">
+          <span style={css(`position:absolute;top:2px;left:${on ? "18px" : "2px"};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)} />
+        </Hv>
+      </div>
     );
   }
 
@@ -3196,106 +3232,94 @@ export default class App extends React.Component<any, any> {
                 )}
 
                 {V.isRenTab && (
-                  <div style={css("display:flex;flex-direction:column;gap:10px;padding:10px")}>
+                  <div style={css("display:flex;flex-direction:column")}>
                     {!this.state.render ? (
                       <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Loading render settings…</span>
                     ) : (
                       <>
-                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Preview</span>
-                        {this.state.cleanPreview ? <>
-                          <span style={css("font-size:11px;color:#e8912d")}>Clean Preview Active</span>
-                          <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Camera navigation is enabled.<br/>Scene editing is disabled.</span>
-                          <div style={css("display:flex;gap:5px")}>
-                            <Hv tag="button" onClick={this.exitCleanPreview} s="flex:1;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Back to Editor</Hv>
-                            <Hv tag="button" onClick={this.renderImage} s="flex:1;height:24px;background:#e8912d;color:#151515;border:1px solid #e8912d;border-radius:2px;font-size:11px;cursor:pointer" h="background:#f0a24a">Render Image</Hv>
+                        {/* Quick setup — the everyday dials, always visible and compact. */}
+                        <div style={css("display:flex;flex-direction:column;gap:9px;padding:10px")}>
+                          {this.state.cleanPreview && (
+                            <div style={css("display:flex;flex-direction:column;gap:6px;padding:8px;background:#211a11;border:1px solid #3a2c17;border-radius:3px")}>
+                              <span style={css("font-size:11px;color:#e8912d;font-weight:600")}>Clean Preview Active</span>
+                              <span style={css("font-size:10px;color:#8a8a8a")}>Navigation on · editing off</span>
+                              <div style={css("display:flex;gap:5px")}>
+                                <Hv tag="button" onClick={this.exitCleanPreview} s="flex:1;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Back to Editor</Hv>
+                                <Hv tag="button" onClick={this.renderImage} s="flex:1;height:24px;background:#e8912d;color:#151515;border:1px solid #e8912d;border-radius:2px;font-size:11px;cursor:pointer" h="background:#f0a24a">Render Image</Hv>
+                              </div>
+                            </div>
+                          )}
+                          <div style={css("display:flex;flex-direction:column;gap:5px")}>
+                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Quality Preset</span>
+                            <div style={css("display:flex;gap:4px")}>
+                              {["low", "balanced", "high", "ultra"].map((k) => {
+                                const active = this.state.perfProfile === k;
+                                return (
+                                  <Hv key={k} onClick={() => this.applyProfile(k)}
+                                    s={`flex:1 1 0;min-width:0;text-align:center;padding:5px 4px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
+                                    h={active ? "" : "border-color:#565656;color:#dedede"}>{this.PERF_PROFILES[k].label}</Hv>
+                                );
+                              })}
+                            </div>
+                            {this.state.perfProfile === "custom" && <span style={css("font-size:10px;color:#6f6f6f")}>Custom — fine-tuned. Pick a preset to reset.</span>}
                           </div>
-                        </> : <>
-                          {[["Rendered Preview","renderedPreview",(v:boolean)=>this.setRenderedPreview(v)],["Show Overlays","showOverlays",(v:boolean)=>this.setOverlays(v)],["Show Object Gizmos","showObjectGizmos",(v:boolean)=>this.setObjectGizmos(v)]].map(([label,key,setter]:any)=>{const on=!!this.state[key];return <div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><Hv onClick={()=>setter(!on)} s={`width:34px;height:18px;border-radius:9px;cursor:pointer;position:relative;background:${on?'#e8912d':'#3a3a3a'}`} h=""><span style={css(`position:absolute;top:2px;left:${on?'18px':'2px'};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)}/></Hv></div>})}
-                          <Hv tag="button" onClick={this.enterCleanPreview} s="width:100%;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Enter Clean Preview</Hv>
-                        </>}
-
-                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9;margin-top:4px")}>Output</span>
-                        {[['Resolution X','outputX'],['Resolution Y','outputY']].map(([label,key])=><div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><input type="number" min="64" max="4096" step="1" value={this.state[key]} onChange={(e)=>this.setState({[key]:e.target.value === '' ? '' : Number(e.target.value)})} style={css("width:86px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 7px")}/></div>)}
-                        <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>Output Scale</span><div style={css("display:flex;gap:3px")}>{[["50%",.5],["75%",.75],["100%",1]].map(([label,scale]:any)=>{const on=this.state.outputScale===scale;return <Hv key={label} onClick={()=>this.setState({outputScale:scale})} s={`height:22px;padding:0 7px;border:1px solid ${on?'#e8912d':'#363636'};background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};font-size:10px;border-radius:2px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>})}</div></div>
-                        <div style={css("display:flex;justify-content:space-between;font-size:10px;color:#7a7a7a")}><span>Calculated Size</span><span>{this.outputSize().valid ? `${this.outputSize().w} × ${this.outputSize().h}` : '64–4096 px required'}</span></div>
-                        <div style={css("display:flex;align-items:center;justify-content:space-between")}><span style={css("font-size:11px;color:#c0c0c0")}>File Format</span><span style={css("width:86px;height:22px;display:flex;align-items:center;padding:0 7px;background:#151515;border:1px solid #303030;border-radius:2px;font-size:11px")}>PNG</span></div>
-                        <Hv tag="button" onClick={this.outputSize().valid && this.state.renderStage==='idle' ? this.renderImage : undefined} s={`width:100%;height:24px;border-radius:2px;font-size:11px;border:1px solid ${this.outputSize().valid?'#e8912d':'#2e2e2e'};background:${this.outputSize().valid?'#e8912d':'#2a2a2a'};color:${this.outputSize().valid?'#151515':'#616161'};cursor:${this.outputSize().valid?'pointer':'default'}`} h={this.outputSize().valid?'background:#f0a24a':''}>Render Image</Hv>
-
-                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9")}>Performance</span>
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Quality Preset — one click sets resolution, shadows/AO, and all the raymarch budgets. Start here; the controls below fine-tune from a preset (which then reads as "Custom").</span>
-                        <div style={css("display:flex;gap:4px;flex-wrap:wrap")}>
-                          {["low", "balanced", "high", "ultra"].map((k) => {
-                            const active = this.state.perfProfile === k;
-                            return (
-                              <Hv key={k} onClick={() => this.applyProfile(k)}
-                                s={`flex:1 1 0;min-width:62px;text-align:center;padding:5px 6px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
-                                h={active ? "" : "border-color:#565656;color:#dedede"}>{this.PERF_PROFILES[k].label}</Hv>
-                            );
-                          })}
+                          <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
+                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Resolution</span>
+                            <div style={css("display:flex;align-items:center;gap:7px")}>
+                              <div style={css("display:flex;gap:4px")}>
+                                {[["50%", 0.5], ["75%", 0.75], ["100%", 1]].map(([lbl, sc]: any) => {
+                                  const active = (this.state.renderScale || 1) === sc;
+                                  return (
+                                    <Hv key={String(sc)} onClick={() => this.setRenderScale(sc as number)}
+                                      s={`padding:4px 9px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
+                                      h={active ? "" : "border-color:#565656;color:#dedede"}>{lbl}</Hv>
+                                  );
+                                })}
+                              </div>
+                              <span style={css("font-size:10px;color:#616161;font-variant-numeric:tabular-nums")}>{this.state.vpW}×{this.state.vpH}</span>
+                            </div>
+                          </div>
+                          <div style={css("display:flex;flex-direction:column;gap:6px")}>
+                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Effects</span>
+                            {this.rsToggleRow("Light", (this.state.render?.lightIntensity ?? 1) > 0, () => this.toggleLight(!((this.state.render?.lightIntensity ?? 1) > 0)))}
+                            {this.rsToggleRow("Shadows", (this.state.render as any)?.shadowsEnabled !== false, () => this.rsBool(RenderSetting.ShadowsEnabled, "shadowsEnabled", !((this.state.render as any)?.shadowsEnabled !== false)))}
+                            {this.rsToggleRow("Ambient Occlusion", (this.state.render as any)?.aoEnabled !== false, () => this.rsBool(RenderSetting.AoEnabled, "aoEnabled", !((this.state.render as any)?.aoEnabled !== false)))}
+                          </div>
                         </div>
-                        {this.state.perfProfile === "custom" && (
-                          <span style={css("font-size:10px;color:#7a7a7a;padding:0 2px")}>Custom — a preset was fine-tuned by hand. Pick a preset above to reset.</span>
+
+                        {this.rsecHeader("preview", "Preview", false)}
+                        {this.rsecOpen("preview", false) && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
+                            {this.rsToggleRow("Rendered Preview", !!this.state.renderedPreview, () => this.setRenderedPreview(!this.state.renderedPreview))}
+                            {this.rsToggleRow("Show Overlays", !!this.state.showOverlays, () => this.setOverlays(!this.state.showOverlays))}
+                            {this.rsToggleRow("Show Object Gizmos", !!this.state.showObjectGizmos, () => this.setObjectGizmos(!this.state.showObjectGizmos))}
+                            {!this.state.cleanPreview && <Hv tag="button" onClick={this.enterCleanPreview} s="width:100%;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Enter Clean Preview</Hv>}
+                          </div>
                         )}
 
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:6px 2px 0")}>Render Resolution — the fastest single dial. Lower renders fewer pixels (the biggest cost) and upscales; softer image, higher framerate.</span>
-                        <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
-                          <div style={css("display:flex;gap:4px")}>
-                            {[["50%", 0.5], ["75%", 0.75], ["100%", 1]].map(([lbl, sc]) => {
-                              const active = (this.state.renderScale || 1) === sc;
-                              return (
-                                <Hv key={String(sc)} onClick={() => this.setRenderScale(sc as number)}
-                                  s={`padding:4px 12px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
-                                  h={active ? "" : "border-color:#565656;color:#dedede"}>{lbl as string}</Hv>
-                              );
-                            })}
+                        {this.rsecHeader("export", "Export Image", false)}
+                        {this.rsecOpen("export", false) && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
+                            {[['Resolution X','outputX'],['Resolution Y','outputY']].map(([label,key])=><div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><input type="number" min="64" max="4096" step="1" value={this.state[key]} onChange={(e)=>this.setState({[key]:e.target.value === '' ? '' : Number(e.target.value)})} style={css("width:86px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 7px")}/></div>)}
+                            <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>Output Scale</span><div style={css("display:flex;gap:3px")}>{[["50%",.5],["75%",.75],["100%",1]].map(([label,scale]:any)=>{const on=this.state.outputScale===scale;return <Hv key={label} onClick={()=>this.setState({outputScale:scale})} s={`height:22px;padding:0 7px;border:1px solid ${on?'#e8912d':'#363636'};background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};font-size:10px;border-radius:2px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>})}</div></div>
+                            <div style={css("display:flex;justify-content:space-between;font-size:10px;color:#7a7a7a")}><span>Calculated Size</span><span>{this.outputSize().valid ? `${this.outputSize().w} × ${this.outputSize().h}` : '64–4096 px required'}</span></div>
+                            <div style={css("display:flex;align-items:center;justify-content:space-between")}><span style={css("font-size:11px;color:#c0c0c0")}>File Format</span><span style={css("width:86px;height:22px;display:flex;align-items:center;padding:0 7px;background:#151515;border:1px solid #303030;border-radius:2px;font-size:11px")}>PNG</span></div>
+                            <Hv tag="button" onClick={this.outputSize().valid && this.state.renderStage==='idle' ? this.renderImage : undefined} s={`width:100%;height:24px;border-radius:2px;font-size:11px;border:1px solid ${this.outputSize().valid?'#e8912d':'#2e2e2e'};background:${this.outputSize().valid?'#e8912d':'#2a2a2a'};color:${this.outputSize().valid?'#151515':'#616161'};cursor:${this.outputSize().valid?'pointer':'default'}`} h={this.outputSize().valid?'background:#f0a24a':''}>Render Image</Hv>
                           </div>
-                          <span style={css("font-size:10px;color:#616161")}>{this.state.vpW}×{this.state.vpH}</span>
-                        </div>
+                        )}
 
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive; with the light off they're skipped automatically.</span>
-                        <div style={css("display:flex;flex-direction:column;gap:6px")}>
-                          {(() => {
-                            const on = (this.state.render?.lightIntensity ?? 1) > 0;
-                            return (
-                              <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
-                                <span style={css("font-size:11px;color:#c0c0c0")}>Light</span>
-                                <Hv onClick={() => this.toggleLight(!on)}
-                                  s={`width:34px;height:18px;border-radius:9px;cursor:default;position:relative;flex:0 0 auto;background:${on ? "#e8912d" : "#3a3a3a"}`} h="">
-                                  <span style={css(`position:absolute;top:2px;left:${on ? "18px" : "2px"};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)} />
-                                </Hv>
-                              </div>
-                            );
-                          })()}
-                          {[["Shadows", RenderSetting.ShadowsEnabled, "shadowsEnabled"], ["Ambient Occlusion", RenderSetting.AoEnabled, "aoEnabled"]].map(([lbl, id, key]) => {
-                            const on = (this.state.render as any)?.[key as string] !== false;
-                            return (
-                              <div key={key as string} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
-                                <span style={css("font-size:11px;color:#c0c0c0")}>{lbl as string}</span>
-                                <Hv onClick={() => this.rsBool(id as number, key as string, !on)}
-                                  s={`width:34px;height:18px;border-radius:9px;cursor:default;position:relative;flex:0 0 auto;background:${on ? "#e8912d" : "#3a3a3a"}`} h="">
-                                  <span style={css(`position:absolute;top:2px;left:${on ? "18px" : "2px"};width:14px;height:14px;border-radius:50%;background:#f0f0f0`)} />
-                                </Hv>
-                              </div>
-                            );
-                          })}
-                        </div>
+                        {this.rsecHeader("look", "Lighting & Look", false)}
+                        {this.rsecOpen("look", false) && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
+                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Click a setting's name for a short explanation. These affect the look and cost little or no performance.</span>
+                            {this.RENDER_SETTINGS.map((cfg: any) => this.rsRow(cfg))}
+                          </div>
+                        )}
 
-                        <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;color:#c9c9c9;margin-top:4px")}>Lighting &amp; Look</span>
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>Click a setting's name for a short explanation. These affect the look and cost little or no performance.</span>
-                        <div style={css("display:flex;flex-direction:column;gap:8px")}>
-                          {this.RENDER_SETTINGS.map((cfg: any) => this.rsRow(cfg))}
-                        </div>
-
-                        <Hv onClick={() => this.setState((s: any) => ({ advancedRender: !s.advancedRender }))} s="display:flex;align-items:center;gap:7px;margin-top:2px;padding:7px 4px;border-top:1px solid #2a2a2a;cursor:default;font-size:11px;color:#a0a0a0" h="color:#dedede">
-                          <span style={css(`width:13px;height:13px;flex:0 0 auto;border:1px solid ${this.state.advancedRender ? "#e8912d" : "#454545"};border-radius:2px;background:${this.state.advancedRender ? "#e8912d" : "transparent"};display:flex;align-items:center;justify-content:center`)}>
-                            {this.state.advancedRender && <Ico d={`<svg width="9" height="9" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7.5" fill="none" stroke="#151515" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`} />}
-                          </span>
-                          <span>Advanced Settings (Quality / Performance)</span>
-                        </Hv>
-
-                        {this.state.advancedRender && (
-                          <div style={css("display:flex;flex-direction:column;gap:8px")}>
-                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:0 2px")}>These trade rendering speed for quality/range. Lower them if the viewport feels slow on your machine; raise them for crisper, more accurate images.</span>
+                        {this.rsecHeader("advanced", "Advanced Quality", false)}
+                        {this.rsecOpen("advanced", false) && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
+                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>These trade rendering speed for quality/range. Lower them if the viewport feels slow; raise them for crisper, more accurate images.</span>
                             {this.RENDER_ADVANCED.map((cfg: any) => this.rsRow(cfg))}
                           </div>
                         )}
