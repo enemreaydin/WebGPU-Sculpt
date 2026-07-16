@@ -118,16 +118,28 @@ public:
     // View
     void SetShowGrid(bool show) { showGrid = show; }
     bool GetShowGrid() const { return showGrid; }
+    void SetSelectionVisuals(bool show) { globals.qualityPad1 = show ? 0 : 1; }
 
     // Camera interaction (deltas in pixels / wheel ticks, accumulated per frame)
     void CameraOrbit(float dx, float dy);
     void CameraPan(float dx, float dy);
     void CameraZoom(float delta);
+    void CameraSnap(float x, float y, float z);
+    bool FrameSelected();
+    bool FrameAll();
+    float CameraYaw() const { return camera.GetYaw(); }
+    float CameraPitch() const { return camera.GetPitch(); }
 
     // Render settings. `id` is a RenderSetting (see Settings.h); ints are passed
     // as float and rounded. Writes appSettings; SyncRenderGlobals mirrors it into
     // the GPU uniform each frame.
     void SetRenderSetting(int id, float value);
+    bool StartFinalRender(uint32_t width, uint32_t height);
+    int FinalRenderState() const { return renderer.GetFinalRenderState(); }
+    const std::vector<uint8_t>& FinalRenderPixels() const { return renderer.GetFinalPixels(); }
+    uint32_t FinalRenderWidth() const { return renderer.GetFinalWidth(); }
+    uint32_t FinalRenderHeight() const { return renderer.GetFinalHeight(); }
+    void ReleaseFinalRender() { renderer.ReleaseFinalRender(); }
 
     // Gizmo. Mouse coords are in render (device) pixels, origin top-left.
     // GizmoHover returns the hit GizmoAxis (0 = none). GizmoDrag translates or

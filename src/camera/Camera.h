@@ -21,6 +21,10 @@ public:
 	void OrbitMovement(Settings appSettings, Vec2 delta);
 	void Zoom(Settings appSettings, float delta);
 	void TargetPan(Settings appSettings, Vec2 delta);
+	void SnapToDirection(const glm::vec3& direction);
+	void FrameBounds(const glm::vec3& center, float radius);
+	float GetYaw() const { return yaw; }
+	float GetPitch() const { return pitch; }
 private:
 	float yaw = 0.5f;
 	float pitch = 0.5f;

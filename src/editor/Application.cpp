@@ -13,6 +13,7 @@
 #include <cmath>
 #include <array>
 #include <memory>
+#include <limits>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -149,6 +150,29 @@ void Application::OnResize(int newWidth, int newHeight) {
     renderWidth = newWidth; renderHeight = newHeight;
     graphics.ConfigureSurface(width, height);
     renderer.CreateRenderTarget(graphics.device, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+}
+
+bool Application::StartFinalRender(uint32_t outWidth, uint32_t outHeight) {
+    if (outWidth < 1 || outHeight < 1 || outWidth > 4096 || outHeight > 4096) return false;
+    GlobalsData finalGlobals = globals;
+    const float aspect = static_cast<float>(outWidth) / static_cast<float>(outHeight);
+    view = camera.GetViewMatrix();
+    proj = camera.GetProjectionMatrix(aspect);
+    finalGlobals.resolution[0] = static_cast<float>(outWidth);
+    finalGlobals.resolution[1] = static_cast<float>(outHeight);
+    finalGlobals.showGrid = 0;
+    finalGlobals.selectedIndex = -1;
+    finalGlobals.gizmoVisible = 0;
+    finalGlobals.qualityPad1 = 1;
+    glm::vec3 pos = camera.GetPosition(), target = camera.GetTargetPosition();
+    finalGlobals.cameraPos[0]=pos.x; finalGlobals.cameraPos[1]=pos.y; finalGlobals.cameraPos[2]=pos.z;
+    finalGlobals.cameraTarget[0]=target.x; finalGlobals.cameraTarget[1]=target.y; finalGlobals.cameraTarget[2]=target.z;
+    SyncRenderGlobals();
+    // SyncRenderGlobals writes the member; copy the current lighting values too.
+    finalGlobals = globals;
+    finalGlobals.resolution[0]=static_cast<float>(outWidth); finalGlobals.resolution[1]=static_cast<float>(outHeight);
+    finalGlobals.showGrid=0; finalGlobals.selectedIndex=-1; finalGlobals.gizmoVisible=0; finalGlobals.qualityPad1=1;
+    return renderer.StartFinalRender(graphics.device, graphics.queue, finalGlobals, outWidth, outHeight);
 }
 
 TextureView Application::GetNextSurfaceTextureView() {
@@ -1134,6 +1158,51 @@ void Application::CameraPan(float dx, float dy) {
 
 void Application::CameraZoom(float delta) {
     viewportInput.scrollDelta += delta;
+}
+
+void Application::CameraSnap(float x, float y, float z) {
+    camera.SnapToDirection(glm::vec3(x, y, z));
+}
+
+namespace {
+bool ComputeFrameBounds(const std::vector<SdfObjectData>& objects,
+                        const EditorObjectStore& store, bool selectedOnly,
+                        glm::vec3& center, float& radius) {
+    glm::vec3 lo(std::numeric_limits<float>::max());
+    glm::vec3 hi(std::numeric_limits<float>::lowest());
+    bool found = false;
+    for (const SdfObjectData& object : objects) {
+        const EditorObject* editorObject = store.Find(object.objectId);
+        if ((selectedOnly && object.selected == 0) || (!selectedOnly && editorObject && !editorObject->visible)) continue;
+        const glm::vec3 position(object.position[0], object.position[1], object.position[2]);
+        const glm::vec3 extent(glm::abs(object.size[0]), glm::abs(object.size[1]), glm::abs(object.size[2]));
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) ||
+            !std::isfinite(extent.x) || !std::isfinite(extent.y) || !std::isfinite(extent.z)) continue;
+        lo = glm::min(lo, position - extent);
+        hi = glm::max(hi, position + extent);
+        found = true;
+    }
+    if (!found) return false;
+    center = (lo + hi) * 0.5f;
+    radius = glm::length(hi - lo) * 0.5f;
+    return std::isfinite(radius);
+}
+}
+
+bool Application::FrameSelected() {
+    glm::vec3 center;
+    float radius = 0.0f;
+    if (!ComputeFrameBounds(sceneManager.GetObjects(), editorStore, true, center, radius)) return false;
+    camera.FrameBounds(center, glm::max(radius, 0.1f));
+    return true;
+}
+
+bool Application::FrameAll() {
+    glm::vec3 center;
+    float radius = 0.0f;
+    if (!ComputeFrameBounds(sceneManager.GetObjects(), editorStore, false, center, radius)) return false;
+    camera.FrameBounds(center, glm::max(radius, 0.1f));
+    return true;
 }
 
 // ---------------------------------------------------------------------------

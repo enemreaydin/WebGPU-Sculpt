@@ -327,7 +327,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
             }
 
             var objColor = obj.color.xyz;
-            if (obj.selected == 1)
+            if (obj.selected == 1 && globals.qualityPad1 == 0)
             {
                 objColor = mix(objColor, vec3f(1.0), 0.4);
             }

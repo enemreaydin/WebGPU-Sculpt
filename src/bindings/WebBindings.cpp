@@ -306,12 +306,55 @@ extern "C" {
         if (g_App) g_App->CameraZoom(delta);
     }
 
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_camera_snap(float x, float y, float z) {
+        if (g_App) g_App->CameraSnap(x, y, z);
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        float sdf_camera_yaw() {
+        return g_App ? g_App->CameraYaw() : 0.0f;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        float sdf_camera_pitch() {
+        return g_App ? g_App->CameraPitch() : 0.0f;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        int sdf_camera_frame_selected() {
+        return g_App && g_App->FrameSelected() ? 1 : 0;
+    }
+
+    EMSCRIPTEN_KEEPALIVE
+        int sdf_camera_frame_all() {
+        return g_App && g_App->FrameAll() ? 1 : 0;
+    }
+
     // Set one render setting by RenderSetting id (see Settings.h). Ints are passed
     // as float. Read the current values back from sdf_get_scene_json().render.
     EMSCRIPTEN_KEEPALIVE
         void sdf_set_render_setting(int id, float value) {
         if (g_App) g_App->SetRenderSetting(id, value);
     }
+    EMSCRIPTEN_KEEPALIVE void sdf_set_selection_visuals(int show) {
+        if (g_App) g_App->SetSelectionVisuals(show != 0);
+    }
+
+    EMSCRIPTEN_KEEPALIVE int sdf_start_final_render(int width, int height) {
+        return g_App && g_App->StartFinalRender((uint32_t)width, (uint32_t)height) ? 1 : 0;
+    }
+    EMSCRIPTEN_KEEPALIVE int sdf_final_render_state() { return g_App ? g_App->FinalRenderState() : 4; }
+    EMSCRIPTEN_KEEPALIVE int sdf_final_render_width() { return g_App ? (int)g_App->FinalRenderWidth() : 0; }
+    EMSCRIPTEN_KEEPALIVE int sdf_final_render_height() { return g_App ? (int)g_App->FinalRenderHeight() : 0; }
+    EMSCRIPTEN_KEEPALIVE uintptr_t sdf_final_render_pixels() {
+        if (!g_App || g_App->FinalRenderPixels().empty()) return 0;
+        return reinterpret_cast<uintptr_t>(g_App->FinalRenderPixels().data());
+    }
+    EMSCRIPTEN_KEEPALIVE int sdf_final_render_byte_size() {
+        return g_App ? (int)g_App->FinalRenderPixels().size() : 0;
+    }
+    EMSCRIPTEN_KEEPALIVE void sdf_release_final_render() { if (g_App) g_App->ReleaseFinalRender(); }
 
     // --- Translate / rotate gizmo. Mouse coords are render/device pixels,
     // top-left origin.

@@ -160,6 +160,7 @@ export interface SceneState {
 // Minimal shape of the Emscripten module we rely on.
 interface EmscriptenModule {
   canvas: HTMLCanvasElement;
+  HEAPU8: Uint8Array;
   // Resolves runtime asset URLs (.wasm, and the preloaded .data package).
   locateFile: (path: string, prefix: string) => string;
   ccall: (
@@ -493,11 +494,52 @@ export class Engine {
     this.call("sdf_camera_zoom", null, ["number"], [delta]);
   }
 
+  cameraSnap(x: number, y: number, z: number): void {
+    this.call("sdf_camera_snap", null, ["number", "number", "number"], [x, y, z]);
+  }
+
+  cameraOrientation(): { yaw: number; pitch: number } {
+    return {
+      yaw: this.call("sdf_camera_yaw", "number", [], []) as number,
+      pitch: this.call("sdf_camera_pitch", "number", [], []) as number,
+    };
+  }
+
+  cameraFrameSelected(): boolean {
+    return (this.call("sdf_camera_frame_selected", "number", [], []) as number) !== 0;
+  }
+
+  cameraFrameAll(): boolean {
+    return (this.call("sdf_camera_frame_all", "number", [], []) as number) !== 0;
+  }
+
   // ---- Render settings ----------------------------------------------------
   // Set one render setting by RenderSetting id. Read current values back from
   // getScene().render.
   setRenderSetting(id: RenderSetting, value: number): void {
     this.call("sdf_set_render_setting", null, ["number", "number"], [id, value]);
+  }
+  setSelectionVisuals(show: boolean): void {
+    this.call("sdf_set_selection_visuals", null, ["number"], [show ? 1 : 0]);
+  }
+
+  async renderImage(width: number, height: number): Promise<Uint8ClampedArray> {
+    const started = this.call("sdf_start_final_render", "number", ["number", "number"], [width, height]) as number;
+    if (!started) throw new Error("The image render could not be started.");
+    try {
+      for (;;) {
+        const state = this.call("sdf_final_render_state", "number", [], []) as number;
+        if (state === 3) break;
+        if (state === 4) throw new Error("WebGPU image readback failed.");
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+      }
+      const ptr = this.call("sdf_final_render_pixels", "number", [], []) as number;
+      const size = this.call("sdf_final_render_byte_size", "number", [], []) as number;
+      if (!ptr || size !== width * height * 4) throw new Error("The rendered pixel buffer is invalid.");
+      return new Uint8ClampedArray(this.module.HEAPU8.slice(ptr, ptr + size));
+    } finally {
+      this.call("sdf_release_final_render", null, [], []);
+    }
   }
 
   // ---- Translate gizmo ----------------------------------------------------
