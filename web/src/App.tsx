@@ -2950,7 +2950,7 @@ export default class App extends React.Component<any, any> {
                           <span style={css("font-size:10px;color:#616161")}>{this.state.vpW}×{this.state.vpH}</span>
                         </div>
 
-                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive. With the light off, shadows are skipped automatically.</span>
+                        <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a;padding:2px 2px 0")}>Turn off effects you don't need — each skips its whole per-pixel march. Shadows are the most expensive; with the light off they're skipped automatically.</span>
                         <div style={css("display:flex;flex-direction:column;gap:6px")}>
                           {(() => {
                             const on = (this.state.render?.lightIntensity ?? 1) > 0;
