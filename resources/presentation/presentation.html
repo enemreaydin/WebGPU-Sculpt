@@ -228,6 +228,13 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
 .rpn-ctl:hover{border-color:var(--amber);color:var(--amber);background:var(--amber-soft)}
 .rpn-ctl:active{transform:translateY(1px)}
 .rpn-ctl:disabled{opacity:.35;cursor:default;border-color:var(--line-strong);color:var(--ink);background:#20242c;transform:none}
+.lrn-cols{display:grid;grid-template-columns:1fr 1fr;column-gap:26px;row-gap:11px;width:100%;max-width:1000px;margin:0 auto}
+.lrn-col{display:flex;flex-direction:column;gap:11px}
+.lrn{display:flex;align-items:center;gap:11px;font-family:var(--mono);font-size:13.5px;padding:10px 16px;border:1px solid var(--line);border-radius:999px;color:var(--ink-dim);background:rgba(255,255,255,.012);letter-spacing:.02em;opacity:.32;transform:translateX(-5px);transition:opacity .4s,transform .4s,border-color .4s,color .4s,background .4s}
+.lrn i{width:8px;height:8px;border-radius:2px;background:var(--line-strong);flex:none;transition:background .4s}
+.lrn.on{opacity:1;transform:none;border-color:var(--line-strong);color:var(--ink);background:rgba(255,255,255,.03)}
+.lrn.on i{background:var(--amber)}
+.lrn.cur{border-color:var(--amber);background:var(--amber-soft);color:var(--ink)}
 
 @media print{
   @page{size:1280px 720px;margin:0}
@@ -897,44 +904,87 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
     <footer class="ft"><span class="num">24</span><span class="dot"></span><span class="ftitle" data-eid="e210">Bölüm 05</span><span class="spacer"></span><span class="wordmark">SDF · EDİTÖR</span></footer></section>
 
     <!-- 25 NELER OGRENDIK -->
-    <section class="slide" data-eyebrow="Değerlendirme" data-foot="Neler öğrendik"><header class="hd"><span class="eyebrow" data-eid="e211">Değerlendirme</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
+    <section class="slide" data-eyebrow="Değerlendirme" data-foot="Neler öğrendik" data-anim="learn"><header class="hd"><span class="eyebrow" data-eid="e211">Değerlendirme</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
       <h1 class="title" data-eid="e212">Neler öğrendik</h1>
-      <div class="content g2" style="grid-auto-rows:1fr">
-        <div class="card"><span class="k" data-eid="e213">Mimari</span><h3 data-eid="e214">Net engine ve UI ayrımı</h3><p data-eid="e215">Tüm gerçeği tek yerde tutmak, büyüdükçe kodu yönetilebilir kıldı.</p></div>
-        <div class="card"><span class="k" data-eid="e216">Modelleme</span><h3 data-eid="e217">SDF + CSG sezgisi</h3><p data-eid="e218">Şekilleri distance function olarak düşünmek, birleştirmeyi doğallaştırdı.</p></div>
-        <div class="card"><span class="k" data-eid="e219">GPU</span><h3 data-eid="e220">Render tarafını öğrenmek</h3><p data-eid="e221">Ray marching, normal, lighting ve antialiasing kavramları oturdu.</p></div>
-        <div class="card"><span class="k" data-eid="e222">Veri akışı</span><h3 data-eid="e223">Tek JSON snapshot</h3><p data-eid="e224">UI'yi tek bir mirror ile beslemek arayüz mantığını çok sadeleştirdi.</p></div>
+      <div class="content" style="display:flex;flex-direction:column;height:100%;align-self:stretch;padding-top:30px">
+        <div class="lrn-cols">
+          <div class="lrn-col">
+            <div class="lrn" data-li="0"><i></i>Agile yazılım geliştirme</div>
+            <div class="lrn" data-li="1"><i></i>Büyük yazılım projelerinde takım çalışması</div>
+            <div class="lrn" data-li="2"><i></i>Modüler yazılım geliştirme</div>
+            <div class="lrn" data-li="3"><i></i>Full-stack uygulama geliştirme</div>
+            <div class="lrn" data-li="4"><i></i>3D tasarım temel fikirleri</div>
+            <div class="lrn" data-li="5"><i></i>SDF ve kullanım senaryoları</div>
+          </div>
+          <div class="lrn-col">
+            <div class="lrn" data-li="6"><i></i>CSG tree yapısı</div>
+            <div class="lrn" data-li="7"><i></i>GPU çalışma mantığı</div>
+            <div class="lrn" data-li="8"><i></i>WebGPU ve WGSL shader programlama</div>
+            <div class="lrn" data-li="9"><i></i>GPU darboğazları ve performans optimizasyonu</div>
+            <div class="lrn" data-li="10"><i></i>Debugging, Git ve hata tespiti</div>
+            <div class="lrn" data-li="11"><i></i>UX iyileştirme</div>
+          </div>
+        </div>
+        <div style="margin-top:auto;padding-top:16px;display:flex;align-items:center;justify-content:center;gap:10px">
+          <button class="rpn-ctl lrn-back">◂ Geri</button>
+          <span class="lrn-count" style="font:600 12px var(--mono);color:var(--ink-dim);min-width:52px;text-align:center">0 / 12</span>
+          <button class="rpn-ctl lrn-next">Sıradaki ▸</button>
+        </div>
       </div>
     <footer class="ft"><span class="num">25</span><span class="dot"></span><span class="ftitle" data-eid="e225">Neler öğrendik</span><span class="spacer"></span><span class="wordmark">SDF · EDİTÖR</span></footer></section>
 
     <!-- 26 NEREDE ZORLANDIK -->
-    <section class="slide" data-eyebrow="Değerlendirme" data-foot="Nerede zorlandık"><header class="hd"><span class="eyebrow" data-eid="e226">Değerlendirme</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
+    <section class="slide" data-eyebrow="Değerlendirme" data-foot="Nerede zorlandık" data-anim="learn2"><header class="hd"><span class="eyebrow" data-eid="e226">Değerlendirme</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
       <h1 class="title" data-eid="e227">Nerede zorlandık</h1>
-      <div class="content g2" style="grid-auto-rows:1fr">
-        <div class="card"><span class="k" data-eid="e228">Kimlikler</span><h3 data-eid="e229">Üç id space</h3><p data-eid="e230">objectId, nodeId ve array index karışınca sessiz bug'lar. Dönüşümler dikkatle yazıldı.</p></div>
-        <div class="card"><span class="k" data-eid="e231">Denendi, geri alındı</span><h3 data-eid="e232">Object culling</h3><p data-eid="e233">Uzak nesneyi atlama denemesi geometriyi kırptı. Doğruluk hız için feda edilmedi.</p></div>
-        <div class="card"><span class="k" data-eid="e234">GPU limitleri</span><h3 data-eid="e235">Sabit stack (16)</h3><p data-eid="e236">Taşma ve boşalmayı güvenle kapatmak. Derinlik nesting ile büyür.</p></div>
-        <div class="card"><span class="k" data-eid="e237">Uyumluluk</span><h3 data-eid="e238">.sdfp byte layout</h3><p data-eid="e239">Sona ekle ve EOF toleransı: eski dosyalar bozulmadan açılmalı.</p></div>
+      <div class="content" style="display:flex;flex-direction:column;height:100%;align-self:stretch;padding-top:30px">
+        <div class="lrn-cols">
+          <div class="lrn-col">
+            <div class="lrn" data-li="0"><i></i>Masaüstü uygulamasından web uygulamasına geçiş</div>
+            <div class="lrn" data-li="1"><i></i>Veri yapısı tasarımları</div>
+            <div class="lrn" data-li="2"><i></i>Karmaşıklaşan class yapılarını modülerize etmek</div>
+            <div class="lrn" data-li="3"><i></i>Işık ve gizmo matematiğini anlamak</div>
+          </div>
+          <div class="lrn-col">
+            <div class="lrn" data-li="4"><i></i>Gizmo için kendi modülümüzü yazmak</div>
+            <div class="lrn" data-li="5"><i></i>Performans problemleri</div>
+            <div class="lrn" data-li="6"><i></i>Aynı dosya üzerinde eşzamanlı çalışmak</div>
+            <div class="lrn" data-li="7"><i></i>Gereksinim değişikliklerine hızlıca ayak uydurmak</div>
+          </div>
+        </div>
+        <div style="margin-top:auto;padding-top:16px;display:flex;align-items:center;justify-content:center;gap:10px">
+          <button class="rpn-ctl lrn-back">◂ Geri</button>
+          <span class="lrn-count" style="font:600 12px var(--mono);color:var(--ink-dim);min-width:52px;text-align:center">0 / 8</span>
+          <button class="rpn-ctl lrn-next">Sıradaki ▸</button>
+        </div>
       </div>
     <footer class="ft"><span class="num">26</span><span class="dot"></span><span class="ftitle" data-eid="e240">Nerede zorlandık</span><span class="spacer"></span><span class="wordmark">SDF · EDİTÖR</span></footer></section>
 
     <!-- 27 NEYI GELISTIREBILIRIZ -->
-    <section class="slide" data-eyebrow="Değerlendirme" data-foot="Neyi geliştirebiliriz"><header class="hd"><span class="eyebrow" data-eid="e241">Değerlendirme</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
+    <section class="slide" data-eyebrow="Değerlendirme" data-foot="Neyi geliştirebiliriz" data-anim="learn3"><header class="hd"><span class="eyebrow" data-eid="e241">Değerlendirme</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
       <h1 class="title" data-eid="e242">Neyi geliştirebiliriz</h1>
-      <div class="content g2">
-        <div class="col" style="justify-content:center">
-          <ul class="bul">
-            <li data-eid="e243"><b>Scale gizmo</b> (şu an translate ve rotate var)</li>
-            <li data-eid="e244">Object başına <b>material</b> (gloss ve specular şu an global)</li>
-            <li data-eid="e245">Render settings'in <b>.sdfp</b>'de kalıcılığı</li>
-          </ul>
+      <div class="content" style="display:flex;flex-direction:column;height:100%;align-self:stretch;padding-top:30px">
+        <div class="lrn-cols">
+          <div class="lrn-col">
+            <div class="lrn" data-li="0"><i></i>Scale gizmo</div>
+            <div class="lrn" data-li="1"><i></i>Kompleks grup operasyonları</div>
+            <div class="lrn" data-li="2"><i></i>Yeni materyal türleri</div>
+            <div class="lrn" data-li="3"><i></i>.sdfo desteği</div>
+            <div class="lrn" data-li="4"><i></i>Brush aracı</div>
+            <div class="lrn" data-li="5"><i></i>Sculpt modu</div>
+          </div>
+          <div class="lrn-col">
+            <div class="lrn" data-li="6"><i></i>Animasyon ve timeline</div>
+            <div class="lrn" data-li="7"><i></i>Motion blur</div>
+            <div class="lrn" data-li="8"><i></i>Ayrı render uygulaması</div>
+            <div class="lrn" data-li="9"><i></i>Performans optimizasyonları</div>
+            <div class="lrn" data-li="10"><i></i>Kısayol özelleştirmeleri</div>
+            <div class="lrn" data-li="11"><i></i>Ayarlar menüsü</div>
+          </div>
         </div>
-        <div class="col" style="justify-content:center">
-          <ul class="bul">
-            <li data-eid="e246">Grid zeminine gölge (gerçek SDF ground plane)</li>
-            <li data-eid="e247">distanceCalc ve evaluateScene arasında ortak map (kod tekrarını azalt)</li>
-          </ul>
-          <div class="callout"><span class="k" data-eid="e248">Not</span><p data-eid="e249">Antialiasing yeni eklendi: SSAA ile piksel başına 8×8'e kadar sample.</p></div>
+        <div style="margin-top:auto;padding-top:16px;display:flex;align-items:center;justify-content:center;gap:10px">
+          <button class="rpn-ctl lrn-back">◂ Geri</button>
+          <span class="lrn-count" style="font:600 12px var(--mono);color:var(--ink-dim);min-width:52px;text-align:center">0 / 12</span>
+          <button class="rpn-ctl lrn-next">Sıradaki ▸</button>
         </div>
       </div>
     <footer class="ft"><span class="num">27</span><span class="dot"></span><span class="ftitle" data-eid="e250">Neyi geliştirebiliriz</span><span class="spacer"></span><span class="wordmark">SDF · EDİTÖR</span></footer></section>
@@ -942,9 +992,9 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
     <!-- 28 THANKS -->
     <section class="slide slide--cover" data-foot="Kapanış">
       <div class="cover-main" style="justify-content:center">
-        <div class="eyebrow" data-eid="e251">Teşekkürler</div>
-        <h1 class="cover-title" style="font-size:62px" data-eid="e252">Sorular ve<br><span class="g">tartışma</span></h1>
-        <p class="cover-sub" data-eid="e253">GPU üzerinde gerçek zamanlı SDF editörü.</p>
+        <div class="eyebrow" data-eid="e251">Görüntüleme Sistemleri</div>
+        <h1 class="cover-title" style="font-size:62px" data-eid="e252">Dinlediğiniz için<br><span class="g">teşekkürler</span></h1>
+        <p class="cover-sub" data-eid="e253">Realtime SDF Editor</p>
         <div class="chips"><span class="chip" data-eid="e254"><i></i>Emre Aydın</span><span class="chip" data-eid="e255"><i></i>Zeynep Nur Alanat</span></div>
       </div>
     <footer class="ft"><span class="num">28</span><span class="dot"></span><span class="ftitle" data-eid="e256">Kapanış</span><span class="spacer"></span><span class="wordmark">SDF · EDİTÖR</span></footer></section>
@@ -1391,6 +1441,26 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
       stop:function(){}
     };
   })();
+
+  // "neler ogrendik" / "nerede zorlandik" reveal-one-at-a-time (scoped per slide)
+  Array.prototype.forEach.call(document.querySelectorAll('[data-anim^="learn"]'), function(root){
+    var items=Array.prototype.slice.call(root.querySelectorAll(".lrn[data-li]"));
+    var elNext=root.querySelector(".lrn-next"), elBack=root.querySelector(".lrn-back"),
+        elCount=root.querySelector(".lrn-count");
+    if(!items.length || !elNext) return;
+    var total=items.length, shown=0;
+    function render(){
+      items.forEach(function(el,i){
+        el.classList.toggle("on", i<shown);
+        el.classList.toggle("cur", i===shown-1);
+      });
+      elCount.textContent=shown+" / "+total;
+      elNext.disabled=shown>=total; elBack.disabled=shown<=0;
+    }
+    elNext.onclick=function(){ if(shown<total){ shown++; render(); } };
+    elBack.onclick=function(){ if(shown>0){ shown--; render(); } };
+    animators[root.getAttribute("data-anim")]={ start:function(){ shown=0; render(); }, stop:function(){} };
+  });
 
   show(0);
 })();
