@@ -627,16 +627,16 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
 
     <!-- 15 LIGHTING (anim) -->
     <section class="slide" data-eyebrow="Mimari · Renderer" data-foot="Lighting" data-anim="light"><header class="hd"><span class="eyebrow" data-eid="e120">Mimari · Renderer</span><span class="wordmark"><b>SDF</b> · EDİTÖR</span></header>
-      <h1 class="title" data-eid="e121">Lighting</h1>
+      <h1 class="title" data-eid="e121">Işıklandırma</h1>
       <div class="content g2">
         <div class="col" style="justify-content:center">
           <ul class="bul">
-            <li data-eid="e122">Normal, distance field'in <b>gradient</b>'inden gelir</li>
+            <li data-eid="e122">Normal, distance field'in <b>gradient</b>'ından gelir</li>
             <li data-eid="e123">Blinn-Phong: diffuse ve specular</li>
             <li data-eid="e124">Soft shadow ve ambient occlusion</li>
             <li data-eid="e125">ACES tone mapping ve gamma ile ekrana kodlanır</li>
           </ul>
-          <div class="callout"><span class="k" data-eid="e126">Bedava normal</span><p data-eid="e127">Ayrı bir geometri yok. Normal, dört komşu distance örneğinden gelir.</p></div>
+          <div class="callout"><span class="k" data-eid="e126">Render performansına etkisi</span><p data-eid="e127">Işıklandırma ve gölgeler için onlarca extra ray göndermek gerekiyor. Her biri GPU için işlem yükü demek, bu yüzden tüm ışıklandırma parametrelerini değiştirilebilir yaptık.</p></div>
         </div>
         <div class="vizbox fill">
           <span class="tag">Blinn-Phong shading</span>
