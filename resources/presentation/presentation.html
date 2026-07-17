@@ -304,7 +304,57 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
           <div class="card"><span class="k" data-eid="e37">Render</span><h3 data-eid="e38">GPU'da ray marching</h3><p data-eid="e39">Her piksel için bir ray gönderip WebGPU renderer ile sahneyi doğrudan canvas'a çiziyoruz.</p></div>
           <div class="card"><span class="k" data-eid="e40">Orkestra şefi</span><h3 data-eid="e41">C++ tabanlı backend</h3><p data-eid="e42">Tüm işlemleri C++ class'larında gerçekleştiriyoruz. React tabanlı arayüz ile C++ tabanlı motoru ayrı katmanlarda yönetiyoruz.</p></div>
         </div>
-        <div class="callout"><span class="k" data-eid="e43">Akış</span><p data-eid="e44">Kullanıcı etkileşimi→&nbsp;React arayüz →&nbsp;C++ motoru →&nbsp;CSG tree →&nbsp;RPN programı&nbsp;→ GPU →&nbsp;Bir sonraki frame</p></div>
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#818997;margin-bottom:13px">Akış · her frame yeniden çizilir</div>
+          <div style="display:flex;align-items:stretch;gap:0">
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,#191c22,#20242c);border:1px solid rgba(255,255,255,.09);border-left:2px solid #E9A23B;border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">01</div>
+              <div style="font-size:13px;font-weight:650;color:#ECEDEF;margin-top:4px;line-height:1.15">Kullanıcı</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">etkileşim</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;flex:0 0 20px;color:#E9A23B;font-size:15px">→</div>
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,#191c22,#20242c);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">02</div>
+              <div style="font-size:13px;font-weight:650;color:#ECEDEF;margin-top:4px;line-height:1.15">React arayüz</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">event, ccall</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;flex:0 0 20px;color:#E9A23B;font-size:15px">→</div>
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,#191c22,#20242c);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">03</div>
+              <div style="font-size:13px;font-weight:650;color:#ECEDEF;margin-top:4px;line-height:1.15">C++ motoru</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">state güncellenir</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;flex:0 0 20px;color:#E9A23B;font-size:15px">→</div>
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,#191c22,#20242c);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">04</div>
+              <div style="font-size:13px;font-weight:650;color:#ECEDEF;margin-top:4px;line-height:1.15">CSG tree</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">tree güncellenir</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;flex:0 0 20px;color:#E9A23B;font-size:15px">→</div>
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,#191c22,#20242c);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">05</div>
+              <div style="font-size:13px;font-weight:650;color:#ECEDEF;margin-top:4px;line-height:1.15">RPN programı</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">RPN derlenir</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;flex:0 0 20px;color:#E9A23B;font-size:15px">→</div>
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,#191c22,#20242c);border:1px solid rgba(255,255,255,.09);border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">06</div>
+              <div style="font-size:13px;font-weight:650;color:#ECEDEF;margin-top:4px;line-height:1.15">GPU</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">shader çalışır</div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:center;flex:0 0 20px;color:#E9A23B;font-size:15px">→</div>
+            <div style="flex:1;min-width:0;background:linear-gradient(180deg,rgba(233,162,59,.16),rgba(233,162,59,.05));border:1px solid rgba(233,162,59,.5);border-radius:10px;padding:11px 13px">
+              <div style="font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:#E9A23B">07</div>
+              <div style="font-size:13px;font-weight:650;color:#F6C24A;margin-top:4px;line-height:1.15">Sonraki frame</div>
+              <div style="font-size:10.5px;color:#818997;margin-top:3px;font-family:var(--mono)">çizim</div>
+            </div>
+          </div>
+          <div style="position:relative;margin-top:18px;height:22px">
+            <div style="position:absolute;left:12px;right:12px;top:11px;border-top:1.5px dashed rgba(255,255,255,.16)"></div>
+            <div style="position:absolute;left:8px;top:2px;color:#E9A23B;font-size:13px">◄</div>
+            <div style="position:absolute;left:50%;top:-2px;transform:translateX(-50%);background:#131519;padding:0 12px;font-family:var(--mono);font-size:11px;color:#E9A23B;letter-spacing:.06em">↻ çıktı her frame yeniden hesaplanır</div>
+          </div>
+        </div>
       </div>
     <footer class="ft"><span class="num">05</span><span class="dot"></span><span class="ftitle" data-eid="e45">Nasıl çözüyoruz</span><span class="spacer"></span><span class="wordmark">SDF · EDİTÖR</span></footer></section>
 
@@ -323,12 +373,14 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
       <div class="content g2">
         <div class="col" style="justify-content:center">
           <ul class="bul">
-            <li data-eid="e54">Her nokta için <b>en yakın yüzeye uzaklık</b></li>
-            <li data-eid="e55">İşaret yön verir: içeride negatif, dışarıda pozitif</li>
-            <li data-eid="e56">Uzaklık, o noktadaki <b>en büyük boş dairenin</b> yarıçapı</li>
-            <li data-eid="e57">Sıfır seviyesi yüzeyin kendisi</li>
+            <li data-eid="e54">Uzaydaki her nokta için <b>en yakın yüzeye uzaklığı</b> verir</li>
+            <li data-eid="e55">Nokta nesnenin içinde negatif, dışında pozitif değer döndürür</li>
+            <li data-eid="e56">Fonksiyon değerinin 0 olduğu noktalar nesne yüzeyini oluşturur</li>
+            <li data-eid="e57">Uzaklığın mutlak değeri güvenli ilerleme mesafesini verir</li>
           </ul>
-          <div class="callout"><span class="k" data-eid="e58">Sezgi</span><p data-eid="e59">Prob nereye giderse gitsin, boş daire her zaman en yakın yüzeye değer.</p></div>
+          <div class="callout"><span class="k" data-eid="e58">Sezgi</span><p data-eid="e59">Bir noktayı merkez alan ve yüzeyi kesmeden büyüyebilen en büyük kürenin yarıçapı, o noktadaki SDF uzaklık değeridir
+
+</p></div>
         </div>
         <div class="vizbox fill">
           <span class="tag">signed distance field</span>
