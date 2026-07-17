@@ -491,6 +491,13 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
                 <g id="n-kure" data-role="prim"><rect x="202" y="320" width="88" height="32" rx="7" fill="#20242c" stroke="#3a414c"></rect><text x="246" y="340" fill="#ECEDEF">Sphere</text></g>
                 <g id="n-kup1" data-role="prim"><rect x="305" y="320" width="88" height="32" rx="7" fill="#20242c" stroke="#3a414c"></rect><text x="349" y="340" fill="#ECEDEF">Box</text></g>
               </g>
+              <g text-anchor="middle" font-weight="700" font-size="11">
+                <g><circle cx="11" cy="220" r="9" fill="#191c22" stroke="#E9A23B" stroke-width="1.5"></circle><text x="11" y="224" fill="#E9A23B">A</text></g>
+                <g><circle cx="111" cy="220" r="9" fill="#191c22" stroke="#E9A23B" stroke-width="1.5"></circle><text x="111" y="224" fill="#E9A23B">B</text></g>
+                <g><circle cx="202" cy="320" r="9" fill="#191c22" stroke="#E9A23B" stroke-width="1.5"></circle><text x="202" y="324" fill="#E9A23B">C</text></g>
+                <g><circle cx="305" cy="320" r="9" fill="#191c22" stroke="#E9A23B" stroke-width="1.5"></circle><text x="305" y="324" fill="#E9A23B">D</text></g>
+                <g><circle cx="396" cy="220" r="9" fill="#191c22" stroke="#E9A23B" stroke-width="1.5"></circle><text x="396" y="224" fill="#E9A23B">E</text></g>
+              </g>
             </svg>
           </div>
           <div style="width:1px;background:var(--line);flex:0 0 auto"></div>
@@ -909,25 +916,24 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
       <div class="content" style="display:flex;flex-direction:column;height:100%;align-self:stretch;padding-top:30px">
         <div class="lrn-cols">
           <div class="lrn-col">
-            <div class="lrn" data-li="0"><i></i>Agile yazılım geliştirme</div>
-            <div class="lrn" data-li="1"><i></i>Büyük yazılım projelerinde takım çalışması</div>
-            <div class="lrn" data-li="2"><i></i>Modüler yazılım geliştirme</div>
-            <div class="lrn" data-li="3"><i></i>Full-stack uygulama geliştirme</div>
-            <div class="lrn" data-li="4"><i></i>3D tasarım temel fikirleri</div>
-            <div class="lrn" data-li="5"><i></i>SDF ve kullanım senaryoları</div>
+            <div class="lrn" data-li="0"><i></i>Büyük yazılım projelerinde takım çalışması</div>
+            <div class="lrn" data-li="1"><i></i>Modüler yazılım geliştirme</div>
+            <div class="lrn" data-li="2"><i></i>Full-stack uygulama geliştirme</div>
+            <div class="lrn" data-li="3"><i></i>3D tasarım temel fikirleri</div>
+            <div class="lrn" data-li="4"><i></i>SDF ve kullanım senaryoları</div>
+            <div class="lrn" data-li="5"><i></i>CSG tree yapısı</div>
           </div>
           <div class="lrn-col">
-            <div class="lrn" data-li="6"><i></i>CSG tree yapısı</div>
-            <div class="lrn" data-li="7"><i></i>GPU çalışma mantığı</div>
-            <div class="lrn" data-li="8"><i></i>WebGPU ve WGSL shader programlama</div>
-            <div class="lrn" data-li="9"><i></i>GPU darboğazları ve performans optimizasyonu</div>
-            <div class="lrn" data-li="10"><i></i>Debugging, Git ve hata tespiti</div>
-            <div class="lrn" data-li="11"><i></i>UX iyileştirme</div>
+            <div class="lrn" data-li="6"><i></i>GPU çalışma mantığı</div>
+            <div class="lrn" data-li="7"><i></i>WebGPU ve WGSL shader programlama</div>
+            <div class="lrn" data-li="8"><i></i>GPU darboğazları ve performans optimizasyonu</div>
+            <div class="lrn" data-li="9"><i></i>Debugging, Git ve hata tespiti</div>
+            <div class="lrn" data-li="10"><i></i>UX iyileştirme</div>
           </div>
         </div>
         <div style="margin-top:auto;padding-top:16px;display:flex;align-items:center;justify-content:center;gap:10px">
           <button class="rpn-ctl lrn-back">◂ Geri</button>
-          <span class="lrn-count" style="font:600 12px var(--mono);color:var(--ink-dim);min-width:52px;text-align:center">0 / 12</span>
+          <span class="lrn-count" style="font:600 12px var(--mono);color:var(--ink-dim);min-width:52px;text-align:center">0 / 11</span>
           <button class="rpn-ctl lrn-next">Sıradaki ▸</button>
         </div>
       </div>
@@ -1303,13 +1309,13 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
     if(!prog||!tree) return;
     function opName(k){ return k==="sub"?"Subtract":"Union"; }
     var cmds=[
-      {label:"PUSH Torus",  node:"n-simit", kind:"push", name:"Torus"},
-      {label:"PUSH Box",    node:"n-kup3",  kind:"push", name:"Box"},
+      {label:"PUSH Torus",  node:"n-simit", kind:"push", name:"Torus",  tag:"A"},
+      {label:"PUSH Box",    node:"n-kup3",  kind:"push", name:"Box",     tag:"B"},
       {label:"SUBTRACT",    node:"n-subA",  kind:"sub"},
-      {label:"PUSH Sphere", node:"n-kure",  kind:"push", name:"Sphere"},
-      {label:"PUSH Box",    node:"n-kup1",  kind:"push", name:"Box"},
+      {label:"PUSH Sphere", node:"n-kure",  kind:"push", name:"Sphere",  tag:"C"},
+      {label:"PUSH Box",    node:"n-kup1",  kind:"push", name:"Box",     tag:"D"},
       {label:"UNION",       node:"n-uni",   kind:"uni"},
-      {label:"PUSH Box",    node:"n-kup2",  kind:"push", name:"Box"},
+      {label:"PUSH Box",    node:"n-kup2",  kind:"push", name:"Box",     tag:"E"},
       {label:"SUBTRACT",    node:"n-subB",  kind:"sub"},
       {label:"UNION",       node:"n-root",  kind:"uni"}
     ];
@@ -1347,21 +1353,33 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
     var btnNext=document.getElementById("rpn-next");
     var btnPlay=document.getElementById("rpn-play");
     var countEl=document.getElementById("rpn-count");
+    function opSym(k){ return k==="sub" ? "-" : "∪"; }
+    function combineLabel(below, top, kind){
+      var be = below ? below.expr : "?", te = top ? top.expr : "?";
+      return "(" + be + " " + opSym(kind) + " " + te + ")";
+    }
     function render(fr){
-      var step=fr.i, sym=opName(cmds[step].kind);
+      var step=fr.i;
       var stack=[];
       for(var i=0;i<step;i++){
         var c=cmds[i];
-        if(c.kind==="push") stack.push({label:c.name});
-        else { stack.pop(); stack.pop(); stack.push({label:opName(c.kind), op:true}); }
+        if(c.kind==="push") stack.push({label:c.name+" ("+c.tag+")", expr:c.tag});
+        else {
+          var pb=stack[stack.length-2], pt=stack[stack.length-1];
+          var pl=combineLabel(pb,pt,c.kind);
+          stack.pop(); stack.pop(); stack.push({label:pl, expr:pl, op:true});
+        }
       }
       if(cmds[step].kind==="push"){
-        stack.push({label:cmds[step].name});
+        stack.push({label:cmds[step].name+" ("+cmds[step].tag+")", expr:cmds[step].tag});
       } else if(fr.phase===0){
-        if(stack.length>=2){ stack[stack.length-1].consume=true; stack[stack.length-2].consume=true; }
-        stack.push({label:sym, op:true, pending:true});
+        var b0=stack[stack.length-2], t0=stack[stack.length-1];
+        if(stack.length>=2){ t0.consume=true; b0.consume=true; }
+        stack.push({label:opName(cmds[step].kind), op:true, pending:true});
       } else {
-        stack.pop(); stack.pop(); stack.push({label:sym, op:true});
+        var b1=stack[stack.length-2], t1=stack[stack.length-1];
+        var l1=combineLabel(b1,t1,cmds[step].kind);
+        stack.pop(); stack.pop(); stack.push({label:l1, expr:l1, op:true});
       }
       chips.forEach(function(el,i){
         var on=i===step;
@@ -1373,7 +1391,7 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
       stack.forEach(function(s,j){
         var b=document.createElement("div");
         var w=Math.round(168-j*26), hgt=Math.round(50-j*7), fs=(17-j*1.5).toFixed(1);
-        var css="width:"+w+"px;height:"+hgt+"px;display:grid;place-items:center;border-radius:9px;font-size:"+fs+"px;box-shadow:0 3px 10px rgba(0,0,0,.28);transition:all .35s;";
+        var css="min-width:"+w+"px;height:"+hgt+"px;padding:0 14px;box-sizing:border-box;white-space:nowrap;display:grid;place-items:center;border-radius:9px;font-size:"+fs+"px;box-shadow:0 3px 10px rgba(0,0,0,.28);transition:all .35s;";
         if(s.pending)      css+="background:transparent;border:1.5px dashed var(--amber);color:var(--amber);font-weight:700";
         else if(s.op)      css+="background:var(--amber-soft);border:1.5px solid var(--amber);color:var(--amber);font-weight:700";
         else if(s.consume) css+="background:#242832;border:1.5px solid var(--amber);color:var(--ink)";
