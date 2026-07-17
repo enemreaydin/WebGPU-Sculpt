@@ -486,7 +486,7 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
           <div id="rpn-prog" class="mono" style="display:flex;gap:10px;flex-wrap:wrap;font-size:15px"><span style="padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); color: var(--ink-2); transition: 0.3s;">PUSH Sphere</span><span style="padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); color: var(--ink-2); transition: 0.3s;">PUSH Box</span><span style="padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); color: var(--ink-2); transition: 0.3s;">UNION</span><span style="padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); color: var(--ink-2); transition: 0.3s;">PUSH Cylinder</span><span style="padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); color: var(--ink-2); transition: 0.3s;">UNION</span></div>
           <div style="display:flex;align-items:flex-end;gap:14px">
             <div class="mono dim" style="font-size:12px;letter-spacing:.14em;text-transform:uppercase;width:56px">stack</div>
-            <div id="rpn-stack" style="display:flex;gap:10px;align-items:flex-end;min-height:38px"></div>
+            <div id="rpn-stack" style="display:flex;flex-direction:column-reverse;gap:7px;align-items:center;justify-content:flex-start;min-height:170px"></div>
           </div>
           </div>
         </div>
@@ -1194,13 +1194,14 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
         el.style.background = on? "var(--amber-soft)":"transparent";
       });
       stackEl.innerHTML="";
-      stack.forEach(function(s){
+      stack.forEach(function(s,j){
         var b=document.createElement("div");
-        var css="min-width:64px;height:34px;display:grid;place-items:center;border-radius:7px;font-size:14px;transition:all .3s;";
-        if(s.pending)      css+="background:transparent;border:1px dashed var(--amber);color:var(--amber);font-weight:700";
-        else if(s.op)      css+="background:var(--amber-soft);border:1px solid var(--amber);color:var(--amber);font-weight:700";
-        else if(s.consume) css+="background:#20242c;border:1px solid var(--amber);color:var(--ink)";
-        else               css+="background:#20242c;border:1px solid var(--line-strong);color:var(--ink)";
+        var w=Math.round(168-j*26), hgt=Math.round(50-j*7), fs=(17-j*1.5).toFixed(1);
+        var css="width:"+w+"px;height:"+hgt+"px;display:grid;place-items:center;border-radius:9px;font-size:"+fs+"px;box-shadow:0 3px 10px rgba(0,0,0,.28);transition:all .35s;";
+        if(s.pending)      css+="background:transparent;border:1.5px dashed var(--amber);color:var(--amber);font-weight:700";
+        else if(s.op)      css+="background:var(--amber-soft);border:1.5px solid var(--amber);color:var(--amber);font-weight:700";
+        else if(s.consume) css+="background:#242832;border:1.5px solid var(--amber);color:var(--ink)";
+        else               css+="background:#242832;border:1.5px solid var(--line-strong);color:var(--ink)";
         b.style.cssText=css; b.textContent=s.label; stackEl.appendChild(b);
       });
       groups.forEach(nodeBase);
