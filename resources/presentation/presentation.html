@@ -661,11 +661,11 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
         <div class="col" style="justify-content:center">
           <ul class="bul">
             <li data-eid="e122">Normal, distance field'in <b>gradient</b>'ından gelir</li>
-            <li data-eid="e123">Blinn-Phong: diffuse ve specular</li>
+            <li data-eid="e123">Blinn-Phong: ambient, diffuse ve specular</li>
             <li data-eid="e124">Soft shadow ve ambient occlusion</li>
             <li data-eid="e125">ACES tone mapping ve gamma ile ekrana kodlanır</li>
           </ul>
-          <div class="callout"><span class="k" data-eid="e126">Render performansına etkisi</span><p data-eid="e127">Işıklandırma ve gölgeler için onlarca extra ray göndermek gerekiyor. Her biri GPU için işlem yükü demek, bu yüzden tüm ışıklandırma parametrelerini değiştirilebilir yaptık.</p></div>
+          <div class="callout"><span class="k" data-eid="e126">Render performansına etkisi</span><p data-eid="e127">Işıklandırma ve gölgeler için onlarca ekstra hesaplama gerekiyor. Her biri GPU için işlem yükü demek, bu yüzden tüm ışıklandırma parametrelerini değiştirilebilir yaptık.</p></div>
         </div>
         <div class="vizbox fill">
           <span class="tag">Blinn-Phong shading</span>
@@ -1133,13 +1133,15 @@ body.editmode .nav,body.editmode .hint{opacity:.35}
           d[i]=r; d[i+1]=g; d[i+2]=b; d[i+3]=255;
         }
       }
-      field=img;
+      var oc=document.createElement("canvas"); oc.width=S.w; oc.height=S.h;
+      oc.getContext("2d").putImageData(img,0,0);
+      field=oc;
     }
     var manualPt=null, lastT=0;
     function draw(t){
       lastT=t;
       if(!S || S.w!==canvas.parentElement.clientWidth){ S=setup(canvas); buildField(); }
-      var ctx=S.ctx; ctx.putImageData(field,0,0);
+      var ctx=S.ctx; ctx.drawImage(field,0,0,S.w,S.h);
       var px,py;
       if(manualPt){ px=Math.max(0,Math.min(S.w,manualPt.x)); py=Math.max(0,Math.min(S.h,manualPt.y)); }
       else { var cx=S.w*0.5, cy=S.h*0.5, pr=Math.min(S.w,S.h)*0.30, sp=0.22;
