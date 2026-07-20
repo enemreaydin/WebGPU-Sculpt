@@ -193,7 +193,6 @@ if (NOT EMSCRIPTEN)
     target_include_directories(csg_features_test PRIVATE src)
 
     add_executable(create_test_sdfo
-        src/tools/create_test_sdfo.cpp
         src/serialization/ExtensionLoader.cpp
         src/scene/SceneManager.cpp
         src/scene/csg/CsgTree.cpp
