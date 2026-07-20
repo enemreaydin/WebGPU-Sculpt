@@ -584,4 +584,10 @@ export class Engine {
   setGizmoSpace(space: GizmoSpace): void {
     this.call("sdf_set_gizmo_space", null, ["number"], [space]);
   }
+
+  // The Render Resolution scale (render-buffer px per display px). Keeps the
+  // gizmo a constant on-screen size when the backing store is up/down-scaled.
+  setGizmoPixelScale(scale: number): void {
+    this.call("sdf_set_gizmo_pixel_scale", null, ["number"], [scale]);
+  }
 }

@@ -160,6 +160,11 @@ public:
     void SetGizmoMode(int mode)   { gizmoController.SetMode(static_cast<GizmoMode>(mode)); }
     void SetGizmoSpace(int space) { gizmoController.SetSpace(static_cast<GizmoSpace>(space)); }
 
+    // Web Render Resolution scale (render-buffer px per display px). Keeps the
+    // gizmo a constant on-screen size when the backing store is up/down-scaled;
+    // it is a viewport display preference, not scene state (see §10).
+    void SetGizmoPixelScale(float scale) { gizmoController.SetPixelScale(scale); }
+
     void Undo();
     void Redo();
 

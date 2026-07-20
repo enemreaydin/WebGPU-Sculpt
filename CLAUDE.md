@@ -210,11 +210,11 @@ Layout (offsets in bytes):
 128  lightDirection[4] 144 lightColor[4] 160 ambientColor[4]
 176  lightIntensity  180 specularShininess  184 specularStrength  188 shadowSoftness
 192  aoStrength  196 maxSteps(i32)  200 hitEpsilon  204 maxDistance
-208  shadowMaxSteps(i32)  212 shadowMaxDistance  216 aoSamples(i32)  220 qualityPad0(i32)
-224  shadowsEnabled(i32)  228 aoEnabled(i32)  232 qualityPad1(i32)  236 qualityPad2(i32)
+208  shadowMaxSteps(i32)  212 shadowMaxDistance  216 aoSamples(i32)  220 aaSamples(i32)
+224  shadowsEnabled(i32)  228 aoEnabled(i32)  232 qualityPad1(i32)  236 gizmoPixelScale(f32)
 => 240 bytes
 ```
-The 224-byte block (0..223) is the original layout; the last 16 bytes (224..239) are the feature-toggle block added for the performance work. `qualityPad0`, `qualityPad1`, and `qualityPad2` are free pad slots for the next flags (reuse them before growing the struct).
+The 224-byte block (0..223) is the original layout; the last 16 bytes (224..239) are the feature-toggle block added for the performance work. All three former pad slots are now used: `qualityPad0`→`aaSamples` (supersampling grid N), `qualityPad1` = the selection-visuals flag (1 = suppress the object highlight during the object-id pick pass; see `SetSelectionVisuals`), `qualityPad2`→`gizmoPixelScale` (render-buffer px per display px = the web Render Resolution scale; the shader multiplies the gizmo line/dot thickness by it, and the engine sizes the gizmo handles by it, so the gizmo stays a constant on-screen size at any Render Resolution — §10). **No free pad slots remain — the next field must grow the struct (append a new 16-byte block, keep both structs in lockstep).**
 
 ---
 
@@ -235,7 +235,7 @@ Adding one setting touches five layers, in order:
 
 These are the speed controls. Understand which are engine-owned (go through §9) and which are pure web display prefs.
 
-- **Render Resolution (50/75/100%)** — the biggest single dial. `App.tsx state.renderScale` scales the canvas **backing store** (`syncCanvasSize` sets `canvas.width/height = cssSize × scale`) while CSS keeps the canvas full-size, so the browser upscales a smaller buffer. Raymarch cost scales with pixel count, so 50% ≈ 25% of the pixels. **This is a viewport *display* preference (like DPR), so it lives web-side, NOT in the engine** — it modulates what `syncCanvasSize` tells the engine to render at; it is not scene state and is not persisted. `canvasPoint()` normalizes pointer coords by `canvas.width/rect.width`, so picking/gizmo stay pixel-correct at any scale.
+- **Render Resolution (50/75/100%)** — the biggest single dial. `App.tsx state.renderScale` scales the canvas **backing store** (`syncCanvasSize` sets `canvas.width/height = cssSize × scale`) while CSS keeps the canvas full-size, so the browser upscales a smaller buffer. Raymarch cost scales with pixel count, so 50% ≈ 25% of the pixels. **This is a viewport *display* preference (like DPR), so it lives web-side, NOT in the engine** — it modulates what `syncCanvasSize` tells the engine to render at; it is not scene state and is not persisted. `canvasPoint()` normalizes pointer coords by `canvas.width/rect.width`, so picking/gizmo stay pixel-correct at any scale. **The gizmo is sized in render-buffer px, so it would balloon on a down-scaled (upscaled) buffer; `syncCanvasSize` therefore pushes `renderScale` to the engine via `engine.setGizmoPixelScale(scale)` → `sdf_set_gizmo_pixel_scale` → `Application::SetGizmoPixelScale` → `GizmoController::SetPixelScale`, which multiplies the handle length + hit tolerance (and `globals.gizmoPixelScale` scales the shader's line/dot thickness), keeping the gizmo a constant *display* size at any Render Resolution. This is display info like DPR, not scene state.**
 - **Quality Presets (Fast / Balanced / High / Ultra)** — `App.tsx PERF_PROFILES` batch-apply render scale + the toggles + the six advanced budgets in one click, wrapped in one `beginSceneEdit/commitSceneEdit`. Hand-tweaking any control flips the active preset to **"Custom"** (`state.perfProfile`). Profiles are a **web-side convenience** that calls the *existing* `setRenderSetting` chain N times — no new domain logic, engine stays authoritative. The preset *values* are a UX choice living in `App.tsx`, like the slider min/max.
 - **Feature toggles: Light / Shadows / Ambient Occlusion.**
   - *Shadows* (`ShadowsEnabled`) and *AO* (`AoEnabled`) are engine settings (§9) that gate the two biggest optional per-pixel marches in the shader.

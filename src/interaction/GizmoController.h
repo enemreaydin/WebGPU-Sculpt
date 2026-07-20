@@ -35,6 +35,13 @@ public:
     void SetMode(GizmoMode mode)    { if (!m_state.isDragging) m_state.mode = mode; }
     void SetSpace(GizmoSpace space) { if (!m_state.isDragging) m_state.space = space; }
 
+    // Ratio of render-buffer px to display (CSS) px, i.e. the web Render
+    // Resolution scale. The base pixel sizes above are authored in display px;
+    // multiplying by this keeps the gizmo a constant on-screen size even when
+    // the backing store is rendered smaller and upscaled (§10). 1.0 = 100%.
+    void  SetPixelScale(float s) { m_pixelScale = (s > 0.0f) ? s : 1.0f; }
+    float PixelScale() const     { return m_pixelScale; }
+
     // Recompute the hovered axis under the mouse. While a drag is in progress
     // the active axis stays latched (returns it). Result is the axis as int
     // (0 none, 1 X, 2 Y, 3 Z).
@@ -46,9 +53,9 @@ public:
 
         m_state.hoveredAxis = (m_state.mode == GizmoMode::Rotate)
             ? GizmoMath::HitTestRotateRings(mouse, origin, rotation, m_state.space,
-                                            view, proj, w, h, SCREEN_LENGTH_PX, HIT_THRESHOLD_PX)
+                                            view, proj, w, h, ScreenLengthPx(), HitThresholdPx())
             : GizmoMath::HitTestTranslateAxes(mouse, origin, rotation, m_state.space,
-                                              view, proj, w, h, SCREEN_LENGTH_PX, HIT_THRESHOLD_PX);
+                                              view, proj, w, h, ScreenLengthPx(), HitThresholdPx());
 
         return static_cast<int>(m_state.hoveredAxis);
     }
@@ -102,7 +109,7 @@ public:
         return GizmoMath::ComputeTranslateDragPosition(
             m_state.dragAxisDir, m_state.dragStartMouse, mouse,
             m_state.dragStartObjectPosition, view, proj, w, h,
-            SCREEN_LENGTH_PX, outPosition);
+            ScreenLengthPx(), outPosition);
     }
 
     // Absolute rotation of the dragged object for the current mouse: the angle
@@ -145,10 +152,15 @@ public:
                            const glm::mat4& view, const glm::mat4& proj, float h) const
     {
         float unitsPerPixel = GizmoMath::WorldUnitsPerPixelAt(origin, view, proj, h);
-        float worldLength = std::max(unitsPerPixel * SCREEN_LENGTH_PX, 0.001f);
+        float worldLength = std::max(unitsPerPixel * ScreenLengthPx(), 0.001f);
         return origin + GizmoMath::AxisDirInSpace(axis, rotation, m_state.space) * worldLength;
     }
 
 private:
+    // Base pixel sizes scaled into render-buffer px for the current resolution.
+    float ScreenLengthPx() const { return SCREEN_LENGTH_PX * m_pixelScale; }
+    float HitThresholdPx() const { return HIT_THRESHOLD_PX * m_pixelScale; }
+
     GizmoState m_state;
+    float      m_pixelScale = 1.0f;
 };

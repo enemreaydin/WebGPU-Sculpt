@@ -70,6 +70,10 @@ struct alignas(16) GlobalsData
     // layout is untouched. Buffer size = sizeof(GlobalsData), so this just grows it.
     int32_t shadowsEnabled = 1;   // 1 = cast soft shadows (calcSoftShadow), 0 = fully lit
     int32_t aoEnabled      = 1;   // 1 = ambient occlusion (calcAO), 0 = no occlusion
-    int32_t qualityPad1    = 0;   // padding to 16-byte alignment
-    int32_t qualityPad2    = 0;
+    int32_t qualityPad1    = 0;   // selection-visuals flag: 1 = suppress the object highlight
+                                  // (used for the object-id pick pass); 0 = normal. See SetSelectionVisuals.
+    float   gizmoPixelScale = 1.0f; // render-buffer px per display px (web Render Resolution scale);
+                                    // scales the shader's gizmo line/dot thickness so the gizmo is a
+                                    // constant on-screen size at any Render Resolution. Reuses the last
+                                    // pad slot, so the 240-byte layout is unchanged.
 };

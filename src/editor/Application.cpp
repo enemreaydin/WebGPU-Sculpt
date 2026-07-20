@@ -1414,6 +1414,9 @@ void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
     globals.gizmoHovered = static_cast<int32_t>(gizmoController.HoveredAxis());
     globals.gizmoActive  = static_cast<int32_t>(gizmoController.ActiveAxis());
     globals.gizmoMode    = static_cast<int32_t>(gizmoController.Mode());
+    // Same scale the axis endpoints were sized with, so the shader's line/dot
+    // thickness tracks the handle length and the gizmo stays a constant size.
+    globals.gizmoPixelScale = gizmoController.PixelScale();
     if (!visible)
         return;
 

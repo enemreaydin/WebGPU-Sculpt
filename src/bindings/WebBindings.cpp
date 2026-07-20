@@ -407,6 +407,13 @@ extern "C" {
         if (g_App) g_App->SetGizmoSpace(space);
     }
 
+    // scale: the web Render Resolution (render-buffer px per display px), so the
+    // gizmo keeps a constant on-screen size when the backing store is upscaled.
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_set_gizmo_pixel_scale(float scale) {
+        if (g_App) g_App->SetGizmoPixelScale(scale);
+    }
+
 } // extern "C"
 
 #endif // __EMSCRIPTEN__

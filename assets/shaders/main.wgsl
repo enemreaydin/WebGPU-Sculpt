@@ -32,7 +32,7 @@ struct Globals {
     shadowsEnabled : i32,
     aoEnabled : i32,
     qualityPad1 : i32,
-    qualityPad2 : i32,
+    gizmoPixelScale : f32,
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;
@@ -228,7 +228,7 @@ fn overlayTranslateGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f,
     let o = gizmoProject(globals.gizmoOrigin.xyz, ro, right, up, forward, focal);
     if (o.z < 0.0) { return baseCol; }
 
-    let uvPerPx = 2.0 / globals.resolution.y;
+    let uvPerPx = 2.0 * globals.gizmoPixelScale / globals.resolution.y;
     let lineHalf = 2.5 * uvPerPx;
     let dotR = 5.0 * uvPerPx;
 
@@ -256,7 +256,7 @@ fn overlayTranslateGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f,
 
 fn overlayRotateGizmo(baseCol : vec3f, ro : vec3f, rd : vec3f, forward : vec3f, focal : f32) -> vec3f {
     let o = globals.gizmoOrigin.xyz;
-    let uvPerPx = 2.0 / globals.resolution.y;
+    let uvPerPx = 2.0 * globals.gizmoPixelScale / globals.resolution.y;
 
     var col = baseCol;
 

@@ -719,6 +719,9 @@ export default class App extends React.Component<any, any> {
     canvas.width = w;
     canvas.height = h;
     this.engine.resize(w, h);
+    // The gizmo is sized in render-buffer px; tell the engine the render→display
+    // ratio so it stays a constant on-screen size when the buffer is upscaled.
+    this.engine.setGizmoPixelScale(scale);
     this.setState({ vpW: w, vpH: h });
   }
 
