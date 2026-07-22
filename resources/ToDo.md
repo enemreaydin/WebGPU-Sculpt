@@ -11,3 +11,4 @@
 11) Ayarlar menüsü
 12) Kısayol özelleştirmeleri
 13) Gizmo geçişi sırasında animasyon
+14) Aliasing motion blur
