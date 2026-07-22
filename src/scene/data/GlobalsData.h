@@ -78,7 +78,7 @@ struct alignas(16) GlobalsData
                                     // pad slot, so the 240-byte layout is unchanged.
 
 
-    float jitterOffset[2] = {-0.25f, -0.25f};
-    int32_t jitterPad0;
-    int32_t jitterPad1;
+    float jitterOffset[2] = {-0.25f, -0.25f};  // per-frame sub-pixel ray offset (px); set each frame in MainLoop
+    int32_t taaEnabled = 1;   // 1 = temporal AA (fs_resolve averages the 4 layers); 0 = passthrough (show current layer only)
+    int32_t jitterLayer = 0;  // accumulation layer written this frame (= m_JitterIndex); which layer fs_resolve shows when TAA is off
 };

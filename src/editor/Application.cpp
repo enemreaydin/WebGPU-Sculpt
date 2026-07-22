@@ -77,7 +77,16 @@ void Application::MainLoop() {
     // Push the user's render settings into the GPU uniform.
     SyncRenderGlobals();
     m_JitterIndex = (m_JitterIndex + 1) & 3;
-    UpdateJitterGlobal(m_JitterIndex);
+    // The scene always renders into layer[m_JitterIndex]; fs_resolve reads this
+    // index to show the current frame when TAA is off. With TAA off we also skip
+    // the sub-pixel jitter so the single shown layer stays pin-sharp.
+    globals.jitterLayer = static_cast<int32_t>(m_JitterIndex);
+    if (appSettings.taaEnabled) {
+        UpdateJitterGlobal(m_JitterIndex);
+    } else {
+        globals.jitterOffset[0] = 0.0f;
+        globals.jitterOffset[1] = 0.0f;
+    }
     if (renderer.globalsBuffer) {
         graphics.queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     }
@@ -1117,6 +1126,7 @@ std::string Application::GetSceneJson() const {
         << ",\"aaSamples\":" << rs.aaSamples
         << ",\"shadowsEnabled\":" << (rs.shadowsEnabled ? "true" : "false")
         << ",\"aoEnabled\":" << (rs.aoEnabled ? "true" : "false")
+        << ",\"taaEnabled\":" << (rs.taaEnabled ? "true" : "false")
         << "}";
 
     out << "}";
@@ -1487,6 +1497,7 @@ void Application::SyncRenderGlobals() {
     globals.aaSamples         = s.aaSamples;
     globals.shadowsEnabled    = s.shadowsEnabled ? 1 : 0;
     globals.aoEnabled         = s.aoEnabled ? 1 : 0;
+    globals.taaEnabled        = s.taaEnabled ? 1 : 0;
 }
 
 // Update one render setting by RenderSetting id (see Settings.h). Ints arrive as
@@ -1524,6 +1535,7 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::AaSamples:        appSettings.aaSamples = std::clamp(static_cast<int>(value + 0.5f), 1, 8); break;
     case RenderSetting::ShadowsEnabled:   appSettings.shadowsEnabled = value != 0.0f; break;
     case RenderSetting::AoEnabled:         appSettings.aoEnabled = value != 0.0f; break;
+    case RenderSetting::Taa:               appSettings.taaEnabled = value != 0.0f; break;
     default: break;
     }
 

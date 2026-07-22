@@ -31,6 +31,7 @@ struct Settings
     // Feature toggles — drop the two biggest optional per-pixel costs entirely.
     bool  shadowsEnabled    = true;   // soft shadows (calcSoftShadow, ~shadowSteps marches/pixel)
     bool  aoEnabled         = true;   // ambient occlusion (calcAO, aoSamples taps/pixel)
+    bool  taaEnabled        = true;   // temporal accumulation AA (§7a): jitter + average 4 frames; off = passthrough
 
     // Quality / performance settings (advanced — trade speed for precision/range):
     int   maxSteps          = 100;    // primary-ray step budget (main performance dial)
@@ -64,4 +65,5 @@ enum class RenderSetting : int
     ShadowsEnabled = 18,
     AoEnabled = 19,
     AaSamples = 20,
+    Taa = 21,
 };

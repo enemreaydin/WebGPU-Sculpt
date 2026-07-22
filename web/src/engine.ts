@@ -118,6 +118,7 @@ export enum RenderSetting {
   ShadowsEnabled = 18,
   AoEnabled = 19,
   AaSamples = 20,
+  Taa = 21,
 }
 
 // Current render settings, mirrored from the engine (Settings). Keys match the
@@ -140,6 +141,7 @@ export interface RenderSettings {
   aaSamples: number;
   shadowsEnabled: boolean;
   aoEnabled: boolean;
+  taaEnabled: boolean;
 }
 
 export interface SceneState {

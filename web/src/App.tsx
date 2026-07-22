@@ -3365,6 +3365,7 @@ export default class App extends React.Component<any, any> {
                             {this.rsToggleRow("Light", (this.state.render?.lightIntensity ?? 1) > 0, () => this.toggleLight(!((this.state.render?.lightIntensity ?? 1) > 0)))}
                             {this.rsToggleRow("Shadows", (this.state.render as any)?.shadowsEnabled !== false, () => this.rsBool(RenderSetting.ShadowsEnabled, "shadowsEnabled", !((this.state.render as any)?.shadowsEnabled !== false)))}
                             {this.rsToggleRow("Ambient Occlusion", (this.state.render as any)?.aoEnabled !== false, () => this.rsBool(RenderSetting.AoEnabled, "aoEnabled", !((this.state.render as any)?.aoEnabled !== false)))}
+                            {this.rsToggleRow("Temporal AA", (this.state.render as any)?.taaEnabled !== false, () => this.rsBool(RenderSetting.Taa, "taaEnabled", !((this.state.render as any)?.taaEnabled !== false)))}
                           </div>
                         </div>
 

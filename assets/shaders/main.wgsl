@@ -34,8 +34,8 @@ struct Globals {
     qualityPad1 : i32,
     gizmoPixelScale : f32,
     jitterOffset : vec2f,
-    jitterPad0 : i32,
-    jitterPad1 : i32
+    taaEnabled : i32,
+    jitterLayer : i32
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;
@@ -203,10 +203,14 @@ fn fs_resolve(in: VertexOutput) -> @location(0) vec4f {
     let coord = vec2i(in.position.xy);
 
     var c = vec3f(0.0);
-    for (var i = 0; i < 4; i++) {
-        c = c + textureLoad(accumTex, coord, i, 0).rgb;
+    if (globals.taaEnabled == 1) {
+        for (var i = 0; i < 4; i++) {
+            c = c + textureLoad(accumTex, coord, i, 0).rgb;
+        }
+        c = c * 0.25;
+    } else {
+        c = textureLoad(accumTex, coord, globals.jitterLayer, 0).rgb;
     }
-    c = c * 0.25;
 
     let ratio = globals.resolution.x / globals.resolution.y;
     let uv = vec2f(in.uv.x * ratio, in.uv.y);
