@@ -69,6 +69,8 @@ public:
 public:
     wgpu::RenderPipeline pipeline = nullptr;
     wgpu::BindGroup bindGroup = nullptr;
+    wgpu::RenderPipeline resolvePipeline = nullptr;  
+    wgpu::BindGroup      resolveBindGroup = nullptr;
     wgpu::Buffer sceneBuffer = nullptr;
     wgpu::Buffer csgProgramBuffer = nullptr;
     wgpu::Buffer globalsBuffer = nullptr;
@@ -80,6 +82,8 @@ private:
     wgpu::ShaderModule shaderModule = nullptr;
     wgpu::PipelineLayout pipelineLayout = nullptr;
     wgpu::BindGroupLayout bindGroupLayout = nullptr;
+    wgpu::PipelineLayout resolvePipelineLayout = nullptr;
+    wgpu::BindGroupLayout resolveBindGroupLayout = nullptr;
 
     wgpu::Texture renderTargetTexture = nullptr;
     wgpu::TextureView renderTargetView = nullptr;

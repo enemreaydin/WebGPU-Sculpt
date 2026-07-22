@@ -89,7 +89,7 @@ void Application::MainLoop() {
     CommandEncoder encoder = graphics.device.createCommandEncoder(encoderDesc);
 
     RenderPassColorAttachment colorAttachment = {};
-    colorAttachment.view = targetView;
+    colorAttachment.view = renderer.GetAccumLayerView(m_JitterIndex);
     colorAttachment.resolveTarget = nullptr;
 #ifdef __EMSCRIPTEN__
     // Browser WebGPU (Dawn) requires depthSlice to be "undefined" for a 2D
@@ -129,6 +129,31 @@ void Application::MainLoop() {
     }
     renderPass.end();
     renderPass.release();
+
+    RenderPassColorAttachment resolveColorAttachment = {};
+    resolveColorAttachment.view = targetView;
+    resolveColorAttachment.loadOp = LoadOp::Clear;
+    resolveColorAttachment.storeOp = StoreOp::Store;
+
+#ifdef __EMSCRIPTEN__
+    resolveColorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
+    RenderPassColorAttachment resolveColorAttachments[1] = {resolveColorAttachment};
+    RenderPassDescriptor resolveRenderPassDesc = {};
+    resolveRenderPassDesc.colorAttachmentCount = 1;
+    resolveRenderPassDesc.colorAttachments = resolveColorAttachments;
+    resolveRenderPassDesc.depthStencilAttachment = nullptr;
+    resolveRenderPassDesc.timestampWrites = nullptr;
+
+    RenderPassEncoder resolveRenderPass = encoder.beginRenderPass(resolveRenderPassDesc);
+
+    if (renderer.resolvePipeline && renderer.resolveBindGroup) {
+        resolveRenderPass.setPipeline(renderer.resolvePipeline);
+        resolveRenderPass.setBindGroup(0, renderer.resolveBindGroup, 0, nullptr);
+        resolveRenderPass.draw(6, 1, 0, 0);
+    }
+    resolveRenderPass.end();
+    resolveRenderPass.release();
 
     CommandBufferDescriptor cmdBufDesc = {};
     CommandBuffer cmdBuf = encoder.finish(cmdBufDesc);

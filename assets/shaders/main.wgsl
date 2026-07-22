@@ -44,8 +44,6 @@ struct Globals {
 
 @group(0) @binding(3) var accumTex : texture_2d_array<f32>;
 
-@group(0) @binding(3) var accumTex : texture_2d_array<f32>;
-
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) uv: vec2f,
@@ -193,9 +191,6 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     }
 
     col = toneMapAndEncode(col);
-
-    let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
-    col = overlayGizmo(col, uv, ro, rd, right, up, forward, focalLength);
 
     var out : FragmentOutput;
     out.color = vec4f(col, 1.0);

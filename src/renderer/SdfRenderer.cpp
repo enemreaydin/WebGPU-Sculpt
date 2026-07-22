@@ -142,6 +142,66 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
         return;
     }
 
+    // --- Resolve pipeline ---------------------------------------------------
+    // A second, separate pipeline that runs fs_resolve: it averages the 4
+    // accumulation layers into the swapchain and draws the gizmo on top. It has
+    // its OWN bind-group layout (globals uniform + the accum texture array) —
+    // the scene layout above is untouched.
+    wgpu::BindGroupLayoutEntry resolveGlobalsEntry{};
+    resolveGlobalsEntry.binding = 1;                       // matches `globals` in the shader
+    resolveGlobalsEntry.visibility = wgpu::ShaderStage::Fragment;
+    resolveGlobalsEntry.buffer.type = wgpu::BufferBindingType::Uniform;
+
+    wgpu::BindGroupLayoutEntry resolveTexEntry{};
+    resolveTexEntry.binding = 3;                           // matches `accumTex` in the shader
+    resolveTexEntry.visibility = wgpu::ShaderStage::Fragment;
+    resolveTexEntry.texture.sampleType = wgpu::TextureSampleType::Float;
+    resolveTexEntry.texture.viewDimension = wgpu::TextureViewDimension::_2DArray;
+    resolveTexEntry.texture.multisampled = false;
+
+    wgpu::BindGroupLayoutEntry resolveEntries[2] = { resolveGlobalsEntry, resolveTexEntry };
+
+    wgpu::BindGroupLayoutDescriptor resolveBglDesc{};
+    resolveBglDesc.entryCount = 2;
+    resolveBglDesc.entries = resolveEntries;
+    resolveBindGroupLayout = device.createBindGroupLayout(resolveBglDesc);
+
+    WGPUBindGroupLayout resolveLayouts[1] = { resolveBindGroupLayout };
+    wgpu::PipelineLayoutDescriptor resolveLayoutDesc{};
+    resolveLayoutDesc.bindGroupLayoutCount = 1;
+    resolveLayoutDesc.bindGroupLayouts = resolveLayouts;
+    resolvePipelineLayout = device.createPipelineLayout(resolveLayoutDesc);
+
+    wgpu::RenderPipelineDescriptor resolvePipelineDesc{};
+    resolvePipelineDesc.layout = resolvePipelineLayout;
+    resolvePipelineDesc.vertex.module = shaderModule;
+    resolvePipelineDesc.vertex.entryPoint = "vs_main";    // reuse the full-screen quad
+    resolvePipelineDesc.vertex.bufferCount = 0;
+
+    wgpu::ColorTargetState resolveColorTarget{};
+    resolveColorTarget.format = format;                   // swapchain format, single target
+    resolveColorTarget.writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::FragmentState resolveFragmentState{};
+    resolveFragmentState.module = shaderModule;
+    resolveFragmentState.entryPoint = "fs_resolve";
+    resolveFragmentState.targetCount = 1;                 // one target: no object-id here
+    resolveFragmentState.targets = &resolveColorTarget;
+    resolvePipelineDesc.fragment = &resolveFragmentState;
+
+    resolvePipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    resolvePipelineDesc.primitive.frontFace = wgpu::FrontFace::CCW;
+    resolvePipelineDesc.primitive.cullMode = wgpu::CullMode::None;
+    resolvePipelineDesc.multisample.count = 1;
+    resolvePipelineDesc.multisample.mask = ~0u;
+
+    resolvePipeline = device.createRenderPipeline(resolvePipelineDesc);
+    if (!resolvePipeline)
+    {
+        std::cerr << "[KRITIK]: ResolvePipeline olusturulamadi!\n";
+        return;
+    }
+
     std::cout << "[BILGI]: Pipeline basariyla olusturuldu.\n";
 }
 
@@ -437,6 +497,45 @@ void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32
     accumArrayViewDesc.arrayLayerCount = kAccumLayers;
     accumArrayView = accumTexture.createView(accumArrayViewDesc);
 
+    // The resolve bind group points at accumArrayView, which was just recreated,
+    // so it must be rebuilt here every time the render target is (re)sized.
+    if (resolveBindGroup)
+    {
+        resolveBindGroup.release();
+        resolveBindGroup = nullptr;
+    }
+
+    if (resolveBindGroupLayout && globalsBuffer && accumArrayView)
+    {
+        wgpu::BindGroupEntry resolveGlobalsBg{};
+        resolveGlobalsBg.binding = 1;
+        resolveGlobalsBg.buffer = globalsBuffer;
+        resolveGlobalsBg.offset = 0;
+        resolveGlobalsBg.size = sizeof(GlobalsData);
+
+        wgpu::BindGroupEntry resolveTexBg{};
+        resolveTexBg.binding = 3;
+        resolveTexBg.textureView = accumArrayView;   // textures use .textureView, not .buffer
+
+        wgpu::BindGroupEntry resolveBgEntries[2] = { resolveGlobalsBg, resolveTexBg };
+
+        wgpu::BindGroupDescriptor resolveBgDesc{};
+        resolveBgDesc.layout = resolveBindGroupLayout;
+        resolveBgDesc.entryCount = 2;
+        resolveBgDesc.entries = resolveBgEntries;
+        resolveBindGroup = device.createBindGroup(resolveBgDesc);
+    }
+}
+
+wgpu::TextureView SdfRenderer::GetAccumLayerView(uint32_t i) const
+{
+    if (i >= kAccumLayers) return nullptr;
+    return accumLayerViews[i];
+}
+
+wgpu::TextureView SdfRenderer::GetAccumArrayView() const
+{
+    return accumArrayView;
 }
 
 wgpu::TextureView SdfRenderer::GetRenderTargetView() const
@@ -670,7 +769,7 @@ void SdfRenderer::Destroy()
     }
 
     if (accumArrayView)
-    {       
+    {
         accumArrayView.release();
         accumArrayView = nullptr;
     }
@@ -681,10 +780,38 @@ void SdfRenderer::Destroy()
             accumLayerViews[i].release();
             accumLayerViews[i] = nullptr;
         }
-        
+
     }
-    
-    
+
+    if (accumTexture)
+    {
+        accumTexture.release();
+        accumTexture = nullptr;
+    }
+
+    if (resolveBindGroup)
+    {
+        resolveBindGroup.release();
+        resolveBindGroup = nullptr;
+    }
+
+    if (resolvePipeline)
+    {
+        resolvePipeline.release();
+        resolvePipeline = nullptr;
+    }
+
+    if (resolvePipelineLayout)
+    {
+        resolvePipelineLayout.release();
+        resolvePipelineLayout = nullptr;
+    }
+
+    if (resolveBindGroupLayout)
+    {
+        resolveBindGroupLayout.release();
+        resolveBindGroupLayout = nullptr;
+    }
 
     ClearSceneBuffer();
 
