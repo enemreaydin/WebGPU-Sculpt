@@ -259,6 +259,9 @@ private:
     SceneEditSnapshot m_SceneEditBefore{};
     bool m_SceneEditChanged = false;
 
+    uint32_t m_JitterIndex = 0;
+    void UpdateJitterGlobal(uint32_t jitterIndex);
+
     SceneEditSnapshot CaptureSceneEditSnapshot() const;
     void FinishSceneEdit(const char* name, const SceneEditSnapshot& before);
     bool ShouldRecordSceneEdit() const;

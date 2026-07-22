@@ -76,7 +76,8 @@ void Application::MainLoop() {
 
     // Push the user's render settings into the GPU uniform.
     SyncRenderGlobals();
-
+    m_JitterIndex = (m_JitterIndex + 1) & 3;
+    UpdateJitterGlobal(m_JitterIndex);
     if (renderer.globalsBuffer) {
         graphics.queue.writeBuffer(renderer.globalsBuffer, 0, &globals, sizeof(GlobalsData));
     }
@@ -1502,4 +1503,12 @@ void Application::SetRenderSetting(int id, float value) {
     }
 
     if (record) FinishSceneEdit("Change Render Setting", before);
+}
+
+void Application::UpdateJitterGlobal(uint32_t i){
+
+    float offsets[4][2] = {{-0.25f, 0.25f}, {0.25f, 0.25f}, {-0.25f, -0.25f}, {0.25f, -0.25f}};
+    globals.jitterOffset[0] = offsets[i][0];
+    globals.jitterOffset[1] = offsets[i][1];
+
 }

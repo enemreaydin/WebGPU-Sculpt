@@ -76,4 +76,9 @@ struct alignas(16) GlobalsData
                                     // scales the shader's gizmo line/dot thickness so the gizmo is a
                                     // constant on-screen size at any Render Resolution. Reuses the last
                                     // pad slot, so the 240-byte layout is unchanged.
+
+
+    float jitterOffset[2] = {-0.25f, -0.25f};
+    int32_t jitterPad0;
+    int32_t jitterPad1;
 };

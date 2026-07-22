@@ -33,6 +33,9 @@ struct Globals {
     aoEnabled : i32,
     qualityPad1 : i32,
     gizmoPixelScale : f32,
+    jitterOffset : vec2f,
+    jitterPad0 : i32,
+    jitterPad1 : i32
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;
@@ -149,7 +152,9 @@ fn shadeRay(uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, 
 @fragment
 fn fs_main(in: VertexOutput) -> FragmentOutput {
     let ratio = globals.resolution.x / globals.resolution.y;
-    let uv = vec2f(in.uv.x * ratio, in.uv.y);
+    var uv = vec2f(in.uv.x * ratio, in.uv.y);
+    uv = uv + globals.jitterOffset * (2.0 / globals.resolution.y);
+
 
     let ro = globals.cameraPos.xyz;
     let targetPoint = globals.cameraTarget.xyz;
