@@ -42,6 +42,10 @@ struct Globals {
 
 @group(0) @binding(2) var<storage, read> csg_program: array<CsgCommand>;
 
+@group(0) @binding(3) var accumTex : texture_2d_array<f32>;
+
+@group(0) @binding(3) var accumTex : texture_2d_array<f32>;
+
 struct VertexOutput {
     @builtin(position) position: vec4f,
     @location(0) uv: vec2f,
@@ -197,6 +201,35 @@ fn fs_main(in: VertexOutput) -> FragmentOutput {
     out.color = vec4f(col, 1.0);
     out.object_id = id;
     return out;
+}
+
+@fragment
+fn fs_resolve(in: VertexOutput) -> @location(0) vec4f {
+    let coord = vec2i(in.position.xy);
+
+    var c = vec3f(0.0);
+    for (var i = 0; i < 4; i++) {
+        c = c + textureLoad(accumTex, coord, i, 0).rgb;
+    }
+    c = c * 0.25;
+
+    let ratio = globals.resolution.x / globals.resolution.y;
+    let uv = vec2f(in.uv.x * ratio, in.uv.y);
+
+    let ro = globals.cameraPos.xyz;
+    let targetPoint = globals.cameraTarget.xyz;
+    let worldUp = vec3f(0.0, 1.0, 0.0);
+
+    let forward = normalize(targetPoint - ro);
+    let right = normalize(cross(forward, worldUp));
+    let up = cross(right, forward);
+
+    let focalLength = 2.414;
+    let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
+
+    c = overlayGizmo(c, uv, ro, rd, right, up, forward, focalLength);
+
+    return vec4f(c, 1.0);
 }
 
 

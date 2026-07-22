@@ -346,6 +346,29 @@ void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32
         objectIdTargetTexture = nullptr;
     }
 
+    if (accumTexture)
+    {
+        accumTexture.release();
+        accumTexture = nullptr;
+    }
+    if (accumArrayView)
+    {
+        accumArrayView.release();
+        accumArrayView = nullptr;
+    }
+    for (int32_t i = 0; i < kAccumLayers; i++)
+    {
+        if (accumLayerViews[i])
+        {
+            accumLayerViews[i].release();
+            accumLayerViews[i] = nullptr;
+        }
+        
+    }
+    
+    
+    
+
     wgpu::TextureDescriptor texDesc{};
     texDesc.size = { width, height, 1 };
     texDesc.format = renderTargetFormat;
@@ -386,6 +409,34 @@ void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32
 
     renderWidth = width;
     renderHeight = height;
+
+    wgpu::TextureDescriptor accumTextureDesc{};
+    accumTextureDesc.size = {width, height, kAccumLayers};
+    accumTextureDesc.format = renderTargetFormat;
+    accumTextureDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding;
+    accumTextureDesc.dimension = wgpu::TextureDimension::_2D;
+    accumTextureDesc.mipLevelCount = 1;
+    accumTextureDesc.sampleCount = 1;
+
+    accumTexture = device.createTexture(accumTextureDesc);
+
+    for (int32_t i = 0; i < kAccumLayers; i++)
+    {
+        wgpu::TextureViewDescriptor accumLayerViewDesc{};
+        accumLayerViewDesc.baseArrayLayer = i;
+        accumLayerViewDesc.dimension = wgpu::TextureViewDimension::_2D;
+        accumLayerViewDesc.mipLevelCount = 1;
+        accumLayerViewDesc.arrayLayerCount = 1;
+        accumLayerViews[i] = accumTexture.createView(accumLayerViewDesc);
+    }
+
+    wgpu::TextureViewDescriptor accumArrayViewDesc{};
+    accumArrayViewDesc.baseArrayLayer = 0;
+    accumArrayViewDesc.dimension = wgpu::TextureViewDimension::_2DArray;
+    accumArrayViewDesc.mipLevelCount = 1;
+    accumArrayViewDesc.arrayLayerCount = kAccumLayers;
+    accumArrayView = accumTexture.createView(accumArrayViewDesc);
+
 }
 
 wgpu::TextureView SdfRenderer::GetRenderTargetView() const
@@ -617,6 +668,23 @@ void SdfRenderer::Destroy()
         objectIdTargetTexture.release();
         objectIdTargetTexture = nullptr;
     }
+
+    if (accumArrayView)
+    {       
+        accumArrayView.release();
+        accumArrayView = nullptr;
+    }
+    for (int32_t i = 0; i < kAccumLayers; i++)
+    {
+        if (accumLayerViews[i])
+        {
+            accumLayerViews[i].release();
+            accumLayerViews[i] = nullptr;
+        }
+        
+    }
+    
+    
 
     ClearSceneBuffer();
 

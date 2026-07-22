@@ -60,6 +60,8 @@ public:
     const std::vector<uint8_t>& GetFinalPixels() const { return finalPixels; }
     uint32_t GetFinalWidth() const { return finalWidth; }
     uint32_t GetFinalHeight() const { return finalHeight; }
+    wgpu::TextureView GetAccumLayerView(uint32_t i) const;  // returns accumLayerViews[i]
+    wgpu::TextureView GetAccumArrayView() const;            // returns accumArrayView
     void ReleaseFinalRender();
 
     void Destroy();
@@ -82,6 +84,11 @@ private:
     wgpu::Texture renderTargetTexture = nullptr;
     wgpu::TextureView renderTargetView = nullptr;
     wgpu::TextureFormat renderTargetFormat = wgpu::TextureFormat::Undefined;
+
+    static constexpr int32_t kAccumLayers = 4;
+    wgpu::Texture accumTexture = nullptr;
+    wgpu::TextureView accumLayerViews[kAccumLayers] = {};
+    wgpu::TextureView accumArrayView = nullptr;
 
     wgpu::Texture objectIdTargetTexture = nullptr;
     wgpu::TextureView objectIdTargetView = nullptr;
