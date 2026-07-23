@@ -213,7 +213,7 @@ private:
                                       // selection, then re-upload the scene buffer
     void FindProjectRoot();
     void InitializeRenderer();
-    void UpdateCamera();
+    bool UpdateCamera();
     void UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p);  // fill gizmo* in globals
     void SyncRenderGlobals();  // copy appSettings render values into globals each frame
     void RebuildEditorRecords();   // recreate editor records after a scene load

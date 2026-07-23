@@ -61,7 +61,7 @@ void Application::MainLoop() {
     return; 
     }
 
-    UpdateCamera();
+    bool isCameraMoving = UpdateCamera();
 
     float aspect = (renderHeight > 0)
         ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight)
@@ -81,7 +81,12 @@ void Application::MainLoop() {
     // index to show the current frame when TAA is off. With TAA off we also skip
     // the sub-pixel jitter so the single shown layer stays pin-sharp.
     globals.jitterLayer = static_cast<int32_t>(m_JitterIndex);
-    if (appSettings.taaEnabled) {
+    if (isCameraMoving)
+    {
+        globals.taaEnabled = 0;
+    }
+    
+    if (globals.taaEnabled) {
         UpdateJitterGlobal(m_JitterIndex);
     } else {
         globals.jitterOffset[0] = 0.0f;
@@ -265,14 +270,14 @@ void Application::InitializeRenderer() {
     sceneSerializer.RefreshSceneBuffer();
 }
 
-void Application::UpdateCamera() {
+bool Application::UpdateCamera() {
     cameraController.Update(camera, appSettings, viewportInput);
+    bool isMoving = viewportInput.panning || viewportInput.orbiting || viewportInput.scrollDelta;
     // Input is per-frame; consume it so a gesture doesn't repeat.
     viewportInput = ViewportInput{};
 
     glm::vec3 camPos = camera.GetPosition();
     glm::vec3 camTargetPos = camera.GetTargetPosition();
-
     globals.selectedIndex = selectionState.selectedObjectIndex;
     globals.resolution[0] = static_cast<float>(renderWidth);
     globals.resolution[1] = static_cast<float>(renderHeight);
@@ -283,6 +288,7 @@ void Application::UpdateCamera() {
     globals.cameraTarget[0] = camTargetPos.x;
     globals.cameraTarget[1] = camTargetPos.y;
     globals.cameraTarget[2] = camTargetPos.z;
+    return isMoving;
 }
 
 
