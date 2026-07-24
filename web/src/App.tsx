@@ -1,5 +1,5 @@
 import React from "react";
-import { Engine, PrimitiveType, CsgOp, ShapeParam, RenderSetting, GizmoMode, GizmoSpace } from "./engine";
+import { Engine, PrimitiveType, CsgOp, ShapeParam, RenderSetting, QualityContext, QualitySetting, GizmoMode, GizmoSpace } from "./engine";
 
 // UI type-name <-> engine PrimitiveType enum.
 const TYPE_ENUM: Record<string, PrimitiveType> = {
@@ -364,13 +364,24 @@ export default class App extends React.Component<any, any> {
     // a viewport DISPLAY preference (like DPR), not scene state — it lives here,
     // not in the engine, and modulates what syncCanvasSize tells the engine to render.
     renderScale: 1,
-    // Active performance profile key ("low"/"balanced"/"high"/"ultra"), or "custom"
-    // once the user hand-tweaks any quality setting. Purely a UI convenience that
-    // batch-applies the existing render setters; the engine stays authoritative.
+    // Active VIEWPORT quality preset key ("low"/"balanced"/"high"/"ultra"), or
+    // "custom" once the user hand-tweaks any viewport quality setting. Purely a UI
+    // convenience that batch-applies the existing setters; the engine stays
+    // authoritative. The export has its own, independent preset below.
     perfProfile: "custom",
+    // Active EXPORT quality preset key ("draft"/"standard"/"high"/"ultra"), or
+    // "custom". Changing it never touches what the viewport renders at.
+    exportProfile: "high",
     renderedPreview: false,
     showOverlays: true,
     showObjectGizmos: true,
+    // "Framing Preview": a temporary, non-destructive mode for composing an export
+    // shot. It hides every piece of editor furniture (grid, gizmos, selection
+    // highlight, overlays), forces rendered shading, and makes the viewport
+    // camera-only — clicking no longer picks, so you cannot nudge the scene while
+    // framing it. _cleanSnapshot remembers the preferences it overrode so exiting
+    // restores them exactly. It previews the FRAMING, not the quality: the canvas
+    // still draws at the viewport budget, while the exported PNG uses the export one.
     cleanPreview: false,
     outputX: 1920,
     outputY: 1080,
@@ -395,8 +406,14 @@ export default class App extends React.Component<any, any> {
     // Engine's CSG hierarchy from the last getScene(); null before first read or
     // against an engine build that predates the tree section (flat fallback).
     tree: null as any,
-    // Engine render settings mirror (light/material/quality), from getScene().render.
+    // Engine "look" settings mirror (light/material), from getScene().render.
+    // Shared by the viewport and the export — an exported image must match what
+    // was on screen.
     render: null as any,
+    // The engine's two independent quality budgets, from getScene(). The viewport
+    // one drives the live canvas; the export one drives the offscreen image render.
+    viewportQuality: null as any,
+    exportQuality: null as any,
     // Whether the advanced (quality/performance) render settings are shown.
     advancedRender: false,
     // Open/closed state of the Render tab's collapsible sections (keyed by section
@@ -490,7 +507,7 @@ export default class App extends React.Component<any, any> {
 
             if (e.key === "F12") { e.preventDefault(); this.renderImage(); return; }
 
-            // Clean Preview is a camera-only input context. Keep framing and the
+            // Framing Preview is a camera-only input context. Keep framing and the
             // render/exit commands, but never route edit shortcuts to the scene.
             if (this.state.cleanPreview) {
               if (e.code === "KeyF") { if (this.engine?.cameraFrameSelected()) e.preventDefault(); }
@@ -848,7 +865,7 @@ export default class App extends React.Component<any, any> {
   }
 
   // Derive temporary viewport visibility from persistent user preferences in
-  // one place so Clean Preview and async render UI cannot restore stale values.
+  // one place so Framing Preview and async render UI cannot restore stale values.
   syncPreviewVisibility() {
     if (!this.engine) return;
     const overlays = this.state.showOverlays && !this.state.cleanPreview;
@@ -867,8 +884,9 @@ export default class App extends React.Component<any, any> {
     this._cleanSnapshot = { renderedPreview: this.state.renderedPreview, showOverlays: this.state.showOverlays,
       showObjectGizmos: this.state.showObjectGizmos, tool: this.state.tool, propsTab: this.state.propsTab };
     if (this._gizmoDrag) this.cancelGizmoDrag();
+    // Framing Preview exists to compose an export shot, so it opens the Export tab.
     this.setState({ cleanPreview: true, renderedPreview: true, shading: "rendered", showOverlays: false,
-      showObjectGizmos: false, propsTab: "render", openMenu: null, ctx: null });
+      showObjectGizmos: false, propsTab: "export", openMenu: null, ctx: null });
   };
   exitCleanPreview = () => {
     const p = this._cleanSnapshot;
@@ -1083,7 +1101,10 @@ export default class App extends React.Component<any, any> {
         .map(keyForNodeId)
         .filter((k: string | null): k is string => !!k);
       const primary = keyForNodeId(snap.primaryNodeId);
-      const next: any = { objects: snap.objects, tree, meta, grid: !!snap.showGrid, counts, render: snap.render || s.render || null };
+      const next: any = { objects: snap.objects, tree, meta, grid: !!snap.showGrid, counts,
+        render: snap.render || s.render || null,
+        viewportQuality: (snap as any).viewportQuality || s.viewportQuality || null,
+        exportQuality: (snap as any).exportQuality || s.exportQuality || null };
       next.selSet = selSet.length ? selSet : ["scene"];
       next.sel = primary || next.selSet[0];
       return next;
@@ -1229,52 +1250,81 @@ export default class App extends React.Component<any, any> {
     { id: RenderSetting.LightDirZ, key: "lightDirZ", label: "Light Dir Z", min: -1, max: 1, step: 0.05, help: "Front / back direction the light shines from." },
   ];
 
-  RENDER_ADVANCED = [
+  // The quality budget rows. One description shared by both contexts (the knobs
+  // are the same, only the values differ), with per-context slider bounds: the
+  // viewport is capped where a live framerate stops being plausible, the export
+  // is allowed to go much further because it renders exactly once.
+  QUALITY_SETTINGS = [
         {
-            id: RenderSetting.AaSamples, key: "aaSamples", label: "Anti-Aliasing", min: 1, max: 4, step: 1, int: true,
-            help: "Supersampling: rays fired per pixel along each axis (NxN). 1 = off (one ray, jagged edges). Higher fires more rays per pixel and averages them, smoothing silhouettes — 2 = 4 rays/pixel, 4 = 16. Big quality gain, but cost grows with the square, so it's a render-time dial rather than a realtime one."
+            id: QualitySetting.AaSamples, key: "aaSamples", label: "Supersampling (SSAA)", min: 1, max: 4, step: 1, int: true, exportMax: 8,
+            help: "Rays fired per pixel along each axis (NxN), averaged. 1 = off (one ray, jagged edges); 2 = 4 rays/pixel, 4 = 16. The cost grows with the square, so in the viewport this is a last resort — Temporal AA gives you smooth edges for free. For an exported image it is the main quality dial and there is no framerate to protect."
         },
         {
-            id: RenderSetting.MaxSteps, key: "maxSteps", label: "Max Ray Steps", min: 16, max: 512, step: 1, int: true,
+            id: QualitySetting.MaxSteps, key: "maxSteps", label: "Max Ray Steps", min: 16, max: 512, step: 1, int: true, exportMax: 1024,
             help: "How many steps each view ray may take. This is the MAIN performance dial: higher renders distant and thin shapes correctly but costs speed; too low and object edges dissolve or vanish."
         },
         {
-            id: RenderSetting.HitEpsilon, key: "hitEpsilon", label: "Surface Threshold", min: 0.0001, max: 0.01, step: 0.0001,
+            id: QualitySetting.HitEpsilon, key: "hitEpsilon", label: "Surface Threshold", min: 0.0001, max: 0.01, step: 0.0001,
             help: "How close a ray must get to count as hitting a surface. Smaller = sharper silhouettes and finer detail, but needs more Max Ray Steps or surfaces develop holes. Lower value = higher quality, higher cost."
         },
         {
-            id: RenderSetting.MaxDistance, key: "maxDistance", label: "View Distance", min: 10, max: 200, step: 1,
+            id: QualitySetting.MaxDistance, key: "maxDistance", label: "View Distance", min: 10, max: 200, step: 1, exportMax: 400,
             help: "How far view rays travel before giving up. Higher lets you see distant objects; too high just wastes steps on empty space."
         },
         {
-            id: RenderSetting.ShadowSteps, key: "shadowSteps", label: "Shadow Steps", min: 8, max: 128, step: 1, int: true,
+            id: QualitySetting.ShadowSteps, key: "shadowSteps", label: "Shadow Steps", min: 8, max: 128, step: 1, int: true, exportMax: 256,
             help: "Step budget for shadow rays. Higher = more accurate soft shadows, at a performance cost."
         },
         {
-            id: RenderSetting.ShadowDistance, key: "shadowDistance", label: "Shadow Distance", min: 5, max: 100, step: 1,
+            id: QualitySetting.ShadowDistance, key: "shadowDistance", label: "Shadow Distance", min: 5, max: 100, step: 1, exportMax: 200,
             help: "How far shadow rays search for blockers. Higher catches shadows from distant objects; costs performance."
         },
         {
-            id: RenderSetting.AoSamples, key: "aoSamples", label: "AO Samples", min: 2, max: 16, step: 1, int: true,
+            id: QualitySetting.AoSamples, key: "aoSamples", label: "AO Samples", min: 2, max: 16, step: 1, int: true, exportMax: 32,
             help: "Number of samples used for ambient occlusion. Higher = smoother contact shadows, lower performance."
         },
   ];
 
-  // Apply a render setting: clamp to the config bounds, push to the engine, and
-  // optimistically mirror into state (no full refresh — the engine just stores it).
+  // The quality rows for one context, with that context's slider bounds applied.
+  qualityRows(ctx: QualityContext) {
+    const isExport = ctx === QualityContext.Export;
+    return this.QUALITY_SETTINGS.map((c: any) => (isExport && c.exportMax ? { ...c, max: c.exportMax } : c));
+  }
+
+  // Which state key mirrors a context's engine-side budget.
+  qKey(ctx: QualityContext) { return ctx === QualityContext.Export ? "exportQuality" : "viewportQuality"; }
+  // The mirrored budget for a context (never null-checks at every call site).
+  qState(ctx: QualityContext): any { return this.state[this.qKey(ctx)] || {}; }
+  // Hand-tweaking a value drops that context's preset to "Custom" — and only that
+  // context's, which is the whole point of keeping the two apart.
+  qProfileKey(ctx: QualityContext) { return ctx === QualityContext.Export ? "exportProfile" : "perfProfile"; }
+
+  // Apply a render "look" setting: clamp to the config bounds, push to the engine,
+  // and optimistically mirror into state (no full refresh — the engine just stores it).
   rsSet(cfg: any, value: number) {
     if (isNaN(value)) return;
     let v = Math.max(cfg.min, Math.min(cfg.max, value));
     if (cfg.int) v = Math.round(v);
     this.engine?.setRenderSetting(cfg.id, v);
-    this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false, perfProfile: "custom" }));
+    this.setState((s: any) => ({ render: { ...s.render, [cfg.key]: v }, saved: false }));
   }
 
-  // Toggle a boolean render setting (shadows / AO). The engine takes a float, so
-  // send 1/0; mirror the bool into state like rsSet does for numbers.
-  rsBool(id: number, key: string, value: boolean) {
-    this.engine?.setRenderSetting(id, value ? 1 : 0);
-    this.setState((s: any) => ({ render: { ...s.render, [key]: value }, saved: false, perfProfile: "custom" }));
+  // Same, for one context's quality budget.
+  qSet(ctx: QualityContext, cfg: any, value: number) {
+    if (isNaN(value)) return;
+    let v = Math.max(cfg.min, Math.min(cfg.max, value));
+    if (cfg.int) v = Math.round(v);
+    this.engine?.setQualitySetting(ctx, cfg.id, v);
+    const stateKey = this.qKey(ctx);
+    this.setState((s: any) => ({ [stateKey]: { ...s[stateKey], [cfg.key]: v }, saved: false, [this.qProfileKey(ctx)]: "custom" }));
+  }
+
+  // Toggle a boolean quality setting (shadows / AO / TAA). The engine takes a
+  // float, so send 1/0; mirror the bool into state like qSet does for numbers.
+  qBool(ctx: QualityContext, id: number, key: string, value: boolean) {
+    this.engine?.setQualitySetting(ctx, id, value ? 1 : 0);
+    const stateKey = this.qKey(ctx);
+    this.setState((s: any) => ({ [stateKey]: { ...s[stateKey], [key]: value }, saved: false, [this.qProfileKey(ctx)]: "custom" }));
   }
 
   // "Light" master toggle — pure sugar over lightIntensity (no new engine state).
@@ -1286,66 +1336,124 @@ export default class App extends React.Component<any, any> {
     const next = on ? (this._lastLightIntensity > 0 ? this._lastLightIntensity : 1) : 0;
     if (!on && cur > 0) this._lastLightIntensity = cur;
     this.engine?.setRenderSetting(RenderSetting.LightIntensity, next);
-    this.setState((s: any) => ({ render: { ...s.render, lightIntensity: next }, saved: false, perfProfile: "custom" }));
+    this.setState((s: any) => ({ render: { ...s.render, lightIntensity: next }, saved: false }));
   }
 
-  // Performance profiles — one-click presets that batch render scale + the feature
-  // toggles + the raymarch/shadow/AO budgets. Values stay within the RENDER_ADVANCED
-  // slider bounds. "Ultra" trades speed for crisper distant/thin geometry; "Performance"
-  // (low) drops both marches and halves resolution for max FPS on weak GPUs.
+  // Viewport quality presets — one-click sets of render scale + feature toggles +
+  // the raymarch/shadow/AO budgets, tuned for a live framerate. Values stay within
+  // the viewport slider bounds. They all leave SSAA at 1 and Temporal AA on: in a
+  // continuously redrawn viewport, temporal accumulation smooths edges for free
+  // (CLAUDE.md §7a), while SSAA would multiply every frame's cost. The export
+  // presets below make exactly the opposite trade.
   PERF_PROFILES: Record<string, { label: string; scale: number; settings: Array<[number, number]> }> = {
     low: {
       label: "Fast", scale: 0.5,
       settings: [
-        [RenderSetting.ShadowsEnabled, 0], [RenderSetting.AoEnabled, 0],
-        [RenderSetting.MaxSteps, 64], [RenderSetting.HitEpsilon, 0.002], [RenderSetting.MaxDistance, 40],
-        [RenderSetting.ShadowSteps, 16], [RenderSetting.ShadowDistance, 20], [RenderSetting.AoSamples, 3],
-        [RenderSetting.AaSamples, 1],
+        [QualitySetting.ShadowsEnabled, 0], [QualitySetting.AoEnabled, 0],
+        [QualitySetting.MaxSteps, 64], [QualitySetting.HitEpsilon, 0.002], [QualitySetting.MaxDistance, 40],
+        [QualitySetting.ShadowSteps, 16], [QualitySetting.ShadowDistance, 20], [QualitySetting.AoSamples, 3],
+        [QualitySetting.AaSamples, 1], [QualitySetting.Taa, 1],
       ],
     },
     balanced: {
       label: "Balanced", scale: 0.75,
       settings: [
-        [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
-        [RenderSetting.MaxSteps, 96], [RenderSetting.HitEpsilon, 0.001], [RenderSetting.MaxDistance, 50],
-        [RenderSetting.ShadowSteps, 32], [RenderSetting.ShadowDistance, 30], [RenderSetting.AoSamples, 4],
-        [RenderSetting.AaSamples, 1],
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 96], [QualitySetting.HitEpsilon, 0.001], [QualitySetting.MaxDistance, 50],
+        [QualitySetting.ShadowSteps, 32], [QualitySetting.ShadowDistance, 30], [QualitySetting.AoSamples, 4],
+        [QualitySetting.AaSamples, 1], [QualitySetting.Taa, 1],
       ],
     },
     high: {
       label: "High", scale: 1,
       settings: [
-        [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
-        [RenderSetting.MaxSteps, 128], [RenderSetting.HitEpsilon, 0.0008], [RenderSetting.MaxDistance, 60],
-        [RenderSetting.ShadowSteps, 48], [RenderSetting.ShadowDistance, 30], [RenderSetting.AoSamples, 5],
-        [RenderSetting.AaSamples, 2],
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 128], [QualitySetting.HitEpsilon, 0.0008], [QualitySetting.MaxDistance, 60],
+        [QualitySetting.ShadowSteps, 48], [QualitySetting.ShadowDistance, 30], [QualitySetting.AoSamples, 5],
+        [QualitySetting.AaSamples, 1], [QualitySetting.Taa, 1],
       ],
     },
     ultra: {
       label: "Ultra", scale: 1,
       settings: [
-        [RenderSetting.ShadowsEnabled, 1], [RenderSetting.AoEnabled, 1],
-        [RenderSetting.MaxSteps, 256], [RenderSetting.HitEpsilon, 0.0004], [RenderSetting.MaxDistance, 80],
-        [RenderSetting.ShadowSteps, 96], [RenderSetting.ShadowDistance, 40], [RenderSetting.AoSamples, 8],
-        [RenderSetting.AaSamples, 4],
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 256], [QualitySetting.HitEpsilon, 0.0004], [QualitySetting.MaxDistance, 80],
+        [QualitySetting.ShadowSteps, 96], [QualitySetting.ShadowDistance, 40], [QualitySetting.AoSamples, 8],
+        [QualitySetting.AaSamples, 1], [QualitySetting.Taa, 1],
       ],
     },
   };
 
+  // Export quality presets — the same knobs, tuned for a still image instead of a
+  // framerate. Temporal AA is absent by design: the export is a single offscreen
+  // pass, so there are no previous frames to accumulate. SSAA does the
+  // anti-aliasing here, and it is what separates the presets. "High" matches the
+  // engine's export defaults (QualitySettings::ExportDefaults).
+  EXPORT_PROFILES: Record<string, { label: string; settings: Array<[number, number]> }> = {
+    draft: {
+      label: "Draft",
+      settings: [
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 96], [QualitySetting.HitEpsilon, 0.001], [QualitySetting.MaxDistance, 50],
+        [QualitySetting.ShadowSteps, 32], [QualitySetting.ShadowDistance, 30], [QualitySetting.AoSamples, 4],
+        [QualitySetting.AaSamples, 1],
+      ],
+    },
+    standard: {
+      label: "Standard",
+      settings: [
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 160], [QualitySetting.HitEpsilon, 0.0006], [QualitySetting.MaxDistance, 60],
+        [QualitySetting.ShadowSteps, 64], [QualitySetting.ShadowDistance, 30], [QualitySetting.AoSamples, 6],
+        [QualitySetting.AaSamples, 2],
+      ],
+    },
+    high: {
+      label: "High",
+      settings: [
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 256], [QualitySetting.HitEpsilon, 0.0004], [QualitySetting.MaxDistance, 80],
+        [QualitySetting.ShadowSteps, 96], [QualitySetting.ShadowDistance, 40], [QualitySetting.AoSamples, 8],
+        [QualitySetting.AaSamples, 3],
+      ],
+    },
+    ultra: {
+      label: "Ultra",
+      settings: [
+        [QualitySetting.ShadowsEnabled, 1], [QualitySetting.AoEnabled, 1],
+        [QualitySetting.MaxSteps, 384], [QualitySetting.HitEpsilon, 0.0002], [QualitySetting.MaxDistance, 120],
+        [QualitySetting.ShadowSteps, 128], [QualitySetting.ShadowDistance, 60], [QualitySetting.AoSamples, 12],
+        [QualitySetting.AaSamples, 4],
+      ],
+    },
+  };
+
+  // Push one preset's values into a single context. Coalesced into one scene-edit
+  // (the same wrap a slider drag uses) so a preset is one history step, not one
+  // per field.
+  applyQualityProfile(ctx: QualityContext, key: string, settings: Array<[number, number]>, name: string) {
+    const e = this.engine;
+    if (!e) return;
+    e.beginSceneEdit(name);
+    for (const [id, val] of settings) e.setQualitySetting(ctx, id, val);
+    e.commitSceneEdit();
+    this.refresh();   // re-read engine values so every slider/toggle reflects the preset
+    this.setState({ [this.qProfileKey(ctx)]: key, saved: false });
+  }
+
   applyProfile(key: string) {
     const p = this.PERF_PROFILES[key];
-    const e = this.engine;
-    if (!p || !e) return;
-    // Coalesce the batch into one scene-edit (same wrap a slider drag uses), so a
-    // profile is a single history step rather than one per field.
-    e.beginSceneEdit("Apply Performance Profile");
-    for (const [id, val] of p.settings) e.setRenderSetting(id, val);
-    e.commitSceneEdit();
-    // Re-read engine values so every slider/toggle reflects the profile...
-    this.refresh();
-    // ...then the web-side render scale (also tags the active profile) + resync canvas.
+    if (!p) return;
+    this.applyQualityProfile(QualityContext.Viewport, key, p.settings, "Apply Viewport Quality Preset");
+    // ...then the web-side render scale (also re-tags the active preset, which the
+    // refresh above cannot know about) + resync the canvas backing store.
     this.setRenderScale(p.scale, key);
-    this.setState({ saved: false });
+  }
+
+  applyExportProfile(key: string) {
+    const p = this.EXPORT_PROFILES[key];
+    if (!p) return;
+    this.applyQualityProfile(QualityContext.Export, key, p.settings, "Apply Export Quality Preset");
   }
 
   rsToggleHelp(key: string) {
@@ -1366,6 +1474,40 @@ export default class App extends React.Component<any, any> {
         onBegin={() => this.engine?.beginSceneEdit("Change Render Setting")}
         onCommit={() => this.engine?.commitSceneEdit()}
         onChange={(value: number) => this.rsSet(cfg, value)} />
+    );
+  }
+
+  // The same row, bound to one context's quality budget. The help-open flag is
+  // namespaced per context so expanding "Max Ray Steps" in the Render tab doesn't
+  // also expand it in the Export tab.
+  qRow(ctx: QualityContext, cfg: any) {
+    const q = this.qState(ctx);
+    const val = typeof q[cfg.key] === "number" ? q[cfg.key] : cfg.min;
+    const helpKey = this.qKey(ctx) + ":" + cfg.key;
+    const open = !!this.state.renderHelp[helpKey];
+    return (
+      <NumericSliderRow key={helpKey} cfg={cfg} value={val} open={open}
+        caretPath={open ? this.IC.caretD : this.IC.caretR}
+        onToggleHelp={() => this.rsToggleHelp(helpKey)}
+        onBegin={() => this.engine?.beginSceneEdit("Change Quality Setting")}
+        onCommit={() => this.engine?.commitSceneEdit()}
+        onChange={(value: number) => this.qSet(ctx, cfg, value)} />
+    );
+  }
+
+  // The preset button strip shared by both tabs.
+  qPresetRow(active: string, profiles: Record<string, { label: string }>, onPick: (key: string) => void) {
+    return (
+      <div style={css("display:flex;gap:4px")}>
+        {Object.keys(profiles).map((k) => {
+          const on = active === k;
+          return (
+            <Hv key={k} onClick={() => onPick(k)}
+              s={`flex:1 1 0;min-width:0;text-align:center;padding:5px 4px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${on ? "#e8912d" : "#3a3a3a"};background:${on ? "#e8912d" : "#151515"};color:${on ? "#151515" : "#b0b0b0"}`}
+              h={on ? "" : "border-color:#565656;color:#dedede"}>{profiles[k].label}</Hv>
+          );
+        })}
+      </div>
     );
   }
 
@@ -2418,7 +2560,7 @@ export default class App extends React.Component<any, any> {
         mi("Save", "Ctrl S", () => this.saveProject()),
         sep,
         mi("Import .sdfo", "", () => {}, true),
-        mi("Export", "", () => {}, true),
+        mi("Export Image…", "", () => this.setState({ propsTab: "export" })),
       ],
       mEdit: { bg: mE.bg }, editOpen: mE.open, mtEdit: mE.mt, mhEdit: mE.mh,
       editItems: [
@@ -2454,10 +2596,11 @@ export default class App extends React.Component<any, any> {
       mRender: { bg: mR.bg }, renderOpen: mR.open, mtRender: mR.mt, mhRender: mR.mh,
       renderItems: [
         mi("Render Image", "F12", this.renderImage, S.renderStage !== "idle"),
-        mi(S.cleanPreview ? "Exit Clean Preview" : "Enter Clean Preview", "", S.cleanPreview ? this.exitCleanPreview : this.enterCleanPreview),
+        mi(S.cleanPreview ? "Exit Framing Preview" : "Enter Framing Preview", "", S.cleanPreview ? this.exitCleanPreview : this.enterCleanPreview),
         mi("Render Animation", "", () => {}, true),
         sep,
-        mi("Render Settings…", "", () => this.setState({ propsTab: "render" })),
+        mi("Viewport Settings…", "", () => this.setState({ propsTab: "render" })),
+        mi("Export Settings…", "", () => this.setState({ propsTab: "export" })),
       ],
       mHelp: { bg: mH.bg }, helpOpen: mH.open, mtHelp: mH.mt, mhHelp: mH.mh,
       helpItems: [
@@ -2552,11 +2695,24 @@ export default class App extends React.Component<any, any> {
       treeRows: rows,
 
       // properties
-      ptObj: tabSt(propsTab === "object"), onPtObj: () => this.setState({ propsTab: "object" }),
-      ptMat: tabSt(propsTab === "material"), onPtMat: () => this.setState({ propsTab: "material" }),
-      ptMod: tabSt(propsTab === "modifiers"), onPtMod: () => this.setState({ propsTab: "modifiers" }),
-      ptRen: tabSt(propsTab === "render"), onPtRen: () => this.setState({ propsTab: "render" }),
-      isObjTab: propsTab === "object", isMatTab: propsTab === "material", isModTab: propsTab === "modifiers", isRenTab: propsTab === "render",
+      // Property tabs. Render (what the viewport draws) and Export (what the saved
+      // image is) are separate tabs on purpose — they own separate engine-side
+      // quality budgets, so cramming both into one scrolling tab hid that split.
+      propTabs: [
+        { key: "object", label: "Object" },
+        { key: "material", label: "Material" },
+        { key: "modifiers", label: "Modifiers" },
+        { key: "render", label: "Render" },
+        { key: "export", label: "Export" },
+      ].map((t) => ({ ...t, st: tabSt(propsTab === t.key), onClick: () => this.setState({ propsTab: t.key }) })),
+      isObjTab: propsTab === "object", isMatTab: propsTab === "material", isModTab: propsTab === "modifiers",
+      isRenTab: propsTab === "render", isExpTab: propsTab === "export",
+      // The two quality mirrors, defaulted so a panel rendered before the first
+      // getScene() (or against an older engine build) still shows sane switches.
+      vq: { shadowsEnabled: true, aoEnabled: true, taaEnabled: true, aaSamples: 1, ...(S.viewportQuality || {}) },
+      eq: { shadowsEnabled: true, aoEnabled: true, taaEnabled: false, aaSamples: 1, ...(S.exportQuality || {}) },
+      canRenderImage: this.outputSize().valid && S.renderStage === "idle",
+      renderButtonLabel: S.renderStage === "rendering" ? "Rendering…" : S.renderStage === "reading" ? "Reading pixels…" : "Render Image",
       hasObj: isObj, isCollSel: isColl, isGroupSel: isGroupSel && !!groupSel, groupSel,
       noSel: S.sel == null || (isGroupSel && !groupSel),
       // Group colour uses the shared picker (applyHsv routes to setGroupColor).
@@ -2954,7 +3110,7 @@ export default class App extends React.Component<any, any> {
               {/* The translate gizmo is drawn by the engine's SDF shader (same
                   frame as the scene), so there is no HTML/SVG overlay here. */}
 
-              {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>{this.state.cleanPreview ? "Clean Preview" : "User Perspective"}</span>}
+              {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>{this.state.cleanPreview ? "Framing Preview" : "User Perspective"}</span>}
 
               {/* FPS readout (top-right). Green >=50, amber 30-49, red <30. */}
               {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css(`position:absolute;top:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;color:${this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps} FPS</span>}
@@ -3138,10 +3294,11 @@ export default class App extends React.Component<any, any> {
             {/* Properties */}
             <div style={css("flex:1 1 auto;background:#1f1f1f;display:flex;flex-direction:column;min-height:0")}>
               <div style={css("height:28px;flex:0 0 auto;display:flex;align-items:stretch;background:#1a1a1a;border-bottom:1px solid #0c0c0c")}>
-                <Hv onClick={V.onPtObj} s={`display:flex;align-items:center;padding:0 12px;font-size:11px;cursor:default;background:${V.ptObj.bg};color:${V.ptObj.fg};border-bottom:2px solid ${V.ptObj.line};border-right:1px solid #0c0c0c`} h="color:#dedede">Object</Hv>
-                <Hv onClick={V.onPtMat} s={`display:flex;align-items:center;padding:0 12px;font-size:11px;cursor:default;background:${V.ptMat.bg};color:${V.ptMat.fg};border-bottom:2px solid ${V.ptMat.line};border-right:1px solid #0c0c0c`} h="color:#dedede">Material</Hv>
-                <Hv onClick={V.onPtMod} s={`display:flex;align-items:center;padding:0 12px;font-size:11px;cursor:default;background:${V.ptMod.bg};color:${V.ptMod.fg};border-bottom:2px solid ${V.ptMod.line};border-right:1px solid #0c0c0c`} h="color:#dedede">Modifiers</Hv>
-                <Hv onClick={V.onPtRen} s={`display:flex;align-items:center;padding:0 12px;font-size:11px;cursor:default;background:${V.ptRen.bg};color:${V.ptRen.fg};border-bottom:2px solid ${V.ptRen.line};border-right:1px solid #0c0c0c`} h="color:#dedede">Render</Hv>
+                {/* Five tabs share the panel width, so each flexes and ellipsises
+                    rather than overflowing a narrow right dock. */}
+                {V.propTabs.map((t: any) => (
+                  <Hv key={t.key} onClick={t.onClick} s={`flex:1 1 0;min-width:0;display:flex;align-items:center;justify-content:center;padding:0 6px;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default;background:${t.st.bg};color:${t.st.fg};border-bottom:2px solid ${t.st.line};border-right:1px solid #0c0c0c`} h="color:#dedede">{t.label}</Hv>
+                ))}
               </div>
 
               <div style={css("flex:1 1 auto;overflow:auto;min-height:0")}>
@@ -3312,6 +3469,9 @@ export default class App extends React.Component<any, any> {
                   </div>
                 )}
 
+                {/* RENDER tab — everything about the live viewport. Its quality
+                    budget is the engine's Viewport context and is completely
+                    independent of the Export tab's. */}
                 {V.isRenTab && (
                   <div style={css("display:flex;flex-direction:column")}>
                     {!this.state.render ? (
@@ -3320,28 +3480,10 @@ export default class App extends React.Component<any, any> {
                       <>
                         {/* Quick setup — the everyday dials, always visible and compact. */}
                         <div style={css("display:flex;flex-direction:column;gap:9px;padding:10px")}>
-                          {this.state.cleanPreview && (
-                            <div style={css("display:flex;flex-direction:column;gap:6px;padding:8px;background:#211a11;border:1px solid #3a2c17;border-radius:3px")}>
-                              <span style={css("font-size:11px;color:#e8912d;font-weight:600")}>Clean Preview Active</span>
-                              <span style={css("font-size:10px;color:#8a8a8a")}>Navigation on · editing off</span>
-                              <div style={css("display:flex;gap:5px")}>
-                                <Hv tag="button" onClick={this.exitCleanPreview} s="flex:1;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Back to Editor</Hv>
-                                <Hv tag="button" onClick={this.renderImage} s="flex:1;height:24px;background:#e8912d;color:#151515;border:1px solid #e8912d;border-radius:2px;font-size:11px;cursor:pointer" h="background:#f0a24a">Render Image</Hv>
-                              </div>
-                            </div>
-                          )}
+                          <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Viewport only — how fast and how clean the live canvas draws. The exported image has its own quality settings in the Export tab.</span>
                           <div style={css("display:flex;flex-direction:column;gap:5px")}>
-                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Quality Preset</span>
-                            <div style={css("display:flex;gap:4px")}>
-                              {["low", "balanced", "high", "ultra"].map((k) => {
-                                const active = this.state.perfProfile === k;
-                                return (
-                                  <Hv key={k} onClick={() => this.applyProfile(k)}
-                                    s={`flex:1 1 0;min-width:0;text-align:center;padding:5px 4px;font-size:11px;border-radius:3px;cursor:default;border:1px solid ${active ? "#e8912d" : "#3a3a3a"};background:${active ? "#e8912d" : "#151515"};color:${active ? "#151515" : "#b0b0b0"}`}
-                                    h={active ? "" : "border-color:#565656;color:#dedede"}>{this.PERF_PROFILES[k].label}</Hv>
-                                );
-                              })}
-                            </div>
+                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Viewport Quality</span>
+                            {this.qPresetRow(this.state.perfProfile, this.PERF_PROFILES, (k) => this.applyProfile(k))}
                             {this.state.perfProfile === "custom" && <span style={css("font-size:10px;color:#6f6f6f")}>Custom — fine-tuned. Pick a preset to reset.</span>}
                           </div>
                           <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}>
@@ -3362,47 +3504,107 @@ export default class App extends React.Component<any, any> {
                           </div>
                           <div style={css("display:flex;flex-direction:column;gap:6px")}>
                             <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Effects</span>
-                            {this.rsToggleRow("Light", (this.state.render?.lightIntensity ?? 1) > 0, () => this.toggleLight(!((this.state.render?.lightIntensity ?? 1) > 0)))}
-                            {this.rsToggleRow("Shadows", (this.state.render as any)?.shadowsEnabled !== false, () => this.rsBool(RenderSetting.ShadowsEnabled, "shadowsEnabled", !((this.state.render as any)?.shadowsEnabled !== false)))}
-                            {this.rsToggleRow("Ambient Occlusion", (this.state.render as any)?.aoEnabled !== false, () => this.rsBool(RenderSetting.AoEnabled, "aoEnabled", !((this.state.render as any)?.aoEnabled !== false)))}
-                            {this.rsToggleRow("Temporal AA", (this.state.render as any)?.taaEnabled !== false, () => this.rsBool(RenderSetting.Taa, "taaEnabled", !((this.state.render as any)?.taaEnabled !== false)))}
+                            {this.rsToggleRow("Shadows", V.vq.shadowsEnabled, () => this.qBool(QualityContext.Viewport, QualitySetting.ShadowsEnabled, "shadowsEnabled", !V.vq.shadowsEnabled))}
+                            {this.rsToggleRow("Ambient Occlusion", V.vq.aoEnabled, () => this.qBool(QualityContext.Viewport, QualitySetting.AoEnabled, "aoEnabled", !V.vq.aoEnabled))}
+                            {this.rsToggleRow("Temporal AA", V.vq.taaEnabled, () => this.qBool(QualityContext.Viewport, QualitySetting.Taa, "taaEnabled", !V.vq.taaEnabled))}
+                            <span style={css("font-size:10px;line-height:1.5;color:#6f6f6f")}>Temporal AA smooths edges by averaging the last 4 frames — free while the camera sits still, and it blurs briefly whenever something moves. It does nothing for exports, which render a single frame.</span>
                           </div>
                         </div>
 
-                        {this.rsecHeader("preview", "Preview", false)}
+                        {this.rsecHeader("preview", "Viewport Display", false)}
                         {this.rsecOpen("preview", false) && (
                           <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
                             {this.rsToggleRow("Rendered Preview", !!this.state.renderedPreview, () => this.setRenderedPreview(!this.state.renderedPreview))}
                             {this.rsToggleRow("Show Overlays", !!this.state.showOverlays, () => this.setOverlays(!this.state.showOverlays))}
                             {this.rsToggleRow("Show Object Gizmos", !!this.state.showObjectGizmos, () => this.setObjectGizmos(!this.state.showObjectGizmos))}
-                            {!this.state.cleanPreview && <Hv tag="button" onClick={this.enterCleanPreview} s="width:100%;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Enter Clean Preview</Hv>}
-                          </div>
-                        )}
-
-                        {this.rsecHeader("export", "Export Image", false)}
-                        {this.rsecOpen("export", false) && (
-                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
-                            {[['Resolution X','outputX'],['Resolution Y','outputY']].map(([label,key])=><div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><input type="number" min="64" max="4096" step="1" value={this.state[key]} onChange={(e)=>this.setState({[key]:e.target.value === '' ? '' : Number(e.target.value)})} style={css("width:86px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 7px")}/></div>)}
-                            <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>Output Scale</span><div style={css("display:flex;gap:3px")}>{[["50%",.5],["75%",.75],["100%",1]].map(([label,scale]:any)=>{const on=this.state.outputScale===scale;return <Hv key={label} onClick={()=>this.setState({outputScale:scale})} s={`height:22px;padding:0 7px;border:1px solid ${on?'#e8912d':'#363636'};background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};font-size:10px;border-radius:2px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>})}</div></div>
-                            <div style={css("display:flex;justify-content:space-between;font-size:10px;color:#7a7a7a")}><span>Calculated Size</span><span>{this.outputSize().valid ? `${this.outputSize().w} × ${this.outputSize().h}` : '64–4096 px required'}</span></div>
-                            <div style={css("display:flex;align-items:center;justify-content:space-between")}><span style={css("font-size:11px;color:#c0c0c0")}>File Format</span><span style={css("width:86px;height:22px;display:flex;align-items:center;padding:0 7px;background:#151515;border:1px solid #303030;border-radius:2px;font-size:11px")}>PNG</span></div>
-                            <Hv tag="button" onClick={this.outputSize().valid && this.state.renderStage==='idle' ? this.renderImage : undefined} s={`width:100%;height:24px;border-radius:2px;font-size:11px;border:1px solid ${this.outputSize().valid?'#e8912d':'#2e2e2e'};background:${this.outputSize().valid?'#e8912d':'#2a2a2a'};color:${this.outputSize().valid?'#151515':'#616161'};cursor:${this.outputSize().valid?'pointer':'default'}`} h={this.outputSize().valid?'background:#f0a24a':''}>Render Image</Hv>
+                            <span style={css("font-size:10px;line-height:1.5;color:#6f6f6f")}>To hide every overlay at once and frame a shot, use Framing Preview in the Export tab.</span>
                           </div>
                         )}
 
                         {this.rsecHeader("look", "Lighting & Look", false)}
                         {this.rsecOpen("look", false) && (
                           <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
-                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Click a setting's name for a short explanation. These affect the look and cost little or no performance.</span>
+                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Shared with the export — these describe the scene, not the render budget, so an exported image matches what you see here. Click a setting's name for a short explanation.</span>
+                            {this.rsToggleRow("Light", (this.state.render?.lightIntensity ?? 1) > 0, () => this.toggleLight(!((this.state.render?.lightIntensity ?? 1) > 0)))}
                             {this.RENDER_SETTINGS.map((cfg: any) => this.rsRow(cfg))}
                           </div>
                         )}
 
-                        {this.rsecHeader("advanced", "Advanced Quality", false)}
+                        {this.rsecHeader("advanced", "Advanced Viewport Quality", false)}
                         {this.rsecOpen("advanced", false) && (
                           <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
-                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>These trade rendering speed for quality/range. Lower them if the viewport feels slow; raise them for crisper, more accurate images.</span>
-                            {this.RENDER_ADVANCED.map((cfg: any) => this.rsRow(cfg))}
+                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Fine control behind the preset above. These trade viewport framerate for precision/range — lower them if the viewport feels slow.</span>
+                            {this.qualityRows(QualityContext.Viewport).map((cfg: any) => this.qRow(QualityContext.Viewport, cfg))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* EXPORT tab — everything about the saved image. Its quality budget
+                    is the engine's Export context, so raising it never slows the
+                    viewport down and lowering the viewport never degrades exports. */}
+                {V.isExpTab && (
+                  <div style={css("display:flex;flex-direction:column")}>
+                    {!this.state.exportQuality ? (
+                      <span style={css("font-size:11px;color:#616161;text-align:center;padding:16px 0")}>Loading export settings…</span>
+                    ) : (
+                      <>
+                        <div style={css("display:flex;flex-direction:column;gap:9px;padding:10px")}>
+                          <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Renders one image at its own quality, independent of the viewport. Work at 50% with shadows off and still export clean.</span>
+
+                          {this.state.cleanPreview ? (
+                            <div style={css("display:flex;flex-direction:column;gap:6px;padding:8px;background:#211a11;border:1px solid #3a2c17;border-radius:3px")}>
+                              <span style={css("font-size:11px;color:#e8912d;font-weight:600")}>Framing Preview Active</span>
+                              <span style={css("font-size:10px;color:#8a8a8a")}>Grid, gizmos and selection hidden · camera on, editing off</span>
+                              <div style={css("display:flex;gap:5px")}>
+                                <Hv tag="button" onClick={this.exitCleanPreview} s="flex:1;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Back to Editor</Hv>
+                                <Hv tag="button" onClick={this.renderImage} s="flex:1;height:24px;background:#e8912d;color:#151515;border:1px solid #e8912d;border-radius:2px;font-size:11px;cursor:pointer" h="background:#f0a24a">Render Image</Hv>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={css("display:flex;flex-direction:column;gap:5px")}>
+                              <Hv tag="button" onClick={this.enterCleanPreview} s="width:100%;height:24px;background:#2a2a2a;color:#dedede;border:1px solid #363636;border-radius:2px;font-size:11px;cursor:pointer" h="background:#333">Enter Framing Preview</Hv>
+                              <span style={css("font-size:10px;line-height:1.5;color:#6f6f6f")}>Hides the grid, gizmos and selection highlight so you can compose the shot exactly as it will be exported. The camera still moves; clicking no longer selects. Quality stays at the viewport setting — only the framing is a preview.</span>
+                            </div>
+                          )}
+
+                          <div style={css("display:flex;flex-direction:column;gap:5px")}>
+                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Export Quality</span>
+                            {this.qPresetRow(this.state.exportProfile, this.EXPORT_PROFILES, (k) => this.applyExportProfile(k))}
+                            <span style={css("font-size:10px;color:#6f6f6f")}>
+                              {this.state.exportProfile === "custom" ? "Custom — fine-tuned. Pick a preset to reset." : `Supersampling ${V.eq.aaSamples}× — ${V.eq.aaSamples * V.eq.aaSamples} rays per pixel.`}
+                            </span>
+                          </div>
+
+                          <div style={css("display:flex;flex-direction:column;gap:6px")}>
+                            <span style={css("font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:#7a7a7a")}>Effects</span>
+                            {this.rsToggleRow("Shadows", V.eq.shadowsEnabled, () => this.qBool(QualityContext.Export, QualitySetting.ShadowsEnabled, "shadowsEnabled", !V.eq.shadowsEnabled))}
+                            {this.rsToggleRow("Ambient Occlusion", V.eq.aoEnabled, () => this.qBool(QualityContext.Export, QualitySetting.AoEnabled, "aoEnabled", !V.eq.aoEnabled))}
+                            <span style={css("font-size:10px;line-height:1.5;color:#6f6f6f")}>Light colour, direction and material look come from Render → Lighting &amp; Look and are shared, so the export matches the viewport.</span>
+                          </div>
+                        </div>
+
+                        {this.rsecHeader("output", "Output", true)}
+                        {this.rsecOpen("output", true) && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
+                            {[['Resolution X','outputX'],['Resolution Y','outputY']].map(([label,key])=><div key={key} style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>{label}</span><input type="number" min="64" max="4096" step="1" value={this.state[key]} onChange={(e)=>this.setState({[key]:e.target.value === '' ? '' : Number(e.target.value)})} style={css("width:86px;height:22px;background:#151515;border:1px solid #303030;border-radius:2px;color:#dedede;font-family:'IBM Plex Mono',monospace;font-size:11px;padding:0 7px")}/></div>)}
+                            <div style={css("display:flex;align-items:center;justify-content:space-between;gap:8px")}><span style={css("font-size:11px;color:#c0c0c0")}>Output Scale</span><div style={css("display:flex;gap:3px")}>{[["50%",.5],["75%",.75],["100%",1]].map(([label,scale]:any)=>{const on=this.state.outputScale===scale;return <Hv key={label} onClick={()=>this.setState({outputScale:scale})} s={`height:22px;padding:0 7px;border:1px solid ${on?'#e8912d':'#363636'};background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};font-size:10px;border-radius:2px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>})}</div></div>
+                            <div style={css("display:flex;justify-content:space-between;font-size:10px;color:#7a7a7a")}><span>Calculated Size</span><span>{this.outputSize().valid ? `${this.outputSize().w} × ${this.outputSize().h}` : '64–4096 px required'}</span></div>
+                            <div style={css("display:flex;align-items:center;justify-content:space-between")}><span style={css("font-size:11px;color:#c0c0c0")}>File Format</span><span style={css("width:86px;height:22px;display:flex;align-items:center;padding:0 7px;background:#151515;border:1px solid #303030;border-radius:2px;font-size:11px")}>PNG</span></div>
+                          </div>
+                        )}
+
+                        <div style={css("padding:10px")}>
+                          <Hv tag="button" onClick={V.canRenderImage ? this.renderImage : undefined} s={`width:100%;height:28px;border-radius:2px;font-size:11px;font-weight:600;border:1px solid ${V.canRenderImage?'#e8912d':'#2e2e2e'};background:${V.canRenderImage?'#e8912d':'#2a2a2a'};color:${V.canRenderImage?'#151515':'#616161'};cursor:${V.canRenderImage?'pointer':'default'}`} h={V.canRenderImage?'background:#f0a24a':''}>{V.renderButtonLabel}</Hv>
+                        </div>
+
+                        {this.rsecHeader("expadvanced", "Advanced Export Quality", false)}
+                        {this.rsecOpen("expadvanced", false) && (
+                          <div style={css("display:flex;flex-direction:column;gap:8px;padding:8px 10px 10px")}>
+                            <span style={css("font-size:10px;line-height:1.5;color:#7a7a7a")}>Fine control behind the preset above. These only cost export time — the viewport is unaffected, so going high here is safe.</span>
+                            {this.qualityRows(QualityContext.Export).map((cfg: any) => this.qRow(QualityContext.Export, cfg))}
                           </div>
                         )}
                       </>

@@ -98,8 +98,9 @@ export enum GizmoSpace {
   Local = 1,
 }
 
-// Render-setting ids for Engine.setRenderSetting — mirror RenderSetting in
-// src/editor/Settings.h. Vector components are individual ids.
+// Render "look" setting ids for Engine.setRenderSetting — mirror RenderSetting in
+// src/editor/Settings.h. Vector components are individual ids. These are shared
+// by the viewport and the export; the cost knobs live in QualitySetting below.
 export enum RenderSetting {
   LightDirX = 0, LightDirY = 1, LightDirZ = 2,
   LightColorR = 3, LightColorG = 4, LightColorB = 5,
@@ -109,19 +110,33 @@ export enum RenderSetting {
   SpecularGloss = 9,
   SpecularStrength = 10,
   AoStrength = 11,
-  MaxSteps = 12,
-  HitEpsilon = 13,
-  MaxDistance = 14,
-  ShadowSteps = 15,
-  ShadowDistance = 16,
-  AoSamples = 17,
-  ShadowsEnabled = 18,
-  AoEnabled = 19,
-  AaSamples = 20,
-  Taa = 21,
 }
 
-// Current render settings, mirrored from the engine (Settings). Keys match the
+// Which of the engine's two quality budgets a setter addresses — mirrors
+// QualityContext in src/editor/QualitySettings.h. The viewport budget drives the
+// live canvas, the export budget drives the offscreen image render, and they are
+// fully independent (work at 50% / no shadows, still export clean).
+export enum QualityContext {
+  Viewport = 0,
+  Export = 1,
+}
+
+// Quality-budget ids for Engine.setQualitySetting — mirror QualitySetting in
+// src/editor/QualitySettings.h.
+export enum QualitySetting {
+  MaxSteps = 0,
+  HitEpsilon = 1,
+  MaxDistance = 2,
+  ShadowSteps = 3,
+  ShadowDistance = 4,
+  AoSamples = 5,
+  AaSamples = 6,
+  Taa = 7,
+  ShadowsEnabled = 8,
+  AoEnabled = 9,
+}
+
+// Current "look" settings, mirrored from the engine (Settings). Keys match the
 // "render" object in the scene JSON.
 export interface RenderSettings {
   lightDirX: number; lightDirY: number; lightDirZ: number;
@@ -132,6 +147,11 @@ export interface RenderSettings {
   specularGloss: number;
   specularStrength: number;
   aoStrength: number;
+}
+
+// One quality budget, mirrored from the engine (QualitySettings). Keys match the
+// "viewportQuality" / "exportQuality" objects in the scene JSON.
+export interface QualitySettings {
   maxSteps: number;
   hitEpsilon: number;
   maxDistance: number;
@@ -139,9 +159,9 @@ export interface RenderSettings {
   shadowDistance: number;
   aoSamples: number;
   aaSamples: number;
+  taaEnabled: boolean;
   shadowsEnabled: boolean;
   aoEnabled: boolean;
-  taaEnabled: boolean;
 }
 
 export interface SceneState {
@@ -156,9 +176,12 @@ export interface SceneState {
   // Present once the engine serializes its CSG hierarchy. Optional so the UI
   // still works against an engine build that predates the tree section.
   tree?: CsgTreeJson;
-  // Current render settings (light/material/quality). Optional so the UI still
+  // Current render "look" settings (light/material). Optional so the UI still
   // works against an engine build that predates them.
   render?: RenderSettings;
+  // The two independent quality budgets. Optional for the same reason.
+  viewportQuality?: QualitySettings;
+  exportQuality?: QualitySettings;
 }
 
 // Minimal shape of the Emscripten module we rely on.
@@ -518,10 +541,17 @@ export class Engine {
   }
 
   // ---- Render settings ----------------------------------------------------
-  // Set one render setting by RenderSetting id. Read current values back from
+  // Set one "look" setting by RenderSetting id. Read current values back from
   // getScene().render.
   setRenderSetting(id: RenderSetting, value: number): void {
     this.call("sdf_set_render_setting", null, ["number", "number"], [id, value]);
+  }
+
+  // Set one quality budget by (context, QualitySetting id). Booleans are passed
+  // as 1/0. Read current values back from getScene().viewportQuality /
+  // .exportQuality.
+  setQualitySetting(context: QualityContext, id: QualitySetting, value: number): void {
+    this.call("sdf_set_quality_setting", null, ["number", "number", "number"], [context, id, value]);
   }
   setSelectionVisuals(show: boolean): void {
     this.call("sdf_set_selection_visuals", null, ["number"], [show ? 1 : 0]);

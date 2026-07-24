@@ -86,6 +86,7 @@ set(PROJECT_HEADERS
     src/platform/GraphicsContext.h
     src/editor/Application.h
     src/editor/Settings.h
+    src/editor/QualitySettings.h
     src/scene/data/SdfEnums.h
     src/scene/data/SdfObjectData.h
     src/scene/data/EditorObject.h

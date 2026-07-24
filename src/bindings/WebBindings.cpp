@@ -337,6 +337,15 @@ extern "C" {
         void sdf_set_render_setting(int id, float value) {
         if (g_App) g_App->SetRenderSetting(id, value);
     }
+
+    // Set one quality budget by (QualityContext, QualitySetting) — see
+    // QualitySettings.h. `context` is 0 = viewport, 1 = export. Read the current
+    // values back from sdf_get_scene_json().viewportQuality / .exportQuality.
+    EMSCRIPTEN_KEEPALIVE
+        void sdf_set_quality_setting(int context, int id, float value) {
+        if (g_App) g_App->SetQualitySetting(context, id, value);
+    }
+
     EMSCRIPTEN_KEEPALIVE void sdf_set_selection_visuals(int show) {
         if (g_App) g_App->SetSelectionVisuals(show != 0);
     }

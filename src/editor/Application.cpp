@@ -194,24 +194,38 @@ void Application::OnResize(int newWidth, int newHeight) {
 
 bool Application::StartFinalRender(uint32_t outWidth, uint32_t outHeight) {
     if (outWidth < 1 || outHeight < 1 || outWidth > 4096 || outHeight > 4096) return false;
-    GlobalsData finalGlobals = globals;
     const float aspect = static_cast<float>(outWidth) / static_cast<float>(outHeight);
     view = camera.GetViewMatrix();
     proj = camera.GetProjectionMatrix(aspect);
+
+    // Refresh the member globals so the export picks up the current look settings,
+    // then branch off a private copy for the offscreen pass.
+    SyncRenderGlobals();
+    GlobalsData finalGlobals = globals;
+
+    // The export renders at its OWN quality budget, not the viewport's — that is
+    // the whole point of the split: work fast on screen, export clean.
+    ApplyQuality(appSettings.exportQuality, finalGlobals);
+    // Temporal accumulation needs 4 consecutive frames to converge; the export is
+    // a single offscreen pass through the scene pipeline (no accumulation array,
+    // no resolve), so TAA is meaningless here and the ray must not be jittered.
+    // SSAA (aaSamples) is what anti-aliases an export.
+    finalGlobals.taaEnabled = 0;
+    finalGlobals.jitterOffset[0] = 0.0f;
+    finalGlobals.jitterOffset[1] = 0.0f;
+
     finalGlobals.resolution[0] = static_cast<float>(outWidth);
     finalGlobals.resolution[1] = static_cast<float>(outHeight);
+    // No editor furniture in the output image: no grid, no selection highlight,
+    // no gizmo.
     finalGlobals.showGrid = 0;
     finalGlobals.selectedIndex = -1;
     finalGlobals.gizmoVisible = 0;
     finalGlobals.qualityPad1 = 1;
+
     glm::vec3 pos = camera.GetPosition(), target = camera.GetTargetPosition();
     finalGlobals.cameraPos[0]=pos.x; finalGlobals.cameraPos[1]=pos.y; finalGlobals.cameraPos[2]=pos.z;
     finalGlobals.cameraTarget[0]=target.x; finalGlobals.cameraTarget[1]=target.y; finalGlobals.cameraTarget[2]=target.z;
-    SyncRenderGlobals();
-    // SyncRenderGlobals writes the member; copy the current lighting values too.
-    finalGlobals = globals;
-    finalGlobals.resolution[0]=static_cast<float>(outWidth); finalGlobals.resolution[1]=static_cast<float>(outHeight);
-    finalGlobals.showGrid=0; finalGlobals.selectedIndex=-1; finalGlobals.gizmoVisible=0; finalGlobals.qualityPad1=1;
     return renderer.StartFinalRender(graphics.device, graphics.queue, finalGlobals, outWidth, outHeight);
 }
 
@@ -1123,17 +1137,26 @@ std::string Application::GetSceneJson() const {
         << ",\"specularGloss\":" << rs.specularGloss
         << ",\"specularStrength\":" << rs.specularStrength
         << ",\"aoStrength\":" << rs.aoStrength
-        << ",\"maxSteps\":" << rs.maxSteps
-        << ",\"hitEpsilon\":" << rs.hitEpsilon
-        << ",\"maxDistance\":" << rs.maxDistance
-        << ",\"shadowSteps\":" << rs.shadowSteps
-        << ",\"shadowDistance\":" << rs.shadowDistance
-        << ",\"aoSamples\":" << rs.aoSamples
-        << ",\"aaSamples\":" << rs.aaSamples
-        << ",\"shadowsEnabled\":" << (rs.shadowsEnabled ? "true" : "false")
-        << ",\"aoEnabled\":" << (rs.aoEnabled ? "true" : "false")
-        << ",\"taaEnabled\":" << (rs.taaEnabled ? "true" : "false")
         << "}";
+
+    // The two quality budgets, mirrored separately so the front-end's Render and
+    // Export tabs each reflect their own engine state.
+    const auto writeQuality = [&out](const char* key, const QualitySettings& q) {
+        out << ",\"" << key << "\":{"
+            << "\"maxSteps\":" << q.maxSteps
+            << ",\"hitEpsilon\":" << q.hitEpsilon
+            << ",\"maxDistance\":" << q.maxDistance
+            << ",\"shadowSteps\":" << q.shadowSteps
+            << ",\"shadowDistance\":" << q.shadowDistance
+            << ",\"aoSamples\":" << q.aoSamples
+            << ",\"aaSamples\":" << q.aaSamples
+            << ",\"taaEnabled\":" << (q.taaEnabled ? "true" : "false")
+            << ",\"shadowsEnabled\":" << (q.shadowsEnabled ? "true" : "false")
+            << ",\"aoEnabled\":" << (q.aoEnabled ? "true" : "false")
+            << "}";
+    };
+    writeQuality("viewportQuality", rs.viewportQuality);
+    writeQuality("exportQuality", rs.exportQuality);
 
     out << "}";
     return out.str();
@@ -1494,16 +1517,30 @@ void Application::SyncRenderGlobals() {
     globals.specularStrength  = s.specularStrength;
     globals.shadowSoftness    = s.shadowSharpness;
     globals.aoStrength        = s.aoStrength;
-    globals.maxSteps          = s.maxSteps;
-    globals.hitEpsilon        = s.hitEpsilon;
-    globals.maxDistance       = s.maxDistance;
-    globals.shadowMaxSteps    = s.shadowSteps;
-    globals.shadowMaxDistance = s.shadowDistance;
-    globals.aoSamples         = s.aoSamples;
-    globals.aaSamples         = s.aaSamples;
-    globals.shadowsEnabled    = s.shadowsEnabled ? 1 : 0;
-    globals.aoEnabled         = s.aoEnabled ? 1 : 0;
-    globals.taaEnabled        = s.taaEnabled ? 1 : 0;
+    // The live viewport always renders at the viewport budget; the export builds
+    // its own globals from exportQuality in StartFinalRender.
+    ApplyQuality(s.viewportQuality, globals);
+}
+
+// Copy one quality budget into a globals block (the only place QualitySettings
+// maps onto the GPU uniform, so viewport and export stay consistent).
+void Application::ApplyQuality(const QualitySettings& q, GlobalsData& g) {
+    g.maxSteps          = q.maxSteps;
+    g.hitEpsilon        = q.hitEpsilon;
+    g.maxDistance       = q.maxDistance;
+    g.shadowMaxSteps    = q.shadowSteps;
+    g.shadowMaxDistance = q.shadowDistance;
+    g.aoSamples         = q.aoSamples;
+    g.aaSamples         = q.aaSamples;
+    g.shadowsEnabled    = q.shadowsEnabled ? 1 : 0;
+    g.aoEnabled         = q.aoEnabled ? 1 : 0;
+    g.taaEnabled        = q.taaEnabled ? 1 : 0;
+}
+
+QualitySettings& Application::QualityFor(int context) {
+    return static_cast<QualityContext>(context) == QualityContext::Export
+        ? appSettings.exportQuality
+        : appSettings.viewportQuality;
 }
 
 // Update one render setting by RenderSetting id (see Settings.h). Ints arrive as
@@ -1527,25 +1564,41 @@ void Application::SetRenderSetting(int id, float value) {
     case RenderSetting::SpecularGloss:    appSettings.specularGloss = value; break;
     case RenderSetting::SpecularStrength: appSettings.specularStrength = value; break;
     case RenderSetting::AoStrength:       appSettings.aoStrength = value; break;
-    // Hard safety caps (well above the UI slider maxes, so they never interfere
-    // with legitimate values) guard against a rogue binding call passing a value
-    // that would hang the GPU or make the march never terminate a hit.
-    case RenderSetting::MaxSteps:         appSettings.maxSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 2048); break;
-    case RenderSetting::HitEpsilon:       appSettings.hitEpsilon = std::clamp(value, 1e-6f, 1.0f); break;
-    case RenderSetting::MaxDistance:      appSettings.maxDistance = std::clamp(value, 0.1f, 100000.0f); break;
-    case RenderSetting::ShadowSteps:      appSettings.shadowSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 1024); break;
-    case RenderSetting::ShadowDistance:   appSettings.shadowDistance = std::clamp(value, 0.1f, 100000.0f); break;
-    case RenderSetting::AoSamples:        appSettings.aoSamples = std::clamp(static_cast<int>(value + 0.5f), 2, 128); break;
-    // NxN supersampling grid dimension. Cost is O(N^2) rays/pixel, so the safety cap is low
-    // (well above the UI max of 4) to keep a rogue call from stalling the GPU.
-    case RenderSetting::AaSamples:        appSettings.aaSamples = std::clamp(static_cast<int>(value + 0.5f), 1, 8); break;
-    case RenderSetting::ShadowsEnabled:   appSettings.shadowsEnabled = value != 0.0f; break;
-    case RenderSetting::AoEnabled:         appSettings.aoEnabled = value != 0.0f; break;
-    case RenderSetting::Taa:               appSettings.taaEnabled = value != 0.0f; break;
     default: break;
     }
 
     if (record) FinishSceneEdit("Change Render Setting", before);
+}
+
+// Update one quality budget by (QualityContext, QualitySetting) — see
+// QualitySettings.h. Same shape as SetRenderSetting, plus the context that picks
+// which of the two budgets is written. Ints arrive as float and are rounded.
+void Application::SetQualitySetting(int context, int id, float value) {
+    const bool record = ShouldRecordSceneEdit();
+    SceneEditSnapshot before;
+    if (record) before = CaptureSceneEditSnapshot();
+
+    QualitySettings& q = QualityFor(context);
+    switch (static_cast<QualitySetting>(id)) {
+    // Hard safety caps (well above the UI slider maxes, so they never interfere
+    // with legitimate values) guard against a rogue binding call passing a value
+    // that would hang the GPU or make the march never terminate a hit.
+    case QualitySetting::MaxSteps:       q.maxSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 2048); break;
+    case QualitySetting::HitEpsilon:     q.hitEpsilon = std::clamp(value, 1e-6f, 1.0f); break;
+    case QualitySetting::MaxDistance:    q.maxDistance = std::clamp(value, 0.1f, 100000.0f); break;
+    case QualitySetting::ShadowSteps:    q.shadowSteps = std::clamp(static_cast<int>(value + 0.5f), 1, 1024); break;
+    case QualitySetting::ShadowDistance: q.shadowDistance = std::clamp(value, 0.1f, 100000.0f); break;
+    case QualitySetting::AoSamples:      q.aoSamples = std::clamp(static_cast<int>(value + 0.5f), 2, 128); break;
+    // NxN supersampling grid dimension. Cost is O(N^2) rays/pixel, so the safety cap is low
+    // (well above the UI max of 8) to keep a rogue call from stalling the GPU.
+    case QualitySetting::AaSamples:      q.aaSamples = std::clamp(static_cast<int>(value + 0.5f), 1, 16); break;
+    case QualitySetting::Taa:            q.taaEnabled = value != 0.0f; break;
+    case QualitySetting::ShadowsEnabled: q.shadowsEnabled = value != 0.0f; break;
+    case QualitySetting::AoEnabled:      q.aoEnabled = value != 0.0f; break;
+    default: break;
+    }
+
+    if (record) FinishSceneEdit("Change Quality Setting", before);
 }
 
 void Application::UpdateJitterGlobal(uint32_t i){

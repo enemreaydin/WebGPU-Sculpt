@@ -28,6 +28,9 @@ In a **separate** terminal, from the project root:
 cd web
 npm install        # first time only (downloads React, Vite, etc.)
 npm run dev        # starts the dev server
+
+cd "C:\Program Files\Google\Chrome\Application"
+chrome.exe --disable-gpu-vsync --disable-frame-rate-limit
 ```
 
 

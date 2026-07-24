@@ -130,10 +130,18 @@ public:
     float CameraYaw() const { return camera.GetYaw(); }
     float CameraPitch() const { return camera.GetPitch(); }
 
-    // Render settings. `id` is a RenderSetting (see Settings.h); ints are passed
-    // as float and rounded. Writes appSettings; SyncRenderGlobals mirrors it into
-    // the GPU uniform each frame.
+    // Render "look" settings (light / material). `id` is a RenderSetting (see
+    // Settings.h); ints are passed as float and rounded. Writes appSettings;
+    // SyncRenderGlobals mirrors it into the GPU uniform each frame. Shared by the
+    // viewport and the export.
     void SetRenderSetting(int id, float value);
+
+    // Quality / performance budgets. `context` is a QualityContext (0 = viewport,
+    // 1 = export) and `id` a QualitySetting (see QualitySettings.h). The two
+    // contexts are independent: the viewport keeps its cheap budget while the
+    // export renders at its own, higher one.
+    void SetQualitySetting(int context, int id, float value);
+
     bool StartFinalRender(uint32_t width, uint32_t height);
     int FinalRenderState() const { return renderer.GetFinalRenderState(); }
     const std::vector<uint8_t>& FinalRenderPixels() const { return renderer.GetFinalPixels(); }
@@ -215,7 +223,15 @@ private:
     void InitializeRenderer();
     bool UpdateCamera();
     void UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p);  // fill gizmo* in globals
-    void SyncRenderGlobals();  // copy appSettings render values into globals each frame
+    void SyncRenderGlobals();  // copy the look settings + the VIEWPORT quality budget
+                               // into globals each frame
+    // Write one quality budget into a globals block. Shared by the per-frame
+    // viewport sync and the export's one-off globals, so the two contexts can
+    // never drift in how they map settings onto the uniform.
+    static void ApplyQuality(const QualitySettings& q, GlobalsData& g);
+    // The QualitySettings instance a QualityContext id refers to (viewport for
+    // any unknown id, so a bad call degrades to the safe/cheap one).
+    QualitySettings& QualityFor(int context);
     void RebuildEditorRecords();   // recreate editor records after a scene load
     TextureView GetNextSurfaceTextureView();
 
