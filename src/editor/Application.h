@@ -144,6 +144,7 @@ public:
 
     bool StartFinalRender(uint32_t width, uint32_t height);
     int FinalRenderState() const { return renderer.GetFinalRenderState(); }
+    int FinalRenderProgress() const { return renderer.GetFinalRenderProgress(); }
     const std::vector<uint8_t>& FinalRenderPixels() const { return renderer.GetFinalPixels(); }
     uint32_t FinalRenderWidth() const { return renderer.GetFinalWidth(); }
     uint32_t FinalRenderHeight() const { return renderer.GetFinalHeight(); }

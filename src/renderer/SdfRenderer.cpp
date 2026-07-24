@@ -1,6 +1,14 @@
 #include "SdfRenderer.h"
 #include "utils/FileHelper.h"
+#include <algorithm>
 #include <iostream>
+
+namespace {
+double SecondsSince(const std::chrono::steady_clock::time_point& start)
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+}
+}
 
 void SdfRenderer::SetProjectRoot(const std::filesystem::path& root)
 {
@@ -678,9 +686,29 @@ bool SdfRenderer::StartFinalRender(wgpu::Device device, wgpu::Queue queue,
         return false;
     }
 
+    // Band setup. The first band is a deliberately small probe: it measures how
+    // fast this GPU shades THIS scene, and every later band is sized from that
+    // measurement (NextBandRows). Nothing is assumed about the hardware.
+    finalRowsDone = 0;
+    finalBandRows = 0;
+    finalNextBandRows = std::min(kBandFirstRows, height);
+    finalBandInFlight = false;
+    finalToken = std::make_shared<bool>(true);
+    finalRenderState = 1;
+    SubmitNextFinalBand(device, queue);
+    return true;
+}
+
+void SdfRenderer::SubmitNextFinalBand(wgpu::Device device, wgpu::Queue queue)
+{
+    const uint32_t y0 = finalRowsDone;
+    const uint32_t bandH = std::min(finalNextBandRows, finalHeight - y0);
+
     wgpu::RenderPassColorAttachment attachments[2]{};
     attachments[0].view = finalView;
-    attachments[0].loadOp = wgpu::LoadOp::Clear;
+    // The first band clears the whole target; later bands must Load so the rows
+    // the earlier bands already shaded survive the pass.
+    attachments[0].loadOp = y0 == 0 ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load;
     attachments[0].storeOp = wgpu::StoreOp::Store;
     attachments[0].clearValue = WGPUColor{0.1, 0.1, 0.12, 1.0};
     attachments[1].view = finalIdView;
@@ -695,9 +723,78 @@ bool SdfRenderer::StartFinalRender(wgpu::Device device, wgpu::Queue queue,
     passDesc.colorAttachmentCount = 2; passDesc.colorAttachments = attachments;
     wgpu::CommandEncoder encoder = device.createCommandEncoder();
     wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
-    pass.setPipeline(pipeline); pass.setBindGroup(0, finalBindGroup, 0, nullptr); pass.draw(6, 1, 0, 0);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, finalBindGroup, 0, nullptr);
+    // Same full-screen quad, same shader, same uniforms as before — the
+    // scissor is what restricts rasterization (and therefore all fragment
+    // work) to this band's rows. fs_main derives each ray purely from the
+    // fragment's own pixel coordinate, so shading a sub-rectangle in a
+    // separate pass produces bit-identical pixels to the single-draw version.
+    pass.setScissorRect(0, y0, finalWidth, bandH);
+    pass.draw(6, 1, 0, 0);
     pass.end(); pass.release();
+    wgpu::CommandBuffer commands = encoder.finish(); encoder.release();
+    queue.submit(1, &commands); commands.release();
 
+    finalBandRows = bandH;
+    finalBandInFlight = true;
+    finalPhaseStart = std::chrono::steady_clock::now();
+    // Fires when the GPU has finished everything submitted up to this point.
+    // Only flip flags and measure here; the next band is submitted from
+    // StepFinalRender. The token guards a late fire from an export that has
+    // already ended (see RetireFinalCallbacks).
+    auto token = finalToken;
+    finalBandCallback = queue.onSubmittedWorkDone(
+        [this, token](wgpu::QueueWorkDoneStatus status) {
+            if (!*token) return;
+            finalBandInFlight = false;
+            if (status != wgpu::QueueWorkDoneStatus::Success) { finalRenderState = 4; return; }
+            const double seconds = SecondsSince(finalPhaseStart);
+            finalRowsDone += finalBandRows;
+            finalNextBandRows = NextBandRows(finalBandRows, seconds);
+        });
+}
+
+// Scale the band height so the next band lands near kBandTargetSeconds.
+uint32_t SdfRenderer::NextBandRows(uint32_t rows, double seconds) const
+{
+    // A band too fast to time is simply doubled rather than extrapolated to
+    // absurdity from a near-zero denominator.
+    double scaled = (seconds > 0.0001)
+        ? static_cast<double>(rows) * (kBandTargetSeconds / seconds)
+        : static_cast<double>(rows) * 2.0;
+    // Grow slowly, shrink instantly: overshooting risks a watchdog reset that
+    // kills the whole export, while undershooting only costs an extra submit.
+    scaled = std::min(scaled, static_cast<double>(rows) * 2.0);
+    const uint32_t next = static_cast<uint32_t>(std::max(1.0, scaled));
+    return std::clamp(next, kBandMinRows, kBandMaxRows);
+}
+
+void SdfRenderer::StepFinalRender(wgpu::Device device, wgpu::Queue queue)
+{
+    const bool waitingOnBand = finalRenderState == 1 && finalBandInFlight;
+    const bool waitingOnMap  = finalRenderState == 2 && finalMapInFlight;
+
+    // Stall watchdog. A GPU reset (Windows TDR) destroys the work in flight and
+    // its completion callback is never delivered, so without this the export
+    // would sit at the same percentage forever with no error. Report the
+    // failure instead; the UI surfaces it and the JS poll loop can stop.
+    if ((waitingOnBand || waitingOnMap) && SecondsSince(finalPhaseStart) > kStallSeconds) {
+        finalRenderState = 4;
+        return;
+    }
+
+    if (finalRenderState != 1 || finalBandInFlight) return;
+
+    if (finalRowsDone < finalHeight) SubmitNextFinalBand(device, queue);
+    else StartFinalReadback(device, queue);
+}
+
+void SdfRenderer::StartFinalReadback(wgpu::Device device, wgpu::Queue queue)
+{
+    const uint32_t width = finalWidth;
+    const uint32_t height = finalHeight;
+    wgpu::CommandEncoder encoder = device.createCommandEncoder();
     wgpu::ImageCopyTexture src{}; src.texture = finalTexture;
     wgpu::ImageCopyBuffer dst{}; dst.buffer = finalReadbackBuffer;
     dst.layout.bytesPerRow = finalPaddedBytesPerRow; dst.layout.rowsPerImage = height;
@@ -706,10 +803,15 @@ bool SdfRenderer::StartFinalRender(wgpu::Device device, wgpu::Queue queue,
     queue.submit(1, &commands); commands.release();
 
     finalRenderState = 2;
+    finalMapInFlight = true;
+    finalPhaseStart = std::chrono::steady_clock::now();
     const uint64_t mappedSize = static_cast<uint64_t>(finalPaddedBytesPerRow) * height;
     wgpu::Buffer bufferRef = finalReadbackBuffer;
+    auto token = finalToken;
     finalMapCallback = bufferRef.mapAsync(wgpu::MapMode::Read, 0, mappedSize,
-        [this, bufferRef, mappedSize](wgpu::BufferMapAsyncStatus status) mutable {
+        [this, bufferRef, mappedSize, token](wgpu::BufferMapAsyncStatus status) mutable {
+            if (!*token) return;
+            finalMapInFlight = false;
             if (status != wgpu::BufferMapAsyncStatus::Success) { finalRenderState = 4; return; }
             const auto* source = static_cast<const uint8_t*>(bufferRef.getConstMappedRange(0, mappedSize));
             finalPixels.resize(static_cast<size_t>(finalWidth) * finalHeight * 4u);
@@ -725,12 +827,38 @@ bool SdfRenderer::StartFinalRender(wgpu::Device device, wgpu::Queue queue,
             bufferRef.unmap();
             finalRenderState = 3;
         });
-    return true;
+}
+
+int SdfRenderer::GetFinalRenderProgress() const
+{
+    if (finalRenderState >= 2) return 100;   // reading / ready
+    if (finalHeight == 0) return 0;
+    return static_cast<int>((100ull * finalRowsDone) / finalHeight);
+}
+
+// End the current export's callback ownership. Anything the GPU may still fire
+// is parked (not freed) and neutered via the shared token — freeing a pending
+// callback leaves the driver holding a raw pointer into released memory.
+void SdfRenderer::RetireFinalCallbacks()
+{
+    if (finalToken) { *finalToken = false; finalToken.reset(); }
+
+    if (finalBandInFlight && finalBandCallback)
+        finalRetiredWorkCallbacks.push_back(std::move(finalBandCallback));
+    finalBandCallback.reset();
+
+    if (finalMapInFlight && finalMapCallback)
+        finalRetiredMapCallbacks.push_back(std::move(finalMapCallback));
+    finalMapCallback.reset();
+
+    finalBandInFlight = false;
+    finalMapInFlight = false;
 }
 
 void SdfRenderer::ReleaseFinalRender()
 {
-    finalMapCallback.reset();
+    RetireFinalCallbacks();
+    finalRowsDone = finalBandRows = finalNextBandRows = 0;
     if (finalBindGroup) { finalBindGroup.release(); finalBindGroup = nullptr; }
     if (finalGlobalsBuffer) { finalGlobalsBuffer.release(); finalGlobalsBuffer = nullptr; }
     if (finalReadbackBuffer) { finalReadbackBuffer.release(); finalReadbackBuffer = nullptr; }

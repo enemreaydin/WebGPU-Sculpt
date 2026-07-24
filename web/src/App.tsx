@@ -387,7 +387,11 @@ export default class App extends React.Component<any, any> {
     outputY: 1080,
     outputScale: 1,
     renderStage: "idle",
-    renderResult: null as null | { url: string; width: number; height: number; fromClean: boolean },
+    // Live progress of the in-flight image export: band completion percent
+    // reported by the engine, and wall-clock seconds since the render started.
+    renderProgress: 0,
+    renderElapsed: 0,
+    renderResult: null as null | { url: string; width: number; height: number; fromClean: boolean; seconds: number },
     resultFit: true,
     rightW: 300,
     dockH: 200,
@@ -908,11 +912,20 @@ export default class App extends React.Component<any, any> {
     if (!valid) return;
     const fromClean = !!this.state.cleanPreview;
     const generation = ++this._renderGeneration;
-    this.setState({ renderStage: "rendering", openMenu: null });
+    const startedAt = performance.now();
+    this.setState({ renderStage: "rendering", renderProgress: 0, renderElapsed: 0, openMenu: null });
     try {
-      const pixels = await this.engine.renderImage(w, h);
+      const pixels = await this.engine.renderImage(w, h, (percent) => {
+        if (!this._mounted || generation !== this._renderGeneration) return;
+        // The poll ticks every ~16ms; only re-render when the bar or the
+        // 0.1s-resolution timer would actually change.
+        const elapsed = Math.floor((performance.now() - startedAt) / 100) / 10;
+        if (percent !== this.state.renderProgress || elapsed !== this.state.renderElapsed) {
+          this.setState({ renderProgress: percent, renderElapsed: elapsed });
+        }
+      });
       if (!this._mounted || generation !== this._renderGeneration) return;
-      this.setState({ renderStage: "reading" });
+      this.setState({ renderStage: "reading", renderProgress: 100 });
       const canvas = document.createElement("canvas"); canvas.width = w; canvas.height = h;
       const context = canvas.getContext("2d");
       if (!context) throw new Error("PNG conversion is unavailable.");
@@ -923,7 +936,8 @@ export default class App extends React.Component<any, any> {
       if (!this._mounted || generation !== this._renderGeneration) return;
       if (this._renderUrl) URL.revokeObjectURL(this._renderUrl);
       this._renderUrl = URL.createObjectURL(blob);
-      this.setState({ renderStage: "idle", resultFit: true, renderResult: { url: this._renderUrl, width: w, height: h, fromClean } });
+      const seconds = Math.round((performance.now() - startedAt) / 100) / 10;
+      this.setState({ renderStage: "idle", resultFit: true, renderResult: { url: this._renderUrl, width: w, height: h, fromClean, seconds } });
     } catch (error) {
       if (!this._mounted || generation !== this._renderGeneration) return;
       this.status("Render failed — " + String(error));
@@ -2712,7 +2726,7 @@ export default class App extends React.Component<any, any> {
       vq: { shadowsEnabled: true, aoEnabled: true, taaEnabled: true, aaSamples: 1, ...(S.viewportQuality || {}) },
       eq: { shadowsEnabled: true, aoEnabled: true, taaEnabled: false, aaSamples: 1, ...(S.exportQuality || {}) },
       canRenderImage: this.outputSize().valid && S.renderStage === "idle",
-      renderButtonLabel: S.renderStage === "rendering" ? "Rendering…" : S.renderStage === "reading" ? "Reading pixels…" : "Render Image",
+      renderButtonLabel: S.renderStage === "rendering" ? `Rendering… ${S.renderProgress}%` : S.renderStage === "reading" ? "Reading pixels…" : "Render Image",
       hasObj: isObj, isCollSel: isColl, isGroupSel: isGroupSel && !!groupSel, groupSel,
       noSel: S.sel == null || (isGroupSel && !groupSel),
       // Group colour uses the shared picker (applyHsv routes to setGroupColor).
@@ -3090,15 +3104,20 @@ export default class App extends React.Component<any, any> {
               />
 
               {this.state.renderStage !== "idle" && (
-                <div style={css("position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#101010") }>
+                <div style={css("position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#101010") }>
                   <span style={css("font-size:13px;color:#dedede")}>Rendering Image…</span>
-                  <span style={css("font-size:11px;color:#7a7a7a")}>{this.state.renderStage === "reading" ? "Reading image" : "Rendering"}</span>
+                  <div style={css("width:260px;height:6px;background:#242424;border:1px solid #333333;border-radius:3px;overflow:hidden")}>
+                    <div style={css(`width:${this.state.renderProgress}%;height:100%;background:#e8912d;transition:width 120ms linear`)} />
+                  </div>
+                  <span style={css("font-size:11px;color:#7a7a7a;font-variant-numeric:tabular-nums")}>
+                    {this.state.renderStage === "reading" ? "Reading image" : `${this.state.renderProgress}%`} · {this.state.renderElapsed.toFixed(1)}s
+                  </span>
                 </div>
               )}
               {this.state.renderResult && this.state.renderStage === "idle" && (
                 <div style={css("position:absolute;inset:0;display:flex;flex-direction:column;background:#101010") }>
                   <div style={css("height:30px;flex:0 0 auto;display:flex;align-items:center;gap:4px;background:#1c1c1c;border-bottom:1px solid #333;padding:0 8px") }>
-                    <span style={css("font-size:11px;font-weight:600;margin-right:8px")}>Render Result</span>
+                    <span style={css("font-size:11px;font-weight:600;margin-right:8px")}>Render Result<span style={css("font-weight:400;color:#8a8a8a")}> · {this.state.renderResult.width}×{this.state.renderResult.height} · {this.state.renderResult.seconds.toFixed(1)}s</span></span>
                     {[['Fit',()=>this.setState({resultFit:true}),this.state.resultFit],['1:1',()=>this.setState({resultFit:false}),!this.state.resultFit],['Download PNG',this.downloadRender,false],['Back',this.closeRenderResult,false]].map(([label,fn,on]:any)=><Hv key={label} tag="button" onClick={fn} s={`height:22px;padding:0 9px;background:${on?'#e8912d':'#2a2a2a'};color:${on?'#151515':'#dedede'};border:1px solid ${on?'#e8912d':'#363636'};border-radius:2px;font-size:11px;cursor:pointer`} h={on?'':'background:#333'}>{label}</Hv>)}
                   </div>
                   <div style={css(`flex:1;min-height:0;${this.state.resultFit ? 'display:flex;align-items:center;justify-content:center;overflow:hidden' : 'overflow:auto'}`)}>

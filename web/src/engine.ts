@@ -557,14 +557,24 @@ export class Engine {
     this.call("sdf_set_selection_visuals", null, ["number"], [show ? 1 : 0]);
   }
 
-  async renderImage(width: number, height: number): Promise<Uint8ClampedArray> {
+  // onProgress (optional) is called on every poll tick with the engine's band
+  // completion percentage (0..100); the engine renders the export in scissor
+  // bands, so this reflects GPU work actually finished, not just submitted.
+  async renderImage(width: number, height: number,
+                    onProgress?: (percent: number) => void): Promise<Uint8ClampedArray> {
     const started = this.call("sdf_start_final_render", "number", ["number", "number"], [width, height]) as number;
     if (!started) throw new Error("The image render could not be started.");
     try {
       for (;;) {
         const state = this.call("sdf_final_render_state", "number", [], []) as number;
         if (state === 3) break;
-        if (state === 4) throw new Error("WebGPU image readback failed.");
+        // State 4 covers both a failed readback and the engine's stall
+        // watchdog firing — the usual cause of the latter is the OS resetting
+        // the GPU driver because a single submission ran too long.
+        if (state === 4) throw new Error("the GPU stopped responding (the display driver may have been reset). Try a lower export quality — fewer AA samples is the biggest saving.");
+        if (onProgress) {
+          onProgress(this.call("sdf_final_render_progress", "number", [], []) as number);
+        }
         await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
       }
       const ptr = this.call("sdf_final_render_pixels", "number", [], []) as number;

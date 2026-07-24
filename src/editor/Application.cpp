@@ -58,8 +58,20 @@ void Application::MainLoop() {
     }
 
     if (!renderer.GetObjectIdTargetView()) {
-    return; 
+    return;
     }
+
+    // Advance an in-flight banded image export: submit the next band once the
+    // previous one's GPU work completed (see SdfRenderer::StepFinalRender).
+    renderer.StepFinalRender(graphics.device, graphics.queue);
+
+    // While an export is running the viewport is hidden behind the progress
+    // overlay, so drawing it would only steal GPU time from the export — and on
+    // a heavy scene the viewport's own multi-second submission counts against
+    // the same OS watchdog budget the export bands are sized to respect. Skip
+    // the passes entirely; the surface keeps showing its last frame.
+    const int exportState = renderer.GetFinalRenderState();
+    if (exportState == 1 || exportState == 2) return;
 
     bool isCameraMoving = UpdateCamera();
 

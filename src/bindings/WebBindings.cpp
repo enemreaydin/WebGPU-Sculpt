@@ -354,6 +354,7 @@ extern "C" {
         return g_App && g_App->StartFinalRender((uint32_t)width, (uint32_t)height) ? 1 : 0;
     }
     EMSCRIPTEN_KEEPALIVE int sdf_final_render_state() { return g_App ? g_App->FinalRenderState() : 4; }
+    EMSCRIPTEN_KEEPALIVE int sdf_final_render_progress() { return g_App ? g_App->FinalRenderProgress() : 0; }
     EMSCRIPTEN_KEEPALIVE int sdf_final_render_width() { return g_App ? (int)g_App->FinalRenderWidth() : 0; }
     EMSCRIPTEN_KEEPALIVE int sdf_final_render_height() { return g_App ? (int)g_App->FinalRenderHeight() : 0; }
     EMSCRIPTEN_KEEPALIVE uintptr_t sdf_final_render_pixels() {
