@@ -39,15 +39,15 @@ off-screen objects are visible, defeating the test).
 
 | Scene | FPS before | FPS after | Notes |
 |---|---|---|---|
-| A_baseline_5 | | | |
-| B_offscreen_25 | | | should match A after P1 |
-| C_spread_16 | | | |
-| D_cluster_12 | | | expected to move least |
-| E_background_10 | | | |
-| F_shadow_12 (shadows on) | | | |
-| F_shadow_12 (shadows off) | | | |
+| A_baseline_5 | 30 | | |
+| B_offscreen_25 | 6 | | should match A after P1 |
+| C_spread_16 | 10 | | |
+| D_cluster_12 | 12 | | expected to move least |
+| E_background_10 | 26 | | |
+| F_shadow_12 (shadows on) | 8 | | |
+| F_shadow_12 (shadows off) | 11 | | |
 | G_correctness_17 | — | — | image identical? Y/N |
-| H_ultra_48 | | | headline number |
+| H_ultra_48 | 1 | | headline number |
 
 ## Uncapping the 60 FPS limit
 
