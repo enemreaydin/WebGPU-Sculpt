@@ -1455,15 +1455,25 @@ static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeig
     p = camera.GetProjectionMatrix(aspect);
 }
 
+// Called on every pointer move over the viewport, so it must invalidate on
+// CONTENT, not on the event: the image changes only when the highlighted axis
+// actually changes. Redrawing per mouse-move would also restart the temporal
+// accumulation on every move (RequestRedraw resets it, §7a), so simply waving
+// the cursor across the viewport would pin the image at one sample and look
+// exactly like TAA being off.
 int Application::GizmoHover(float mouseX, float mouseY) {
-    RequestRedraw();
+    const GizmoAxis previous = gizmoController.HoveredAxis();
+
     GizmoTarget target = ComputeGizmoTarget();
     if (!target.valid) return 0;
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
-    return gizmoController.Hover(glm::vec2(mouseX, mouseY), target.origin, target.rotation, v, p,
+    const int hovered = gizmoController.Hover(glm::vec2(mouseX, mouseY), target.origin, target.rotation, v, p,
         static_cast<float>(renderWidth), static_cast<float>(renderHeight));
+
+    if (static_cast<GizmoAxis>(hovered) != previous) RequestRedraw();
+    return hovered;
 }
 
 void Application::GizmoBeginDrag(float mouseX, float mouseY) {

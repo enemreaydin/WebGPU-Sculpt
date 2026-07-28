@@ -117,10 +117,21 @@ public:
     std::string SerializeProject();
     bool DeserializeProject(const std::string& bytes);
 
-    // View
-    void SetShowGrid(bool show) { showGrid = show; RequestRedraw(); }
+    // View.
+    // These (and the gizmo setters below) are idempotent: the front-end pushes
+    // its whole visibility/gizmo configuration down whenever any part of it
+    // changes, so a no-op write is normal. Invalidating on the *write* rather
+    // than on an actual *change* would schedule redundant frames and, worse,
+    // restart the temporal accumulation (RequestRedraw resets it, §7a) — the
+    // image would keep dropping back to one sample for no visible reason.
+    void SetShowGrid(bool show) { if (showGrid == show) return; showGrid = show; RequestRedraw(); }
     bool GetShowGrid() const { return showGrid; }
-    void SetSelectionVisuals(bool show) { globals.qualityPad1 = show ? 0 : 1; RequestRedraw(); }
+    void SetSelectionVisuals(bool show) {
+        const int32_t flag = show ? 0 : 1;
+        if (globals.qualityPad1 == flag) return;
+        globals.qualityPad1 = flag;
+        RequestRedraw();
+    }
 
     // Camera interaction (deltas in pixels / wheel ticks, accumulated per frame)
     void CameraOrbit(float dx, float dy);
@@ -164,17 +175,31 @@ public:
     // Whether the gizmo should be drawn (the front-end sets this from its active
     // tool). The gizmo is rendered by the SDF shader, so it stays perfectly in
     // sync with the scene; there is no screen-space overlay JSON.
-    void SetGizmoEnabled(bool enabled) { gizmoEnabled = enabled; RequestRedraw(); }
+    void SetGizmoEnabled(bool enabled) { if (gizmoEnabled == enabled) return; gizmoEnabled = enabled; RequestRedraw(); }
 
     // `mode` is a GizmoMode (0 translate, 1 rotate), `space` a GizmoSpace
     // (0 world, 1 local). Both are ignored mid-drag; see GizmoController.
-    void SetGizmoMode(int mode)   { gizmoController.SetMode(static_cast<GizmoMode>(mode)); RequestRedraw(); }
-    void SetGizmoSpace(int space) { gizmoController.SetSpace(static_cast<GizmoSpace>(space)); RequestRedraw(); }
+    void SetGizmoMode(int mode) {
+        const GizmoMode value = static_cast<GizmoMode>(mode);
+        if (gizmoController.Mode() == value) return;
+        gizmoController.SetMode(value);
+        RequestRedraw();
+    }
+    void SetGizmoSpace(int space) {
+        const GizmoSpace value = static_cast<GizmoSpace>(space);
+        if (gizmoController.Space() == value) return;
+        gizmoController.SetSpace(value);
+        RequestRedraw();
+    }
 
     // Web Render Resolution scale (render-buffer px per display px). Keeps the
     // gizmo a constant on-screen size when the backing store is up/down-scaled;
     // it is a viewport display preference, not scene state (see §10).
-    void SetGizmoPixelScale(float scale) { gizmoController.SetPixelScale(scale); RequestRedraw(); }
+    void SetGizmoPixelScale(float scale) {
+        if (gizmoController.PixelScale() == scale) return;
+        gizmoController.SetPixelScale(scale);
+        RequestRedraw();
+    }
 
     // Viewport frame accounting for the FPS readout. The frame count is what the
     // web meter samples (rAF keeps ticking while render-on-demand draws nothing,
