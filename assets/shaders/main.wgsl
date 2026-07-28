@@ -288,6 +288,47 @@ fn overlayTranslateGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f,
     return col;
 }
 
+fn overlayScaleGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focal : f32) -> vec3f {
+    let o = gizmoProject(globals.gizmoOrigin.xyz, ro, right, up, forward, focal);
+    if (o.z < 0.0) { return baseCol; }
+
+    let uvPerPx = 2.0 * globals.gizmoPixelScale / globals.resolution.y;
+    let lineHalf = 2.5 * uvPerPx;
+    let boxHalf = 4.5 * uvPerPx;
+    let dotR = 5.0 * uvPerPx;
+
+    var col = baseCol;
+
+    var ends = array<vec4f, 3>(globals.gizmoAxisX, globals.gizmoAxisY, globals.gizmoAxisZ);
+    for (var a = 0; a < 3; a++) {
+        if (ends[a].w < 0.5) { continue; }
+
+        let e = gizmoProject(ends[a].xyz, ro, right, up, forward, focal);
+        if (e.z < 0.0) { continue; }
+
+        let d = gizmoSegDist(uv, o.xy, e.xy);
+        if (d < lineHalf) {
+            let aa = 1.0 - smoothstep(lineHalf - uvPerPx, lineHalf, d);
+            col = mix(col, gizmoTint(a + 1), aa);
+        }
+
+        let q = abs(uv - e.xy);
+        let box = max(q.x, q.y);
+        if (box < boxHalf) {
+            let aa = 1.0 - smoothstep(boxHalf - uvPerPx, boxHalf, box);
+            col = mix(col, gizmoTint(a + 1), aa);
+        }
+    }
+
+    let dO = length(uv - o.xy);
+    if (dO < dotR) {
+        let aa = 1.0 - smoothstep(dotR - uvPerPx, dotR, dO);
+        col = mix(col, vec3f(0.92), aa);
+    }
+
+    return col;
+}
+
 fn overlayRotateGizmo(baseCol : vec3f, ro : vec3f, rd : vec3f, forward : vec3f, focal : f32) -> vec3f {
     let o = globals.gizmoOrigin.xyz;
     let uvPerPx = 2.0 * globals.gizmoPixelScale / globals.resolution.y;
@@ -333,6 +374,10 @@ fn overlayGizmo(baseCol : vec3f, uv : vec2f, ro : vec3f, rd : vec3f, right : vec
 
     if (globals.gizmoMode == 1) {
         return overlayRotateGizmo(baseCol, ro, rd, forward, focal);
+    }
+
+    if (globals.gizmoMode == 2) {
+        return overlayScaleGizmo(baseCol, uv, ro, right, up, forward, focal);
     }
 
     return overlayTranslateGizmo(baseCol, uv, ro, right, up, forward, focal);

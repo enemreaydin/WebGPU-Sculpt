@@ -158,3 +158,5 @@ Quick answers for likely questions
 "Doesn't polling the engine twice a second cost something?" Two function calls across the WASM boundary per second. It is not measurable.
 
 8) Camera movement a animasyon eklendi
+
+9) Camera movement TAAA bug resolved

@@ -94,6 +94,11 @@ namespace GizmoMath
         float desiredScreenLengthPx
     );
 
+    // The straight-handle hit test, shared by translate and scale (both draw the
+    // same three screen-space segments; only the end cap differs). `axisEnabled`
+    // masks out handles that are not offered — the scale gizmo hides the axes a
+    // primitive cannot scale (PrimitiveGeometry::ScaleAxisMap), and a hidden
+    // handle must not be grabbable. Pass nullptr for "all three".
     GizmoAxis HitTestTranslateAxes(
         const glm::vec2& mouse,
         const glm::vec3& origin,
@@ -104,7 +109,8 @@ namespace GizmoMath
         float viewportWidth,
         float viewportHeight,
         float desiredScreenLengthPx,
-        float hitThresholdPx
+        float hitThresholdPx,
+        const bool* axisEnabled = nullptr
     );
 
     // Same idea for the three rotate rings: the ring whose circumference the
@@ -134,5 +140,30 @@ namespace GizmoMath
         float viewportHeight,
         float desiredScreenLengthPx,
         glm::vec3& outPosition
+    );
+
+    // Multiplier for a scale drag: the mouse travel since the grab, projected
+    // onto the handle's screen direction and measured in HANDLE LENGTHS. Pulling
+    // one full handle length outwards doubles the object (factor 2); pushing the
+    // same distance inwards collapses it to nothing (factor 0), so the result is
+    // floored at MIN_SCALE_FACTOR — a zero or negative size is not a small
+    // object, it is a degenerate distance field (inside-out normals, NaN shading).
+    //
+    // Measuring in handle lengths rather than raw pixels is what makes the drag
+    // feel identical near and far from the camera: the handle is a constant
+    // on-screen length, so the same gesture always means the same factor.
+    constexpr float MIN_SCALE_FACTOR = 0.01f;
+
+    bool ComputeScaleDragFactor(
+        const glm::vec3& axisDir,
+        const glm::vec2& dragStartMouse,
+        const glm::vec2& currentMouse,
+        const glm::vec3& dragStartObjectPosition,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        float desiredScreenLengthPx,
+        float& outFactor
     );
 }

@@ -174,6 +174,11 @@ const ACTIVE_SHORTCUTS_GRID_HTML = `<div style="display:grid;grid-template-colum
   ["X / Delete", "Delete"], ["F2", "Rename"], ["A", "Select all"], ["Alt A", "Deselect all"],
 ])}</div>`;
 
+// The tools that put an interactive gizmo in the viewport. Listed once so the
+// gizmo gate (does a viewport press grab a handle instead of orbiting?) and the
+// engine sync cannot drift apart when a tool is added.
+const TRANSFORM_TOOLS = ["move", "rotate", "scale"];
+
 // Small helper: render an editable/drag numeric field control (transform axis,
 // shape param, demo field) from a mockup `field()` descriptor.
 function FieldCtl({ f, wrapS, editS, showS, prefix }: any) {
@@ -659,8 +664,10 @@ export default class App extends React.Component<any, any> {
   syncGizmo() {
     if (!this.engine) return;
     const tool = this.state.tool;
-    this.engine.setGizmoEnabled(!this.state.cleanPreview && this.state.showObjectGizmos && (tool === "move" || tool === "rotate"));
-    this.engine.setGizmoMode(tool === "rotate" ? GizmoMode.Rotate : GizmoMode.Translate);
+    this.engine.setGizmoEnabled(!this.state.cleanPreview && this.state.showObjectGizmos && TRANSFORM_TOOLS.includes(tool));
+    this.engine.setGizmoMode(tool === "rotate" ? GizmoMode.Rotate
+                           : tool === "scale"  ? GizmoMode.Scale
+                                               : GizmoMode.Translate);
     this.engine.setGizmoSpace(this.state.gizmoSpace === "local" ? GizmoSpace.Local : GizmoSpace.World);
   }
 
@@ -787,7 +794,7 @@ export default class App extends React.Component<any, any> {
   gizmoActive(): boolean {
     if (this.state.cleanPreview || !this.state.showObjectGizmos) return false;
     const tool = this.state.tool;
-    if (!(tool === "move" || tool === "rotate") || !this.engine) return false;
+    if (!TRANSFORM_TOOLS.includes(tool) || !this.engine) return false;
     return !!this.selObj() || this.isGroupKey(this.state.sel);
   }
 
@@ -2652,7 +2659,10 @@ export default class App extends React.Component<any, any> {
       tRot: toolSt(S.tool === "rotate"), setRot: () => this.setState({ tool: "rotate" }),
       tScl: toolSt(S.tool === "scale"), setScl: () => this.setState({ tool: "scale" }),
 
-      // Gizmo space toggle: only meaningful while a gizmo tool is active.
+      // Gizmo space toggle. Deliberately NOT enabled for the scale tool: scale is
+      // authored per local axis, so a world-space scale of a rotated object would
+      // be a shear, which an SDF primitive cannot represent. The scale gizmo
+      // always works in local space and the toggle greys out to say so.
       gzLabel: S.gizmoSpace === "local" ? "Local" : "World",
       gzSt: toolSt(S.gizmoSpace === "local"),
       gzEnabled: S.tool === "move" || S.tool === "rotate",
@@ -2993,6 +3003,7 @@ export default class App extends React.Component<any, any> {
               select: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M3.5 2.6 12.2 8.1l-3.7.7 2.1 4.2-1.7.8-2.1-4.2-2.8 2.6z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>`,
               move: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1.6v12.8 M1.6 8h12.8 M8 1.6 6.1 3.6 M8 1.6l1.9 2 M8 14.4l-1.9-2 M8 14.4l1.9-2 M1.6 8l2-1.9 M1.6 8l2 1.9 M14.4 8l-2-1.9 M14.4 8l-2 1.9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"></path></svg>`,
               rotate: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M12.6 5.2A5 5 0 1 0 13 8.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path><path d="M12.9 2.6 12.9 5.4 10.1 5.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`,
+              scale: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M2.6 9.9v3.5h3.5 M13.4 6.1V2.6H9.9 M13.4 2.6 2.6 13.4" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>`,
               add: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 3v10 M3 8h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>`,
               bool: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M6 4.25a3.75 3.75 0 1 0 0 7.5 3.75 3.75 0 0 0 0-7.5z M10 4.25a3.75 3.75 0 1 1 0 7.5 3.75 3.75 0 0 1 0-7.5z" fill="none" stroke="currentColor" stroke-width="1.2"></path></svg>`,
               frame: `<svg width="16" height="16" viewBox="0 0 16 16"><path d="M2.5 5.2V2.5h2.7 M13.5 5.2V2.5h-2.7 M2.5 10.8v2.7h2.7 M13.5 10.8v2.7h-2.7" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path><circle cx="8" cy="8" r="1.9" fill="none" stroke="currentColor" stroke-width="1.2"></circle></svg>`,
@@ -3060,6 +3071,7 @@ export default class App extends React.Component<any, any> {
                       prow("Select", ICO.select, () => this.setState({ tool: "select" }), tool === "select"),
                       prow("Move", ICO.move, () => this.setState({ tool: "move" }), tool === "move"),
                       prow("Rotate", ICO.rotate, () => this.setState({ tool: "rotate" }), tool === "rotate"),
+                      prow("Scale", ICO.scale, () => this.setState({ tool: "scale" }), tool === "scale"),
                     ])}
                     {pgroup("lpPrim", "Primitives", this.LEFT_PRIMS.map((p) => prow(p.name, p.svg, () => this.addPrimitive(p.key), false)))}
                     {pgroup("lpBool", "Boolean", this.LEFT_OPS.map((o) => prow(o.name, o.svg, () => this.runOp(o.key, false), false)))}
@@ -3079,6 +3091,7 @@ export default class App extends React.Component<any, any> {
                     {rail("Select", ICO.select, () => this.setState({ tool: "select" }), tool === "select")}
                     {rail("Move", ICO.move, () => this.setState({ tool: "move" }), tool === "move")}
                     {rail("Rotate", ICO.rotate, () => this.setState({ tool: "rotate" }), tool === "rotate")}
+                    {rail("Scale", ICO.scale, () => this.setState({ tool: "scale" }), tool === "scale")}
                     {divRail()}
                     {flyBtn("add", "Add primitive", ICO.add, this.LEFT_PRIMS.map((p) => item(p.name, p.svg, () => this.addPrimitive(p.key))))}
                     {flyBtn("bool", "Boolean / Group", ICO.bool, [

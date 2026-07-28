@@ -275,7 +275,8 @@ namespace GizmoMath
         float viewportWidth,
         float viewportHeight,
         float desiredScreenLengthPx,
-        float hitThresholdPx
+        float hitThresholdPx,
+        const bool* axisEnabled
     )
     {
         GizmoAxis bestAxis = GizmoAxis::None;
@@ -287,8 +288,13 @@ namespace GizmoMath
             GizmoAxis::Z
         };
 
-        for (GizmoAxis axis : axes)
+        for (int i = 0; i < 3; ++i)
         {
+            const GizmoAxis axis = axes[i];
+
+            if (axisEnabled && !axisEnabled[i])
+                continue;   // handle not offered in this mode: not drawn, not grabbable
+
             AxisScreenSegment seg = BuildAxisSegment(
                 axis,
                 AxisDirInSpace(axis, objectRotation, space),
@@ -428,6 +434,53 @@ namespace GizmoMath
         float worldDelta = projectedPixels / pixelsPerWorldUnit;
 
         outPosition = dragStartObjectPosition + seg.worldDir * worldDelta;
+        return true;
+    }
+
+    bool ComputeScaleDragFactor(
+        const glm::vec3& axisDir,
+        const glm::vec2& dragStartMouse,
+        const glm::vec2& currentMouse,
+        const glm::vec3& dragStartObjectPosition,
+        const glm::mat4& view,
+        const glm::mat4& proj,
+        float viewportWidth,
+        float viewportHeight,
+        float desiredScreenLengthPx,
+        float& outFactor
+    )
+    {
+        if (glm::dot(axisDir, axisDir) < EPSILON)
+            return false;
+
+        // Same segment the handle is drawn as, rebuilt from the drag-start pose.
+        // Anchoring on the start (not the live object) keeps the mapping fixed
+        // for the whole drag: as the object grows the handle would otherwise move
+        // under the cursor and feed its own growth back in.
+        AxisScreenSegment seg = BuildAxisSegment(
+            GizmoAxis::X,   // only the direction matters here, not the label
+            axisDir,
+            dragStartObjectPosition,
+            view,
+            proj,
+            viewportWidth,
+            viewportHeight,
+            desiredScreenLengthPx
+        );
+
+        if (!seg.valid)
+            return false;
+
+        glm::vec2 screenAxis = seg.screenEnd - seg.screenStart;
+        float screenAxisLength = glm::length(screenAxis);
+
+        if (screenAxisLength < 2.0f)
+            return false;   // handle points nearly at the camera: no usable direction
+
+        glm::vec2 screenAxisDir = screenAxis / screenAxisLength;
+        float projectedPixels = glm::dot(currentMouse - dragStartMouse, screenAxisDir);
+
+        outFactor = std::max(1.0f + projectedPixels / screenAxisLength, MIN_SCALE_FACTOR);
         return true;
     }
 }

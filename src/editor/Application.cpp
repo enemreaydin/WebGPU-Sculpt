@@ -1422,6 +1422,8 @@ Application::GizmoTarget Application::ComputeGizmoTarget() const {
         t.origin   = glm::vec3(o->position[0], o->position[1], o->position[2]);
         t.rotation = QuatFromArray(o->rotation);
         t.objectIds.push_back(n.objectId);
+        // Which directions this shape can actually be scaled in.
+        t.scaleAxisMap = PrimitiveGeometry::ScaleAxisMap(static_cast<SdfObjectType>(o->type));
         return t;
     }
 
@@ -1443,7 +1445,21 @@ Application::GizmoTarget Application::ComputeGizmoTarget() const {
     t.isGroup  = true;
     t.origin   = sum / static_cast<float>(count);
     t.rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);   // groups are world-aligned
+    // A group has no shape of its own; it scales uniformly about its centroid
+    // (same rule as ScaleGroup — a per-axis group scale would have to shear the
+    // members, which an SDF primitive cannot represent). All three handles are
+    // therefore offered and all three do the same thing.
+    t.scaleAxisMap = { 0, 1, 2 };
     return t;
+}
+
+// Keep the controller's scale-handle mask in step with the current target, so
+// hover, drag and drawing can never disagree about which handles exist. Called
+// from every gizmo entry point right after ComputeGizmoTarget.
+void Application::SyncGizmoScaleAxes(const GizmoTarget& target) {
+    gizmoController.SetScaleAxisMask(target.scaleAxisMap[0] >= 0,
+                                     target.scaleAxisMap[1] >= 0,
+                                     target.scaleAxisMap[2] >= 0);
 }
 
 // Current camera view/proj for gizmo hit-testing (matches the render frame).
@@ -1466,6 +1482,7 @@ int Application::GizmoHover(float mouseX, float mouseY) {
 
     GizmoTarget target = ComputeGizmoTarget();
     if (!target.valid) return 0;
+    SyncGizmoScaleAxes(target);
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
@@ -1480,6 +1497,7 @@ void Application::GizmoBeginDrag(float mouseX, float mouseY) {
     RequestRedraw();
     GizmoTarget target = ComputeGizmoTarget();
     if (!target.valid) return;
+    SyncGizmoScaleAxes(target);
 
     glm::mat4 v, p;
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
@@ -1506,17 +1524,30 @@ void Application::GizmoBeginDrag(float mouseX, float mouseY) {
     m_GizmoDrag.isGroup  = target.isGroup;
     m_GizmoDrag.pivot    = target.origin;
     m_GizmoDrag.objectIds = target.objectIds;
+    m_GizmoDrag.scaleAxisMap = target.scaleAxisMap;
     for (int32_t oid : target.objectIds) {
         const SdfObjectData* o = sceneManager.FindObjectById(oid);
         m_GizmoDrag.startPos.push_back(o ? glm::vec3(o->position[0], o->position[1], o->position[2])
                                          : glm::vec3(0.0f));
         m_GizmoDrag.startRot.push_back(o ? QuatFromArray(o->rotation)
                                          : glm::quat(1.0f, 0.0f, 0.0f, 0.0f));
+        const EditorObject* eo = editorStore.Find(oid);
+        m_GizmoDrag.startScale.push_back(eo ? eo->scale : std::array<float, 3>{ 1.0f, 1.0f, 1.0f });
     }
 
-    // Undo covers every affected primitive (one for a primitive, all descendants
-    // for a group).
-    m_TransformTransaction.Begin(sceneManager, target.objectIds);
+    // Undo. Translate/rotate write only SdfObjectData, which TransformTransaction
+    // snapshots per object — cheap and precise. Scale writes EditorObject::scale
+    // as well, and TransformTransaction cannot see the editor store: it would
+    // restore `size` while leaving `scale` at the dragged value, so the next
+    // param edit would recompute size from the stale scale and the object would
+    // jump. The scene-edit snapshot covers the editor store, so scale drags use
+    // that bracket instead. Which one armed the drag is remembered, because
+    // EndDrag must close the same one it opened.
+    m_GizmoDrag.usesSceneEdit = (gizmoController.Mode() == GizmoMode::Scale);
+    if (m_GizmoDrag.usesSceneEdit)
+        BeginSceneEdit(target.isGroup ? "Scale Group" : "Scale Object");
+    else
+        m_TransformTransaction.Begin(sceneManager, target.objectIds);
 }
 
 void Application::GizmoDrag(float mouseX, float mouseY) {
@@ -1527,6 +1558,58 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
     GizmoViewProj(camera, renderWidth, renderHeight, v, p);
     const float w = static_cast<float>(renderWidth);
     const float h = static_cast<float>(renderHeight);
+
+    if (gizmoController.Mode() == GizmoMode::Scale) {
+        float factor = 1.0f;
+        if (!gizmoController.DragScale(glm::vec2(mouseX, mouseY), v, p, w, h, factor))
+            return;
+
+        // Scale is authored as EditorObject::scale and the GPU `size` is DERIVED
+        // from params * scale (PrimitiveGeometry::ComputeSize). Writing `size`
+        // directly would look right until the next param edit or a save/reload
+        // recomputed it from the untouched scale and the object snapped back.
+        auto applyScale = [this](int32_t objectId, const std::array<float, 3>& scale) {
+            SdfObjectData* o = sceneManager.FindObjectById(objectId);
+            EditorObject* eo = editorStore.Find(objectId);
+            if (!o || !eo) return;
+            eo->scale = scale;
+            const auto size = PrimitiveGeometry::ComputeSize(
+                static_cast<SdfObjectType>(o->type), eo->params, eo->scale);
+            o->size = { size[0], size[1], size[2], 0.0f };
+        };
+
+        if (m_GizmoDrag.isGroup) {
+            // Uniform about the centroid, matching ScaleGroup: every member's
+            // scale grows by the factor AND its position is pushed along the
+            // pivot->position ray, so the arrangement expands with the parts
+            // instead of the parts growing into each other.
+            for (size_t i = 0; i < m_GizmoDrag.objectIds.size(); ++i) {
+                SdfObjectData* o = sceneManager.FindObjectById(m_GizmoDrag.objectIds[i]);
+                if (!o) continue;
+                const glm::vec3 newPos = m_GizmoDrag.pivot + factor * (m_GizmoDrag.startPos[i] - m_GizmoDrag.pivot);
+                o->position = { newPos.x, newPos.y, newPos.z, 0.0f };
+                const std::array<float, 3>& s0 = m_GizmoDrag.startScale[i];
+                applyScale(m_GizmoDrag.objectIds[i],
+                           { s0[0] * factor, s0[1] * factor, s0[2] * factor });
+            }
+        } else {
+            // Single primitive: only the component the grabbed axis drives for
+            // this shape. Several axes can map to the same component (a cylinder's
+            // X and Z are both its radius), and a masked-off axis never latches a
+            // drag in the first place — the -1 guard is belt and braces.
+            const int axisIndex = static_cast<int>(gizmoController.ActiveAxis()) - 1;
+            if (axisIndex < 0 || axisIndex > 2) return;
+            const int component = m_GizmoDrag.scaleAxisMap[axisIndex];
+            if (component < 0) return;
+
+            std::array<float, 3> scale = m_GizmoDrag.startScale[0];
+            scale[component] = std::max(m_GizmoDrag.startScale[0][component] * factor,
+                                        GizmoMath::MIN_SCALE_FACTOR);
+            applyScale(m_GizmoDrag.objectIds[0], scale);
+        }
+        OnSceneChanged();
+        return;
+    }
 
     if (gizmoController.Mode() == GizmoMode::Rotate) {
         glm::quat outRotation;
@@ -1576,18 +1659,24 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
     OnSceneChanged();
 }
 
+// Close whichever undo mechanism BeginDrag opened (see the note there). Read the
+// flag before m_GizmoDrag is reset.
 void Application::GizmoEndDrag() {
     RequestRedraw();
+    const bool sceneEdit = m_GizmoDrag.usesSceneEdit;
     gizmoController.EndDrag();
-    m_TransformTransaction.Commit(sceneManager, m_UndoStack);
+    if (sceneEdit) CommitSceneEdit();
+    else           m_TransformTransaction.Commit(sceneManager, m_UndoStack);
     m_GizmoDrag = GizmoDragState{};
     OnSceneChanged();
 }
 
 void Application::GizmoCancelDrag() {
     RequestRedraw();
+    const bool sceneEdit = m_GizmoDrag.usesSceneEdit;
     gizmoController.EndDrag();
-    m_TransformTransaction.Cancel(sceneManager);
+    if (sceneEdit) CancelSceneEdit();   // restores objects AND the editor store
+    else           m_TransformTransaction.Cancel(sceneManager);
     m_GizmoDrag = GizmoDragState{};
     OnSceneChanged();
 }
@@ -1600,6 +1689,7 @@ void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
     // rides along with the objects (the gizmo follows the cursor); during a rotate
     // it is preserved (rotation about the centroid), so the gizmo stays put.
     GizmoTarget target = ComputeGizmoTarget();
+    SyncGizmoScaleAxes(target);
     bool visible = gizmoEnabled && target.valid;
     glm::vec3 origin   = target.origin;
     glm::quat rotation = target.rotation;
@@ -1621,10 +1711,20 @@ void Application::UpdateGizmoGlobals(const glm::mat4& v, const glm::mat4& p) {
     glm::vec3 ey = gizmoController.AxisEndWorld(GizmoAxis::Y, origin, rotation, v, p, h);
     glm::vec3 ez = gizmoController.AxisEndWorld(GizmoAxis::Z, origin, rotation, v, p, h);
 
+    // The endpoints' w component carries "is this handle offered?" — 1 = draw it,
+    // 0 = skip. Only the scale gizmo ever masks anything (a shape that cannot be
+    // scaled in that direction), and it reuses the vec4 padding that the std140
+    // layout forced on us anyway, so this costs no uniform space. Keeping the
+    // flag on the axis it describes beats packing a mask into gizmoMode.
+    const bool scaling = gizmoController.Mode() == GizmoMode::Scale;
+    const float wx = (!scaling || target.scaleAxisMap[0] >= 0) ? 1.0f : 0.0f;
+    const float wy = (!scaling || target.scaleAxisMap[1] >= 0) ? 1.0f : 0.0f;
+    const float wz = (!scaling || target.scaleAxisMap[2] >= 0) ? 1.0f : 0.0f;
+
     globals.gizmoOrigin[0] = origin.x; globals.gizmoOrigin[1] = origin.y; globals.gizmoOrigin[2] = origin.z; globals.gizmoOrigin[3] = 0.0f;
-    globals.gizmoAxisX[0] = ex.x; globals.gizmoAxisX[1] = ex.y; globals.gizmoAxisX[2] = ex.z; globals.gizmoAxisX[3] = 0.0f;
-    globals.gizmoAxisY[0] = ey.x; globals.gizmoAxisY[1] = ey.y; globals.gizmoAxisY[2] = ey.z; globals.gizmoAxisY[3] = 0.0f;
-    globals.gizmoAxisZ[0] = ez.x; globals.gizmoAxisZ[1] = ez.y; globals.gizmoAxisZ[2] = ez.z; globals.gizmoAxisZ[3] = 0.0f;
+    globals.gizmoAxisX[0] = ex.x; globals.gizmoAxisX[1] = ex.y; globals.gizmoAxisX[2] = ex.z; globals.gizmoAxisX[3] = wx;
+    globals.gizmoAxisY[0] = ey.x; globals.gizmoAxisY[1] = ey.y; globals.gizmoAxisY[2] = ey.z; globals.gizmoAxisY[3] = wy;
+    globals.gizmoAxisZ[0] = ez.x; globals.gizmoAxisZ[1] = ez.y; globals.gizmoAxisZ[2] = ez.z; globals.gizmoAxisZ[3] = wz;
 }
 
 // Mirror the user's render settings (appSettings) into the GPU uniform. Cheap;

@@ -1,6 +1,7 @@
 #pragma once
 #include <webgpu/webgpu.hpp>
 #include <SDL3/SDL.h>
+#include <array>
 #include <filesystem>
 #include <string>
 
@@ -286,8 +287,15 @@ private:
         glm::vec3 origin{ 0.0f };
         glm::quat rotation{ 1.0f, 0.0f, 0.0f, 0.0f };
         std::vector<int32_t> objectIds;   // affected primitives (1 for a primitive)
+        // Scale gizmo only: the EditorObject::scale component each local axis
+        // drives, -1 = this shape cannot scale that way (PrimitiveGeometry::
+        // ScaleAxisMap). A group is uniform-only, so all three map to "all".
+        std::array<int, 3> scaleAxisMap{ 0, 1, 2 };
     };
     GizmoTarget ComputeGizmoTarget() const;
+    // Push the target's scale-handle availability into the controller, so hover,
+    // drag and the drawn handles all agree on which axes exist.
+    void SyncGizmoScaleAxes(const GizmoTarget& target);
 
     static const char* TypeName(int32_t type);
 
@@ -322,6 +330,14 @@ private:
         std::vector<int32_t> objectIds;
         std::vector<glm::vec3> startPos;
         std::vector<glm::quat> startRot;
+        // Scale drags edit EditorObject::scale, which lives in the editor store
+        // rather than on SdfObjectData — so they carry their own start values and
+        // are undone through the scene-edit snapshot (which covers the editor
+        // store) instead of TransformTransaction (which only restores the POD's
+        // position/rotation/size, and would leave scale desynced from size).
+        std::vector<std::array<float, 3>> startScale;
+        std::array<int, 3> scaleAxisMap{ 0, 1, 2 };
+        bool usesSceneEdit = false;
     };
     GizmoDragState m_GizmoDrag;
 
