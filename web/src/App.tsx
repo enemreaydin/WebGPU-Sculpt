@@ -319,10 +319,10 @@ export default class App extends React.Component<any, any> {
   viewportRef = React.createRef<HTMLDivElement>();
   engine: Engine | null = null;
   _ro: ResizeObserver | null = null;
-  // FPS meter: a rAF loop counts frames and updates state.fps ~2×/sec. The engine
-  // renders on its own emscripten rAF; under GPU load the browser throttles rAF
-  // (it won't call back faster than the canvas can present), so this tracks the
-  // real displayed framerate — the number the user actually perceives.
+  // FPS meter: a rAF loop samples the ENGINE's submitted-frame counter ~2×/sec
+  // (see startFpsMeter). _fpsFrames holds the last sampled engine count, not a
+  // local tally — the engine only draws when something invalidated the image, so
+  // counting our own callbacks would report the refresh rate while it idles.
   _rafId: number | null = null;
   _fpsFrames = 0;
   _fpsLast = 0;
@@ -357,7 +357,8 @@ export default class App extends React.Component<any, any> {
     // Canvas render dimensions (kept in state so a resize re-renders panels).
     vpW: 1,
     vpH: 1,
-    fps: 0,               // displayed framerate, sampled by the rAF meter (~2×/sec)
+    fps: 0,               // engine frames submitted per second (0 = idle, nothing to redraw)
+    frameMs: 0,           // engine GPU frame time in ms — not vsync-capped, unlike fps
     // Internal render resolution as a fraction of the viewport's CSS size. The
     // raymarch cost scales with pixel count, so 0.75/0.5 are big, cheap FPS wins;
     // the browser upscales the smaller backing store to fill the canvas. This is
@@ -687,18 +688,33 @@ export default class App extends React.Component<any, any> {
       });
   }
 
-  // Count frames on a rAF loop and publish FPS to state ~2×/sec (a coarse cadence
-  // so the counter itself costs almost nothing and doesn't spam re-renders).
+  // Sample the ENGINE's submitted-frame counter on a rAF loop and publish ~2×/sec
+  // (a coarse cadence so the meter costs nothing and doesn't spam re-renders).
+  //
+  // This deliberately does not count its own callbacks any more. rAF keeps firing
+  // at the display refresh rate whether or not the engine draws, so with
+  // render-on-demand a self-counting meter would read 60 on a completely idle
+  // engine. Sampling the engine counter makes 0 a true reading ("Idle").
+  //
+  // It also publishes the engine's GPU frame time. The rate is vsync-capped and
+  // saturates at the refresh rate, so it can only show how far *below* smooth you
+  // are — never how much headroom is left. Frame time keeps falling past that
+  // ceiling, so it is the number to compare optimisations with.
   startFpsMeter() {
     const tick = (now: number) => {
-      this._fpsFrames++;
-      if (this._fpsLast === 0) this._fpsLast = now;
-      const dt = now - this._fpsLast;
-      if (dt >= 500) {
-        const fps = Math.round((this._fpsFrames * 1000) / dt);
-        this._fpsFrames = 0;
+      if (this._fpsLast === 0) {
         this._fpsLast = now;
-        if (fps !== this.state.fps) this.setState({ fps });
+        this._fpsFrames = this.engine ? this.engine.getFrameCount() : 0;
+      }
+      const dt = now - this._fpsLast;
+      if (dt >= 500 && this.engine) {
+        const frames = this.engine.getFrameCount();
+        const fps = Math.round(((frames - this._fpsFrames) * 1000) / dt);
+        const frameMs = this.engine.getGpuFrameMs();
+        this._fpsFrames = frames;
+        this._fpsLast = now;
+        if (fps !== this.state.fps || frameMs !== this.state.frameMs)
+          this.setState({ fps, frameMs });
       }
       this._rafId = requestAnimationFrame(tick);
     };
@@ -3131,8 +3147,17 @@ export default class App extends React.Component<any, any> {
 
               {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css("position:absolute;top:10px;left:12px;font-size:11px;color:#6b6b6b;pointer-events:none")}>{this.state.cleanPreview ? "Framing Preview" : "User Perspective"}</span>}
 
-              {/* FPS readout (top-right). Green >=50, amber 30-49, red <30. */}
-              {!this.state.renderResult && this.state.renderStage === "idle" && <span style={css(`position:absolute;top:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;color:${this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps} FPS</span>}
+              {/* Frame readout (top-right). Top line = engine frames submitted per
+                  second; "Idle" means render-on-demand had nothing to redraw, which
+                  is the good case, so it is coloured neutrally rather than red.
+                  Second line = GPU frame time and the rate it implies. The rate is
+                  vsync-capped and saturates at the refresh rate; frame time is not,
+                  so it is the number that keeps moving when an optimisation makes a
+                  frame cheaper than 16.6 ms. Colour tracks frame time, not FPS. */}
+              {!this.state.renderResult && this.state.renderStage === "idle" && <div style={css("position:absolute;bottom:10px;right:12px;font-size:11px;font-variant-numeric:tabular-nums;pointer-events:none;text-align:right;line-height:1.35")}>
+                <div style={css(`color:${this.state.fps === 0 ? "#6b6b6b" : this.state.fps >= 50 ? "#5fbf5f" : this.state.fps >= 30 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.fps === 0 ? "Idle" : `${this.state.fps} FPS`}</div>
+                {this.state.frameMs > 0 && <div style={css(`font-size:10px;color:${this.state.frameMs <= 16.6 ? "#5fbf5f" : this.state.frameMs <= 33.3 ? "#e8b64a" : "#d15b5b"}`)}>{this.state.frameMs.toFixed(1)} ms · {Math.round(1000 / this.state.frameMs)} fps</div>}
+              </div>}
 
               {/* Viewport overlay toolbar */}
               {this.state.showOverlays && !this.state.cleanPreview && !this.state.renderResult && this.state.renderStage === "idle" && <div style={css("position:absolute;top:8px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:1px;background:rgba(28,28,28,0.92);border:1px solid #333333;border-radius:3px;padding:2px")}>

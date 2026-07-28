@@ -341,6 +341,22 @@ export class Engine {
     this.call("sdf_select_object", null, ["number"], [index]);
   }
 
+  // Monotonic count of frames the engine has actually submitted. Sample it over
+  // an interval to get the real render rate: with render-on-demand the engine
+  // draws nothing while the scene is static, so counting requestAnimationFrame
+  // callbacks instead would report the display refresh rate on an idle engine.
+  getFrameCount(): number {
+    return this.call("sdf_get_frame_count", "number", [], []) as number;
+  }
+
+  // Last measured GPU frame time in ms (submit → onSubmittedWorkDone, lightly
+  // smoothed). Frame *rate* is capped by vsync and saturates at the refresh
+  // rate; frame *time* is not, so this is the number that still moves when a
+  // change makes rendering cheaper than 16.6 ms. 0 = not measured yet.
+  getGpuFrameMs(): number {
+    return this.call("sdf_get_gpu_frame_ms", "number", [], []) as number;
+  }
+
   async pickObject(x: number, y: number): Promise<number> {
   const promise = this.module.ccall(
     "sdf_pick_object",

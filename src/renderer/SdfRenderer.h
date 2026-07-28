@@ -80,6 +80,11 @@ public:
     void Destroy();
 
 public:
+    // Number of temporal-accumulation layers fs_resolve averages (CLAUDE.md §7a).
+    // Also the number of consecutive frames the image needs to converge after a
+    // change, which is why Application::RequestRedraw reads it.
+    static constexpr int32_t kAccumLayers = 4;
+
     wgpu::RenderPipeline pipeline = nullptr;
     wgpu::BindGroup bindGroup = nullptr;
     wgpu::RenderPipeline resolvePipeline = nullptr;  
@@ -102,7 +107,6 @@ private:
     wgpu::TextureView renderTargetView = nullptr;
     wgpu::TextureFormat renderTargetFormat = wgpu::TextureFormat::Undefined;
 
-    static constexpr int32_t kAccumLayers = 4;
     wgpu::Texture accumTexture = nullptr;
     wgpu::TextureView accumLayerViews[kAccumLayers] = {};
     wgpu::TextureView accumArrayView = nullptr;

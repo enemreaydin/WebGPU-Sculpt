@@ -71,9 +71,26 @@ void Application::MainLoop() {
     // the same OS watchdog budget the export bands are sized to respect. Skip
     // the passes entirely; the surface keeps showing its last frame.
     const int exportState = renderer.GetFinalRenderState();
+    // Any export state transition means the canvas is about to be shown or hidden
+    // (progress overlay -> result -> viewport). Because the viewport passes are
+    // skipped for the whole export, the surface still holds a pre-export frame,
+    // so redraw on every edge rather than trying to guess which one uncovers it.
+    if (exportState != m_LastExportState) {
+        RequestRedraw();
+        m_LastExportState = exportState;
+    }
     if (exportState == 1 || exportState == 2) return;
+    if (!frameScheduler.ShouldRender()) {return;}
 
     bool isCameraMoving = UpdateCamera();
+    // Falling edge camera-moving -> idle. Every frame drawn during a camera move
+    // forces taaEnabled = 0 and zeroes the jitter below, so the accumulation
+    // layers end up holding four identical un-jittered images. Nothing else
+    // schedules the reconvergence, so without this the viewport would stay at
+    // that aliased single-sample quality after every orbit until some unrelated
+    // edit invalidated it. Continuous rendering used to hide this for free.
+    if (m_CameraWasMoving && !isCameraMoving) RequestRedraw();
+    m_CameraWasMoving = isCameraMoving;
 
     float aspect = (renderHeight > 0)
         ? static_cast<float>(renderWidth) / static_cast<float>(renderHeight)
@@ -147,6 +164,7 @@ void Application::MainLoop() {
     // The SDF is drawn as a full-screen quad straight onto the swap-chain
     // (canvas) surface. The React UI is composited over it by the browser, so
     // there is no longer an intermediate offscreen texture.
+    
     RenderPassEncoder renderPass = encoder.beginRenderPass(renderPassDesc);
     if (renderer.bindGroup && renderer.sceneBuffer) {
         renderPass.setPipeline(renderer.pipeline);
@@ -187,6 +205,7 @@ void Application::MainLoop() {
     graphics.queue.submit(1, &cmdBuf);
     cmdBuf.release();
     targetView.release();
+    frameStats.OnFrameSubmitted(graphics.queue);
 
 #ifndef __EMSCRIPTEN__
     // On the web the browser presents the canvas automatically; present/poll
@@ -194,10 +213,12 @@ void Application::MainLoop() {
     graphics.surface.present();
     graphics.device.poll(false);
 #endif
+    frameScheduler.Consume();
 }
 
 void Application::OnResize(int newWidth, int newHeight) {
     if (newWidth <= 0 || newHeight <= 0) return;
+    RequestRedraw();
     width = newWidth; height = newHeight;
     renderWidth = newWidth; renderHeight = newHeight;
     graphics.ConfigureSurface(width, height);
@@ -293,6 +314,7 @@ void Application::InitializeRenderer() {
 
 
     // Create an empty scene buffer so the shader can render the grid.
+    RequestRedraw();
     sceneSerializer.RefreshSceneBuffer();
 }
 
@@ -318,12 +340,25 @@ bool Application::UpdateCamera() {
 }
 
 
+// Schedule a full convergence run. One rendered frame refreshes exactly one of
+// the kAccumLayers accumulation layers, and fs_resolve averages all of them — so
+// after any change the image only settles once every layer has been redrawn.
+// With TAA off the resolve shows the single current layer, so one frame is the
+// finished image. See CLAUDE.md §7a.
+void Application::RequestRedraw()
+{
+    frameScheduler.Request(appSettings.viewportQuality.taaEnabled
+        ? SdfRenderer::kAccumLayers
+        : 1);
+}
+
 // ---------------------------------------------------------------------------
 // Undo / Redo
 // ---------------------------------------------------------------------------
 
 void Application::OnSceneChanged()
-{
+{   
+    RequestRedraw();
     if (m_SceneEditDepth > 0) m_SceneEditChanged = true;
     const auto& objects = sceneManager.GetObjects();
 
@@ -334,12 +369,12 @@ void Application::OnSceneChanged()
             editorObject->rotationEuler = QuatToEulerDegrees(object.rotation);
         }
     }
-
     sceneSerializer.RefreshSceneBuffer();
 }
 
 void Application::OnCsgChanged()
-{
+{   
+    RequestRedraw();
     if (m_SceneEditDepth > 0) m_SceneEditChanged = true;
     sceneSerializer.RefreshCsgBuffer();
 }
@@ -582,6 +617,10 @@ void Application::RebuildEditorRecords() {
 void Application::SelectObject(int index) {
     if (index < -1 || index >= static_cast<int>(sceneManager.GetObjects().size())) return;
     selectionState.selectedObjectIndex = index;
+    // Feeds globals.selectedIndex in UpdateCamera, i.e. the in-shader highlight.
+    // Unlike SelectNode this path never reaches UpdateSelectionHighlight, so it
+    // has to invalidate on its own.
+    RequestRedraw();
 }
 void Application::DeleteSelection() {
     const bool record = ShouldRecordSceneEdit();
@@ -866,7 +905,7 @@ void Application::UpdateSelectionHighlight() {
         for (int32_t oid : subtreeIds)
             if (SdfObjectData* o = sceneManager.FindObjectById(oid)) o->selected = 1;
     }
-
+    RequestRedraw();
     sceneSerializer.RefreshSceneBuffer();
 }
 
@@ -1176,6 +1215,7 @@ std::string Application::GetSceneJson() const {
 
 void Application::NewScene() {
     sceneSerializer.NewScene();
+    RequestRedraw();
     editorStore.Clear();
     selectionState.Clear();
     selectionState.selectedObjectIndex = -1;
@@ -1184,7 +1224,8 @@ void Application::NewScene() {
 }
 
 void Application::OpenScene() {
-    sceneSerializer.OpenSceneFromSDFO();
+    sceneSerializer.OpenSceneFromSDFO();    
+    RequestRedraw();
     RebuildEditorRecords();
     selectionState.Clear();
     selectionState.selectedObjectIndex = -1;
@@ -1209,6 +1250,7 @@ bool Application::DeserializeProject(const std::string& bytes) {
 
     // Whether or not the header parsed, resync everything derived from the scene so
     // we never leave the GPU / editor / selection pointing at stale data.
+    RequestRedraw();
     sceneSerializer.RefreshSceneBuffer();
     RebuildEditorRecords();
     // Overlay the saved editor attributes on top of the freshly rebuilt defaults.
@@ -1223,22 +1265,26 @@ bool Application::DeserializeProject(const std::string& bytes) {
 }
 
 void Application::CameraOrbit(float dx, float dy) {
+    RequestRedraw();
     viewportInput.orbiting = true;
     viewportInput.mouseDelta.x += dx;
     viewportInput.mouseDelta.y += dy;
 }
 
 void Application::CameraPan(float dx, float dy) {
+    RequestRedraw();
     viewportInput.panning = true;
     viewportInput.mouseDelta.x += dx;
     viewportInput.mouseDelta.y += dy;
 }
 
 void Application::CameraZoom(float delta) {
+    RequestRedraw();
     viewportInput.scrollDelta += delta;
 }
 
 void Application::CameraSnap(float x, float y, float z) {
+    RequestRedraw();
     camera.SnapToDirection(glm::vec3(x, y, z));
 }
 
@@ -1268,6 +1314,7 @@ bool ComputeFrameBounds(const std::vector<SdfObjectData>& objects,
 }
 
 bool Application::FrameSelected() {
+    RequestRedraw();
     glm::vec3 center;
     float radius = 0.0f;
     if (!ComputeFrameBounds(sceneManager.GetObjects(), editorStore, true, center, radius)) return false;
@@ -1276,6 +1323,7 @@ bool Application::FrameSelected() {
 }
 
 bool Application::FrameAll() {
+    RequestRedraw();
     glm::vec3 center;
     float radius = 0.0f;
     if (!ComputeFrameBounds(sceneManager.GetObjects(), editorStore, false, center, radius)) return false;
@@ -1354,6 +1402,7 @@ static inline void GizmoViewProj(Camera& camera, int renderWidth, int renderHeig
 }
 
 int Application::GizmoHover(float mouseX, float mouseY) {
+    RequestRedraw();
     GizmoTarget target = ComputeGizmoTarget();
     if (!target.valid) return 0;
 
@@ -1364,6 +1413,7 @@ int Application::GizmoHover(float mouseX, float mouseY) {
 }
 
 void Application::GizmoBeginDrag(float mouseX, float mouseY) {
+    RequestRedraw();
     GizmoTarget target = ComputeGizmoTarget();
     if (!target.valid) return;
 
@@ -1406,6 +1456,7 @@ void Application::GizmoBeginDrag(float mouseX, float mouseY) {
 }
 
 void Application::GizmoDrag(float mouseX, float mouseY) {
+    RequestRedraw();
     if (!m_GizmoDrag.active) return;
 
     glm::mat4 v, p;
@@ -1462,6 +1513,7 @@ void Application::GizmoDrag(float mouseX, float mouseY) {
 }
 
 void Application::GizmoEndDrag() {
+    RequestRedraw();
     gizmoController.EndDrag();
     m_TransformTransaction.Commit(sceneManager, m_UndoStack);
     m_GizmoDrag = GizmoDragState{};
@@ -1469,6 +1521,7 @@ void Application::GizmoEndDrag() {
 }
 
 void Application::GizmoCancelDrag() {
+    RequestRedraw();
     gizmoController.EndDrag();
     m_TransformTransaction.Cancel(sceneManager);
     m_GizmoDrag = GizmoDragState{};
@@ -1559,6 +1612,7 @@ QualitySettings& Application::QualityFor(int context) {
 // float and are rounded. Values are assumed pre-clamped by the UI, but the int
 // counts are floored to sane minimums here as a safety net.
 void Application::SetRenderSetting(int id, float value) {
+    RequestRedraw();
     const bool record = ShouldRecordSceneEdit();
     SceneEditSnapshot before;
     if (record) before = CaptureSceneEditSnapshot();
@@ -1586,6 +1640,7 @@ void Application::SetRenderSetting(int id, float value) {
 // QualitySettings.h. Same shape as SetRenderSetting, plus the context that picks
 // which of the two budgets is written. Ints arrive as float and are rounded.
 void Application::SetQualitySetting(int context, int id, float value) {
+    RequestRedraw();
     const bool record = ShouldRecordSceneEdit();
     SceneEditSnapshot before;
     if (record) before = CaptureSceneEditSnapshot();

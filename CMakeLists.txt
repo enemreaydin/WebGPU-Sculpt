@@ -44,6 +44,8 @@ endif()
 # Editor layer: application + main render loop.
 set(EDITOR_SOURCES
     src/editor/Application.cpp
+    src/editor/FrameScheduler.cpp
+    src/editor/FrameStats.cpp
     src/editor/EditorObjectStore.cpp
     src/editor/TransformTransaction.cpp
     src/editor/command/UndoStack.cpp
@@ -85,6 +87,8 @@ set(PROJECT_HEADERS
     src/platform/Window.h
     src/platform/GraphicsContext.h
     src/editor/Application.h
+    src/editor/FrameScheduler.h
+    src/editor/FrameStats.h
     src/editor/Settings.h
     src/editor/QualitySettings.h
     src/scene/data/SdfEnums.h

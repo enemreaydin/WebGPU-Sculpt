@@ -23,7 +23,8 @@
 #include "editor/command/UndoStack.h"
 #include "editor/TransformTransaction.h"
 #include "editor/SceneEditSnapshot.h"
-
+#include "editor/FrameScheduler.h"
+#include "editor/FrameStats.h"
 using namespace wgpu;
 
 // The engine application. It owns the window, WebGPU context, scene and
@@ -116,9 +117,9 @@ public:
     bool DeserializeProject(const std::string& bytes);
 
     // View
-    void SetShowGrid(bool show) { showGrid = show; }
+    void SetShowGrid(bool show) { showGrid = show; RequestRedraw(); }
     bool GetShowGrid() const { return showGrid; }
-    void SetSelectionVisuals(bool show) { globals.qualityPad1 = show ? 0 : 1; }
+    void SetSelectionVisuals(bool show) { globals.qualityPad1 = show ? 0 : 1; RequestRedraw(); }
 
     // Camera interaction (deltas in pixels / wheel ticks, accumulated per frame)
     void CameraOrbit(float dx, float dy);
@@ -162,17 +163,24 @@ public:
     // Whether the gizmo should be drawn (the front-end sets this from its active
     // tool). The gizmo is rendered by the SDF shader, so it stays perfectly in
     // sync with the scene; there is no screen-space overlay JSON.
-    void SetGizmoEnabled(bool enabled) { gizmoEnabled = enabled; }
+    void SetGizmoEnabled(bool enabled) { gizmoEnabled = enabled; RequestRedraw(); }
 
     // `mode` is a GizmoMode (0 translate, 1 rotate), `space` a GizmoSpace
     // (0 world, 1 local). Both are ignored mid-drag; see GizmoController.
-    void SetGizmoMode(int mode)   { gizmoController.SetMode(static_cast<GizmoMode>(mode)); }
-    void SetGizmoSpace(int space) { gizmoController.SetSpace(static_cast<GizmoSpace>(space)); }
+    void SetGizmoMode(int mode)   { gizmoController.SetMode(static_cast<GizmoMode>(mode)); RequestRedraw(); }
+    void SetGizmoSpace(int space) { gizmoController.SetSpace(static_cast<GizmoSpace>(space)); RequestRedraw(); }
 
     // Web Render Resolution scale (render-buffer px per display px). Keeps the
     // gizmo a constant on-screen size when the backing store is up/down-scaled;
     // it is a viewport display preference, not scene state (see §10).
-    void SetGizmoPixelScale(float scale) { gizmoController.SetPixelScale(scale); }
+    void SetGizmoPixelScale(float scale) { gizmoController.SetPixelScale(scale); RequestRedraw(); }
+
+    // Viewport frame accounting for the FPS readout. The frame count is what the
+    // web meter samples (rAF keeps ticking while render-on-demand draws nothing,
+    // so counting callbacks would report 60 on an idle engine); the GPU frame
+    // time is the vsync-independent cost number to compare optimisations with.
+    unsigned long long GetFrameCount() const { return frameStats.FrameCount(); }
+    float GetGpuFrameMs() const { return frameStats.GpuFrameMs(); }
 
     void Undo();
     void Redo();
@@ -201,6 +209,8 @@ private:
     SdfRenderer renderer;
     SceneSerializer sceneSerializer;
     Settings appSettings;
+    FrameScheduler frameScheduler;
+    FrameStats frameStats;
     bool showGrid = true;
 
     SelectionState selectionState;
@@ -255,6 +265,20 @@ private:
 
     void OnSceneChanged();
     void OnCsgChanged();
+
+    // Ask the frame scheduler for enough frames to bring the viewport back to a
+    // converged image. With temporal accumulation on, fs_resolve averages
+    // SdfRenderer::kAccumLayers layers and each rendered frame refreshes exactly
+    // one of them, so a single frame would leave 3/4 of the image stale — every
+    // invalidation must schedule a full convergence run. With TAA off the resolve
+    // shows only the current layer, so one frame is already the final image.
+    void RequestRedraw();
+
+    // Edge detectors for the two invalidations that are transitions rather than
+    // events — nobody calls a setter when a camera drag ends or an export
+    // finishes, so MainLoop has to notice the change itself.
+    bool m_CameraWasMoving = false;
+    int  m_LastExportState = 0;
 
     TransformTransaction m_TransformTransaction;
 

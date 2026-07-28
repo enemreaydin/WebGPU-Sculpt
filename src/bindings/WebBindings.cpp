@@ -291,6 +291,21 @@ extern "C" {
         if (g_App) g_App->OnResize(width, height);
     }
 
+    // Viewport frame accounting for the FPS readout. The count is monotonic and
+    // returned as a double because it outgrows a 32-bit int in a long session
+    // (and JS numbers are doubles anyway).
+    EMSCRIPTEN_KEEPALIVE
+        double sdf_get_frame_count() {
+        return g_App ? static_cast<double>(g_App->GetFrameCount()) : 0.0;
+    }
+
+    // Last measured GPU frame time in milliseconds; 0 until the first frame's
+    // work-done callback has fired. Not vsync-bound, unlike the frame rate.
+    EMSCRIPTEN_KEEPALIVE
+        float sdf_get_gpu_frame_ms() {
+        return g_App ? g_App->GetGpuFrameMs() : 0.0f;
+    }
+
     EMSCRIPTEN_KEEPALIVE
         void sdf_camera_orbit(float dx, float dy) {
         if (g_App) g_App->CameraOrbit(dx, dy);
