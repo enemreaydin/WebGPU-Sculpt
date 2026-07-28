@@ -22,9 +22,24 @@ public:
 	void Zoom(Settings appSettings, float delta);
 	void TargetPan(Settings appSettings, Vec2 delta);
 	void SnapToDirection(const glm::vec3& direction);
+
+	// The orbit angles that look along `direction`, without touching the camera.
+	// Lets an animated view change (CameraTransition) compute where it is going
+	// before it starts moving. Returns false for a degenerate/non-finite
+	// direction, which would normalize to NaN.
+	static bool OrientationForDirection(const glm::vec3& direction, float& outYaw, float& outPitch);
+
+	// Apply an orientation directly (pitch clamped to the same limit as orbiting).
+	void SetOrientation(float newYaw, float newPitch);
+
 	void FrameBounds(const glm::vec3& center, float radius);
 	float GetYaw() const { return yaw; }
 	float GetPitch() const { return pitch; }
+
+	// Pitch is clamped just short of straight up/down: at exactly +-90 degrees the
+	// view forward vector is parallel to the world up, so cross(forward, up) is
+	// zero and both glm::lookAt and the shader's camera basis produce NaNs.
+	static constexpr float PITCH_LIMIT = 1.55f;
 private:
 	float yaw = 0.5f;
 	float pitch = 0.5f;

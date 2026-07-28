@@ -104,6 +104,7 @@ set(PROJECT_HEADERS
     src/renderer/SdfRenderer.h
     src/camera/Camera.h
     src/camera/CameraController.h
+    src/camera/CameraTransition.h
     src/scene/SceneManager.h
     src/scene/SdfObjectFactory.h
     src/interaction/SelectionState.h

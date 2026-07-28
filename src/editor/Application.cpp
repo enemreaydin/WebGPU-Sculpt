@@ -80,6 +80,14 @@ void Application::MainLoop() {
         m_LastExportState = exportState;
     }
     if (exportState == 1 || exportState == 2) return;
+
+    // An animated view change advances on wall-clock time, so it is the one piece
+    // of state that changes without anyone calling a setter. Nothing else
+    // invalidates while it runs, so it has to keep asking for frames itself —
+    // otherwise the loop idles mid-flight and the camera arrives in one jump.
+    // Must sit above the ShouldRender guard, or the request would never be made.
+    if (cameraTransition.IsActive()) RequestRedraw();
+
     if (!frameScheduler.ShouldRender()) {return;}
 
     bool isCameraMoving = UpdateCamera();
@@ -319,8 +327,24 @@ void Application::InitializeRenderer() {
 }
 
 bool Application::UpdateCamera() {
+    // A drag beats the animation: an orbit gesture cancels an in-flight snap so
+    // the two never fight over yaw/pitch in the same frame. Pan and zoom move the
+    // target/distance instead, so they can run alongside it.
+    if (viewportInput.orbiting) cameraTransition.Cancel();
+
     cameraController.Update(camera, appSettings, viewportInput);
-    bool isMoving = viewportInput.panning || viewportInput.orbiting || viewportInput.scrollDelta;
+
+    // Sample the eased orientation for this frame, if a view change is running.
+    float animatedYaw = 0.0f;
+    float animatedPitch = 0.0f;
+    const bool animating = cameraTransition.Advance(animatedYaw, animatedPitch);
+    if (animating) camera.SetOrientation(animatedYaw, animatedPitch);
+
+    // Reported as "camera moving" so the animation gets the same treatment as a
+    // drag: TAA jitter is suppressed while it runs (the accumulation layers would
+    // smear four different orientations together) and the moving -> idle edge in
+    // MainLoop schedules the reconvergence once it lands.
+    bool isMoving = animating || viewportInput.panning || viewportInput.orbiting || viewportInput.scrollDelta;
     // Input is per-frame; consume it so a gesture doesn't repeat.
     viewportInput = ViewportInput{};
 
@@ -1283,9 +1307,20 @@ void Application::CameraZoom(float delta) {
     viewportInput.scrollDelta += delta;
 }
 
+// Navigation-gizmo axis view. The camera eases into the requested direction over
+// CameraTransition::DEFAULT_DURATION_S instead of teleporting, so the user can
+// see how the scene rotated to get there. The transition is advanced in
+// UpdateCamera and kept fed with frames from MainLoop.
 void Application::CameraSnap(float x, float y, float z) {
     RequestRedraw();
-    camera.SnapToDirection(glm::vec3(x, y, z));
+    float targetYaw = 0.0f;
+    float targetPitch = 0.0f;
+    if (!Camera::OrientationForDirection(glm::vec3(x, y, z), targetYaw, targetPitch)) return;
+    // Ease from wherever the camera is *now* (possibly mid-animation from a
+    // previous click). A move too small to see is applied directly rather than
+    // animated, so a repeat click on the current view costs nothing.
+    if (!cameraTransition.Start(camera.GetYaw(), camera.GetPitch(), targetYaw, targetPitch))
+        camera.SetOrientation(targetYaw, targetPitch);
 }
 
 namespace {

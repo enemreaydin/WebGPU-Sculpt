@@ -11,12 +11,11 @@ glm::vec3 Camera::GetTargetPosition() {
 	return targetP;
 }
 void Camera::OrbitMovement(Settings appSettings, Vec2 delta) {
-	const float limit = 1.55f;
 	float sensitivity = appSettings.orbitSensitivity;
 	yaw = yaw - delta.x * sensitivity;
 	pitch = pitch + delta.y * sensitivity;
-	if (pitch > limit) pitch = limit;
-	if (pitch < -limit) pitch = -limit;
+	if (pitch > PITCH_LIMIT) pitch = PITCH_LIMIT;
+	if (pitch < -PITCH_LIMIT) pitch = -PITCH_LIMIT;
 }
 
 void Camera::Zoom(Settings appSettings, float delta) {
@@ -34,10 +33,26 @@ void Camera::TargetPan(Settings appSettings, Vec2 delta) {
 	targetP += -right * delta.x * panSensitivity + up * delta.y * panSensitivity;
 }
 
+bool Camera::OrientationForDirection(const glm::vec3& direction, float& outYaw, float& outPitch) {
+	const float lengthSq = glm::dot(direction, direction);
+	// A zero-length or non-finite direction would normalize to NaN and poison
+	// yaw/pitch for the rest of the session; the caller keeps its current view.
+	if (!std::isfinite(lengthSq) || lengthSq < 1e-12f) return false;
+	const glm::vec3 d = direction / sqrt(lengthSq);
+	outPitch = glm::clamp(asin(glm::clamp(d.y, -1.0f, 1.0f)), -PITCH_LIMIT, PITCH_LIMIT);
+	outYaw = atan2(d.x, d.z);
+	return true;
+}
+
+void Camera::SetOrientation(float newYaw, float newPitch) {
+	yaw = newYaw;
+	pitch = glm::clamp(newPitch, -PITCH_LIMIT, PITCH_LIMIT);
+}
+
 void Camera::SnapToDirection(const glm::vec3& direction) {
-	const glm::vec3 d = glm::normalize(direction);
-	pitch = asin(glm::clamp(d.y, -1.0f, 1.0f));
-	yaw = atan2(d.x, d.z);
+	float newYaw = 0.0f;
+	float newPitch = 0.0f;
+	if (OrientationForDirection(direction, newYaw, newPitch)) SetOrientation(newYaw, newPitch);
 }
 
 void Camera::FrameBounds(const glm::vec3& center, float radius) {

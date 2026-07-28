@@ -14,6 +14,7 @@
 #include "scene/data/GlobalsData.h"
 #include "camera/Camera.h"
 #include "camera/CameraController.h"
+#include "camera/CameraTransition.h"
 #include "core/ViewportInput.h"
 #include "interaction/SelectionState.h"
 #include "interaction/GizmoState.h"
@@ -222,6 +223,10 @@ private:
     GlobalsData globals{};
     Camera camera;
     CameraController cameraController;
+    // In-flight animated view change (navigation-gizmo axis snap). While it runs
+    // it owns the camera's yaw/pitch; MainLoop keeps requesting frames for it and
+    // an orbit gesture cancels it. See UpdateCamera / CameraSnap.
+    CameraTransition cameraTransition;
     ViewportInput viewportInput;
     glm::mat4 view{};
     glm::mat4 proj{};
