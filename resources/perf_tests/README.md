@@ -37,9 +37,9 @@ off-screen objects are visible, defeating the test).
    comparable number is the static one.
 5. Record results in the table below (copy per machine).
 
-| Scene | FPS before | FPS after | Notes |
+| Scene | FPS before | FPS after | Notes | Render time before
 |---|---|---|---|
-| A_baseline_5 | 30 | | |
+| A_baseline_5 | 30 | | | 
 | B_offscreen_25 | 6 | | should match A after P1 |
 | C_spread_16 | 10 | | |
 | D_cluster_12 | 12 | | expected to move least |
