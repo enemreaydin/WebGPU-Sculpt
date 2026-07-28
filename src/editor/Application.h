@@ -305,7 +305,13 @@ private:
     SceneEditSnapshot m_SceneEditBefore{};
     bool m_SceneEditChanged = false;
 
-    uint32_t m_JitterIndex = 0;
+    // Temporal accumulation state (CLAUDE.md 7a). The layers only ever hold
+    // samples of ONE image: an invalidation restarts the sequence at layer 0 and
+    // fs_resolve averages just the layers filled since then, so a frame from a
+    // previous camera/scene state can never leak into the average.
+    uint32_t m_JitterIndex = 0;   // layer written this frame, and the jitter offset used
+    uint32_t m_AccumCount = 0;    // layers filled since the last invalidation (0..kAccumLayers)
+    bool     m_AccumReset = true; // next drawn frame starts a fresh sequence; set by RequestRedraw
     void UpdateJitterGlobal(uint32_t jitterIndex);
 
     SceneEditSnapshot CaptureSceneEditSnapshot() const;

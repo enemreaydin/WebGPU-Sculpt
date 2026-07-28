@@ -91,12 +91,12 @@ void Application::MainLoop() {
     if (!frameScheduler.ShouldRender()) {return;}
 
     bool isCameraMoving = UpdateCamera();
-    // Falling edge camera-moving -> idle. Every frame drawn during a camera move
-    // forces taaEnabled = 0 and zeroes the jitter below, so the accumulation
-    // layers end up holding four identical un-jittered images. Nothing else
-    // schedules the reconvergence, so without this the viewport would stay at
-    // that aliased single-sample quality after every orbit until some unrelated
-    // edit invalidated it. Continuous rendering used to hide this for free.
+    // Falling edge camera-moving -> idle. A camera gesture arrives as a stream of
+    // discrete input events, so the last one only ever schedules the frame that
+    // draws it; nothing schedules the run that accumulates the remaining samples
+    // once the gesture is over. Without this the viewport would sit at
+    // single-sample quality after every orbit until an unrelated edit invalidated
+    // it. Continuous rendering used to hide this for free.
     if (m_CameraWasMoving && !isCameraMoving) RequestRedraw();
     m_CameraWasMoving = isCameraMoving;
 
@@ -113,16 +113,29 @@ void Application::MainLoop() {
 
     // Push the user's render settings into the GPU uniform.
     SyncRenderGlobals();
-    m_JitterIndex = (m_JitterIndex + 1) & 3;
-    // The scene always renders into layer[m_JitterIndex]; fs_resolve reads this
-    // index to show the current frame when TAA is off. With TAA off we also skip
-    // the sub-pixel jitter so the single shown layer stays pin-sharp.
-    globals.jitterLayer = static_cast<int32_t>(m_JitterIndex);
-    if (isCameraMoving)
-    {
-        globals.taaEnabled = 0;
+
+    // ---- Temporal accumulation bookkeeping (CLAUDE.md 7a) ------------------
+    // The layers must only ever be averaged with each other while they are all
+    // samples of the SAME image. RequestRedraw — i.e. every invalidation, from a
+    // camera nudge to a scene edit — sets m_AccumReset, so the next drawn frame
+    // restarts the sequence at layer 0 with a sample count of 1. The count then
+    // climbs 1 -> 2 -> 3 -> 4 over the following frames, and fs_resolve divides
+    // by exactly that many. A frame drawn at an older camera position can
+    // therefore never be blended into the current image, which is what used to
+    // show up as stale/ghosted frames when the scene was heavy enough that the
+    // four convergence frames took a visible fraction of a second.
+    if (!globals.taaEnabled || m_AccumReset) {
+        m_JitterIndex = 0;
+        m_AccumCount = 1;
+        m_AccumReset = false;
+    } else {
+        m_JitterIndex = (m_JitterIndex + 1) % static_cast<uint32_t>(SdfRenderer::kAccumLayers);
+        if (m_AccumCount < static_cast<uint32_t>(SdfRenderer::kAccumLayers)) m_AccumCount++;
     }
-    
+    globals.accumCount = static_cast<int32_t>(m_AccumCount);
+
+    // With TAA off a single un-jittered sample is the finished image, so the
+    // offset is zeroed to keep it pin-sharp rather than shifted by a quarter pixel.
     if (globals.taaEnabled) {
         UpdateJitterGlobal(m_JitterIndex);
     } else {
@@ -252,6 +265,7 @@ bool Application::StartFinalRender(uint32_t outWidth, uint32_t outHeight) {
     // no resolve), so TAA is meaningless here and the ray must not be jittered.
     // SSAA (aaSamples) is what anti-aliases an export.
     finalGlobals.taaEnabled = 0;
+    finalGlobals.accumCount = 1;   // read only by fs_resolve, which the export never runs
     finalGlobals.jitterOffset[0] = 0.0f;
     finalGlobals.jitterOffset[1] = 0.0f;
 
@@ -371,6 +385,11 @@ bool Application::UpdateCamera() {
 // finished image. See CLAUDE.md §7a.
 void Application::RequestRedraw()
 {
+    // An invalidation means the image changed, which is exactly the moment every
+    // sample accumulated so far stops describing it. Restarting the sequence here
+    // — in the one place all invalidations already funnel through — is what keeps
+    // fs_resolve from ever averaging a frame of the previous state into this one.
+    m_AccumReset = true;
     frameScheduler.Request(appSettings.viewportQuality.taaEnabled
         ? SdfRenderer::kAccumLayers
         : 1);

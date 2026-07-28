@@ -156,3 +156,5 @@ Quick answers for likely questions
 "Why not just show milliseconds and drop FPS?" They're genuinely different questions, and the FPS line doubles as the render-on-demand indicator — "Idle" is how you confirm at a glance that the scheduler is working.
 
 "Doesn't polling the engine twice a second cost something?" Two function calls across the WASM boundary per second. It is not measurable.
+
+8) Camera movement a animasyon eklendi

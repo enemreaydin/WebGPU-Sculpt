@@ -79,6 +79,10 @@ struct alignas(16) GlobalsData
 
 
     float jitterOffset[2] = {-0.25f, -0.25f};  // per-frame sub-pixel ray offset (px); set each frame in MainLoop
-    int32_t taaEnabled = 1;   // 1 = temporal AA (fs_resolve averages the 4 layers); 0 = passthrough (show current layer only)
-    int32_t jitterLayer = 0;  // accumulation layer written this frame (= m_JitterIndex); which layer fs_resolve shows when TAA is off
+    int32_t taaEnabled = 1;   // 1 = temporal AA (accumulate up to kAccumLayers jittered samples); 0 = single sample
+    int32_t accumCount = 1;   // how many accumulation layers hold samples of the CURRENT image, i.e. how many
+                              // have been rendered since the last invalidation. fs_resolve averages layers
+                              // [0, accumCount) — never a layer left over from a previous camera/scene state,
+                              // which is what used to ghost. Layers are always filled from index 0 upward after
+                              // an invalidation, so "valid" is a prefix. 1 = show just this frame. See CLAUDE.md 7a.
 };
