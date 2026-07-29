@@ -35,7 +35,10 @@ struct Globals {
     gizmoPixelScale : f32,
     jitterOffset : vec2f,
     taaEnabled : i32,
-    accumCount : i32
+    accumCount : i32,
+    sceneBoundsMin : vec4f,
+    sceneBoundsMax : vec4f
+
 }
 
 @group(0) @binding(1) var<uniform> globals : Globals;

@@ -1747,6 +1747,12 @@ void Application::SyncRenderGlobals() {
     globals.specularStrength  = s.specularStrength;
     globals.shadowSoftness    = s.shadowSharpness;
     globals.aoStrength        = s.aoStrength;
+    globals.sceneBoundsMax[0] = sceneSerializer.GetSceneBounds().maxBoxDistances[0];
+    globals.sceneBoundsMax[1] = sceneSerializer.GetSceneBounds().maxBoxDistances[1];
+    globals.sceneBoundsMax[2] = sceneSerializer.GetSceneBounds().maxBoxDistances[2];
+    globals.sceneBoundsMin[0] = sceneSerializer.GetSceneBounds().minBoxDistances[0];
+    globals.sceneBoundsMin[1] = sceneSerializer.GetSceneBounds().minBoxDistances[1];
+    globals.sceneBoundsMin[2] = sceneSerializer.GetSceneBounds().minBoxDistances[2];
     // The live viewport always renders at the viewport budget; the export builds
     // its own globals from exportQuality in StartFinalRender.
     ApplyQuality(s.viewportQuality, globals);

@@ -85,4 +85,8 @@ struct alignas(16) GlobalsData
                               // [0, accumCount) — never a layer left over from a previous camera/scene state,
                               // which is what used to ghost. Layers are always filled from index 0 upward after
                               // an invalidation, so "valid" is a prefix. 1 = show just this frame. See CLAUDE.md 7a.
+    float sceneBoundsMin[4] = {  1e30f,  1e30f,  1e30f, 0.0f };
+    float sceneBoundsMax[4] = { -1e30f, -1e30f, -1e30f, 0.0f };
+
 };
+static_assert(sizeof(GlobalsData) == 288, "GlobalsData must stay in lockstep with the WGSL Globals struct.");
