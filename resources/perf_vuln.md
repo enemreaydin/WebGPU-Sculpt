@@ -12,7 +12,7 @@
 | # | Vulnerability | Cost scaling | Expected win | Effort |
 |---|---|---|---|---|
 | P1 | Every object's exact SDF evaluated at **every march step of every ray** — no culling, no bounds | O(pixels × steps × objects) | **The fix for your symptom.** Near-flat cost in object count for typical scenes | Medium |
-| P2 | Full raymarch re-rendered **every vsync, even when nothing changed** | 100% of GPU, 100% of the time | Idle GPU ≈ 0; editor feels instantly usable | Low |
+| DONE | Full raymarch re-rendered **every vsync, even when nothing changed** | 100% of GPU, 100% of the time | Idle GPU ≈ 0; editor feels instantly usable | Low | 
 | P3 | Shadow / AO / normal each re-run the full O(N) evaluator — secondary rays ~2–3× the primary cost | multiplies P1 | 2–3× during interaction | Low–Medium |
 | P4 | No whole-scene bounds — background & grazing rays pay full march cost | ~30–60% of pixels are background | Big for sparse scenes | Low |
 | P5 | Naive marcher: fixed `hitEpsilon`, no over-relaxation → more steps than necessary | multiplies everything | 20–50% fewer steps | Low–Medium |

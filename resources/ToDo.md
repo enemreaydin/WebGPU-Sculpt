@@ -5,7 +5,6 @@
 6) Çift tıklamayla nesne özelinde seçim ekle
 7) Grup kopyalama
 8) Gruptan eleman silince eski haline dönmeli
-9) Scale gizmo
 10) .sdfo import
 11) Ayarlar menüsü
 12) Kısayol özelleştirmeleri

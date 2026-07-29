@@ -160,3 +160,22 @@ Quick answers for likely questions
 8) Camera movement a animasyon eklendi
 
 9) Camera movement TAAA bug resolved
+
+10) Scale gizmo
+
+The one-liner
+"Translate and rotate already existed, so the third gizmo was mostly plumbing — except for one design question the other two never had to answer: an SDF primitive cannot be scaled in every direction, so the gizmo only shows the handles the shape can actually use."
+
+Why the handles differ per primitive
+Our GPU `size` vector is derived from the editor's scale, and that derivation doesn't consult all three components. A sphere has one radius. A cone's width is an angle, and scaling an angle is meaningless. A torus' tube thickness is fixed. Every axial primitive is built around Y with XZ radial, so a cylinder's X and Z handles are literally the same knob — either one fattens it, Y makes it taller. Only the box is three-way independent.
+
+So we derive the handles from a single table that is the inverse of the size formula: which scale component each local axis drives, or none. Handles that map to nothing are neither drawn nor grabbable. The argument for spending effort here: a handle that moves nothing is worse than no handle — the user drags it, nothing happens, and the reasonable conclusion is that the editor is broken. It also makes the gizmo teach the shape.
+
+Why scale ignores the World/Local toggle
+Scaling a rotated object along a world axis is a shear. Our primitives are position + rotation + size, which cannot represent one, so honouring the toggle would silently produce the wrong shape. The scale gizmo is always local and the toggle greys out to say so. Unity does the same thing for the same reason.
+
+The drag feel
+The multiplier is the mouse travel projected onto the handle, divided by the handle's own on-screen length: pull one handle length out and you double the object. Since the handle is a constant pixel size regardless of distance, the same gesture always means the same factor — measuring in raw pixels would make distant objects feel glacial. Like the other two drags it is absolute-from-start rather than incremental, so long drags don't drift and Esc lands exactly on the original value. The factor is floored just above zero, because zero isn't a small object, it's a degenerate distance field.
+
+The one non-obvious implementation note
+Scale drags undo through a different mechanism than translate and rotate. The other two write only the GPU-facing struct, which the per-object transform snapshot covers. Scale's authoritative value lives in the editor store, and the GPU size is derived from it — so restoring size without restoring scale would leave them disagreeing, and the next parameter edit would recompute size from the stale scale and make the object jump. Scale therefore uses the scene-edit snapshot, which does cover the editor store. Same reason the drag writes scale and re-derives size instead of writing size directly: a direct size write wouldn't survive a save/reload.

@@ -23,7 +23,7 @@ class CameraTransition
 public:
     // Feels responsive without being a jump; roughly the duration Blender and
     // similar editors use for their view-axis transitions.
-    static constexpr float DEFAULT_DURATION_S = 0.35f;
+    static constexpr float DEFAULT_DURATION_S = 0.08f;
 
     // Below this the move is visually instantaneous. Animating it would only
     // keep the render-on-demand loop awake for a third of a second redrawing
