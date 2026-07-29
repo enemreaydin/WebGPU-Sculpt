@@ -68,6 +68,7 @@ set(ENGINE_SOURCES
     src/scene/SceneManager.cpp
     src/scene/SdfObjectFactory.cpp
     src/scene/PrimitiveGeometry.cpp
+    src/scene/SceneBounds.cpp
     src/scene/csg/CsgTree.cpp
     src/interaction/GizmoMath.cpp
     src/serialization/ExtensionLoader.cpp

@@ -34,6 +34,7 @@ bool Application::Initialize() {
     graphics.instance.release();
     InitializeRenderer();
 
+    frameScheduler.ForceContinuous(true); // TEMPORARY DO NOT FORGET TO DELETE
     return true;
 }
 
