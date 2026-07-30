@@ -89,6 +89,31 @@ struct RayShade {
     color : vec3f,
     id : u32,
 }
+const SCENE_BOUNDS_OPT_ENABLED = true;
+
+struct SceneBoundsHit {
+    hit : bool,
+    tEnter : f32,
+    tExit : f32,
+}
+
+fn intersectSceneBounds(ro : vec3f, rd : vec3f) -> SceneBoundsHit {
+
+    let minBounds = globals.sceneBoundsMin.xyz;
+    let maxBounds = globals.sceneBoundsMax.xyz;
+    let safeRd = select(rd, vec3f(1e-8), abs(rd) < vec3f(1e-8));
+    let invD = 1.0 / safeRd;
+    let t1 = (minBounds - ro) * invD;
+    let t2 = (maxBounds - ro) * invD;
+    let tNear = min(t1, t2);
+    let tFar = max(t1, t2);
+    let tEnter = max(tNear.x, max(tNear.y, tNear.z));
+    let tExit  = min(tFar.x,  min(tFar.y,  tFar.z));
+    
+    let hit = tExit >= max(tEnter, 0.0);
+
+    return SceneBoundsHit(hit, tEnter, tExit);
+}
 
 fn shadeRay(uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focalLength : f32) -> RayShade {
     let lightDirection = normalize(globals.lightDirection.xyz);
@@ -98,19 +123,32 @@ fn shadeRay(uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, 
 
     let rd = normalize(right * uv.x + up * uv.y + forward * focalLength);
 
-    var t = 0.0;
+    var tStart = 0.0;
+    var tLimit = globals.maxDistance;
+    var boundsHit = true;
+
+    if (SCENE_BOUNDS_OPT_ENABLED) {
+        let bb = intersectSceneBounds(ro, rd);
+        boundsHit = bb.hit;
+        tStart = max(bb.tEnter, 0.0);
+        tLimit = min(bb.tExit, globals.maxDistance);
+    }
+
+    var t = tStart;
     var hit = false;
 
-    for (var i = 0; i < globals.maxSteps; i++) {
-        let p = ro + rd * t;
-        let nearestObjectDistance = distanceCalc(p);
+    if (boundsHit && t <= tLimit) {
+        for (var i = 0; i < globals.maxSteps; i++) {
+            let p = ro + rd * t;
+            let nearestObjectDistance = distanceCalc(p);
 
-        if (nearestObjectDistance < globals.hitEpsilon) {
-            hit = true;
-            break;
+            if (nearestObjectDistance < globals.hitEpsilon) {
+                hit = true;
+                break;
+            }
+            t += nearestObjectDistance;
+            if (t > tLimit) { break; }
         }
-        t += nearestObjectDistance;
-        if (t > globals.maxDistance) { break; }
     }
 
     var col : vec3f;
