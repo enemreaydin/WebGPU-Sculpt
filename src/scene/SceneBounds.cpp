@@ -4,6 +4,41 @@
 #include <algorithm>
 #include <unordered_map>
 
+// ---------------------------------------------------------------------------
+// The three safety margins.
+//
+// They look interchangeable and are not: each covers a DIFFERENT error, on a
+// DIFFERENT code path, in DIFFERENT units. The names say which is which — a
+// "Factor" multiplies, a "Padding"/"Distance" is in world units.
+//
+//   1. kRadiusSafetyFactor  (multiplier, per object)
+//      "Is this bubble big enough for its object?" Several radii in
+//      EnclosingRadius are EXACT fits (sphere = s.x, torus = s.x + s.y), and an
+//      exact fit that rounds down by one ULP under-covers. Harmless for the box
+//      (one extra step) but fatal for the proxy: an under-covering bubble makes
+//      the proxy OVERestimate the distance, and the marcher steps through the
+//      surface. Multiplicative so it scales with object size.
+//
+//   2. kSceneBoxPadding  (world units, per box face)
+//      "Is the scene box big enough for all the bubbles?" Absorbs f32 rounding
+//      on the CPU -> uniform -> shader round trip for the §7b ray clip.
+//
+//   3. kProxySafetyDistance  (world units, per evaluation)
+//      "Am I far enough from this bubble to trust it?" Guards the CSG operators,
+//      not the geometry: subtraction negates its operand, which turns a safe
+//      UNDERestimate into an unsafe OVERestimate, and a smooth blend needs both
+//      exact values inside the blend zone. This is the P1a tuning knob — start
+//      generous, tighten while re-verifying G_correctness_17.
+//
+// Why (2) cannot cover (3): the shader's proxy path reads obj.position.w
+// directly and never consults the scene box, so box padding is nowhere in that
+// computation. Why (2) and (3) stay separate despite sharing units: (2) should
+// never be touched, (3) is deliberately tuned.
+// ---------------------------------------------------------------------------
+static constexpr float kRadiusSafetyFactor  = 1.05f;
+static constexpr float kSceneBoxPadding     = 0.05f;
+static constexpr float kProxySafetyDistance = 0.5f;
+
 float SceneBounds::EnclosingRadius(SdfObjectType type, const std::array<float, 4>& size){
     // Must start at a safe value: an unknown/garbage type falls through to
     // `default` without assigning, and returning an uninitialized float would
@@ -52,12 +87,8 @@ float SceneBounds::EnclosingRadius(SdfObjectType type, const std::array<float, 4
     default:
         break;
     }
-    return enclosingRadius;
+    return enclosingRadius * kRadiusSafetyFactor;
 }
-// Extra slack on every face, on top of the smooth-blend margin: absorbs f32
-// rounding on the CPU->uniform->shader round trip. Cheap insurance — a slightly
-// larger box costs a few march steps, a slightly smaller one eats geometry.
-static constexpr float kBoundsSlack = 0.05f;
 
 // Inverted (min > max) is how an empty scene is represented: it is the identity
 // element of the union below, so "no objects" needs no separate flag, and the
@@ -80,6 +111,8 @@ SceneAABB SceneBounds::Compute(const std::vector<SdfObjectData>& objects, const 
     for (size_t i = 0; i < objects.size(); ++i)
         objectIdToIndex[objects[i].objectId] = i;
 
+    // Measured, not a tuning constant: the widest smooth blend alive in the scene.
+    // Feeds BOTH derived margins at the bottom of this function.
     float maxBlendRadius = 0.0f;
 
     // Walk the CSG TREE, not the object vector. The tree is what CompileToRPN
@@ -142,16 +175,22 @@ SceneAABB SceneBounds::Compute(const std::vector<SdfObjectData>& objects, const 
         }
     }
 
+    // Both derived margins are built from the same measured quantity, because a
+    // smooth blend genuinely pushes surfaces outward: the box must contain that
+    // bulge, and the proxy must not be trusted anywhere inside a blend zone.
+    // Set before the early return below so delta is valid in every scene state.
+    bounds.proxyMargin = maxBlendRadius + kProxySafetyDistance;
+
     // Nothing contributed: leave it inverted. Inflating here would turn an empty
     // scene into a small valid box at the origin, and every ray through it would
     // march for nothing.
     if (bounds.IsEmpty()) return bounds;
 
-    const float margin = maxBlendRadius + kBoundsSlack;
+    const float boxMargin = maxBlendRadius + kSceneBoxPadding;
     for (int axis = 0; axis < 3; ++axis)
     {
-        bounds.minBoxDistances[axis] -= margin;
-        bounds.maxBoxDistances[axis] += margin;
+        bounds.minBoxDistances[axis] -= boxMargin;
+        bounds.maxBoxDistances[axis] += boxMargin;
     }
 
     return bounds;
