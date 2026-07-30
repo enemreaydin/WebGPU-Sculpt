@@ -177,5 +177,84 @@ Scaling a rotated object along a world axis is a shear. Our primitives are posit
 The drag feel
 The multiplier is the mouse travel projected onto the handle, divided by the handle's own on-screen length: pull one handle length out and you double the object. Since the handle is a constant pixel size regardless of distance, the same gesture always means the same factor — measuring in raw pixels would make distant objects feel glacial. Like the other two drags it is absolute-from-start rather than incremental, so long drags don't drift and Esc lands exactly on the original value. The factor is floored just above zero, because zero isn't a small object, it's a degenerate distance field.
 
-The one non-obvious implementation note
+The one non-obvious implementation note (scale gizmo)
 Scale drags undo through a different mechanism than translate and rotate. The other two write only the GPU-facing struct, which the per-object transform snapshot covers. Scale's authoritative value lives in the editor store, and the GPU size is derived from it — so restoring size without restoring scale would leave them disagreeing, and the next parameter edit would recompute size from the stale scale and make the object jump. Scale therefore uses the scene-edit snapshot, which does cover the editor store. Same reason the drag writes scale and re-derives size instead of writing size directly: a direct size write wouldn't survive a save/reload.
+
+11) Sahne sınırları ile ışın kırpma — boş uzay atlanıyor (perf raporundaki P4)
+
+The one-liner
+"We wrap the whole scene in a bounding box and intersect each ray with it analytically before marching. Rays that miss the box do zero work. Rays that hit it start at the box instead of at the camera, and stop at the box instead of at the far clip. One benchmark scene went from 300 milliseconds a frame to 13."
+
+The idea, and the one sentence that makes it click
+Sphere tracing is a search. The marcher has no idea where the geometry is — it finds out by repeatedly asking "how far to the nearest surface?" and stepping that far. That's elegant, and it means every ray pays to *discover* empty space, one full scene evaluation per step.
+
+But we know something the marcher doesn't: where the scene is. If every object lives inside a box, then a ray that never enters that box cannot possibly hit anything, and the space before it enters is provably empty. A box has a closed-form ray intersection — about 25 arithmetic operations, no loop. So we replace an iterative search over empty space with an analytic bound on it.
+
+The generalizable principle: whenever a loop is searching a region, ask whether a cheap conservative bound on that region can answer the question without iterating. This is the same idea as bounding volume hierarchies in a ray tracer, frustum culling, and tile binning in deferred lighting — they differ only in granularity. What we built is literally a one-node BVH.
+
+The counter-intuitive part: misses are more expensive than hits
+This is the insight I'd spend the most time on, because it explains why the win was so much bigger than we first estimated, and it surprises people.
+
+A ray that hits something terminates early — the moment the distance drops below the hit threshold, it breaks out. A typical hit converges in twenty or thirty steps.
+
+A ray that misses has no early exit. It pays the full step budget, every time, and contributes nothing to the image.
+
+Worse: the step size is the distance to the nearest surface, so a ray threading between small scattered objects stays close to *something* the entire way and crawls in tiny steps until it exhausts its budget. A scene of ten small objects with lots of space between them is close to the worst possible case — lots of near-surface volume, almost no geometry to terminate rays early.
+
+So the pixels that look like they cost nothing were the most expensive pixels in the frame. That's exactly the work this removes.
+
+What the numbers mean, and why they differ so much per scene
+The honest formula for the ceiling: the speedup is bounded by one divided by the share of frame work done by pixels that actually hit something. That single expression predicts all our results.
+
+Our sparse-background scene: 300ms to 13ms. Almost all the work was background rays riding the step cap.
+Our dense-cluster scene: essentially unchanged. Geometry fills the frame, so there's no empty space to skip.
+Our 48-object stress scene: also flat, because it contains a floor slab and off-screen objects, so the box is enormous and nearly every ray enters it.
+
+I'd present that variance as evidence the implementation is correct rather than as an inconsistency. An optimization that claimed a uniform speedup across all three would be suspicious.
+
+Getting the bound right — where all the real risk was
+A bounding volume optimization has a brutal asymmetry: a box that's too big costs a little performance, and a box that's too small silently deletes geometry. Our own codebase had a previous attempt at a related optimization that was reverted for exactly that reason. So essentially all the engineering care went into "never too small."
+
+Three decisions came out of that.
+
+We bound each primitive with a sphere centred on its pivot, not a box. A sphere is rotation-invariant, so a rotated object needs no recomputation and can't be got wrong. The cost is looseness — a unit cube needs a sphere of radius 1.73 — and we accept it to buy exactness under a transform users apply constantly. The principle: pick the proxy that's invariant under the transforms you support.
+
+We bound the *whole scene* with a box rather than a sphere, for the opposite reason: the world axes never rotate, and our scenes tend to be wide and flat (objects spread on a ground plane), where a sphere would be several times too loose. Same question, different answer, because the symmetry of the thing being bounded is different.
+
+And we inflate the box by a margin, because smooth blending pushes surfaces *outward* past the objects that produced them. Interestingly, the hit threshold does *not* need a margin — stopping short of a surface stops inside the box, never outside. Reasoning about which direction each term errs is what keeps a margin honest rather than superstitious.
+
+The subtle correctness point: bound what renders, not what's stored
+The bound is computed by walking the CSG tree, not the object array. That sounds like a detail and isn't.
+
+The tree is what gets compiled into the program the GPU actually executes. The object array is storage. They're normally identical, but they can diverge — a corrupt or hand-crafted project file can contain objects that no tree node references, and those objects are uploaded to the GPU yet drawn by nothing. Bounding them would inflate the box around geometry that isn't on screen.
+
+More importantly, deriving the bound from the same source of truth as the render, at the same moment the render program is built, makes a stale bound structurally impossible rather than merely unlikely. You can't upload a new program without recomputing the box, because they're the same three lines of code.
+
+Verification: make the invisible thing visible before you trust it
+The process point I'd want a team to take away. We built this in three stages, and deliberately did not let stage one affect a single pixel.
+
+First we computed the box on the CPU and printed it, then checked it against radii we'd worked out by hand for every primitive type. Several bugs surfaced in minutes as obviously wrong numbers.
+
+Second we uploaded it to the GPU and used it for nothing but tinting the background green where a ray entered the box. You cannot see a bounding box, so we made it visible — and then confirmed it hugged the geometry, tracked edits, grew when we raised a blend radius, and crucially did not swim when the camera orbited (which would have meant a world-versus-view space mix-up).
+
+Only third did we let it change the march. And that change shipped behind a compile-time switch that restores the old behaviour exactly, so "is this optimization responsible?" is one rebuild away from an answer — and we verified the image is pixel-identical against a benchmark scene built specifically to contain every clipping trap: rotated exotic primitives, subtract nodes, large smooth blends, deep nesting.
+
+Effort went down each stage while blast radius went up. That's precisely backwards from comfortable, which is why the verification order mattered.
+
+The honest caveat
+This does nothing for the secondary rays. Every pixel that hits a surface still pays for soft shadows, ambient occlusion, normals and colour evaluation completely unclipped — and on a hit pixel that's usually *more* work than the primary march. So the win is concentrated entirely in empty space, which is why the dense scenes don't move.
+
+It also doesn't help grazing rays that pass just outside a silhouette: those do enter the box, so they still crawl. Those need a different fix (a distance-proportional hit threshold).
+
+And the box is only as tight as the scene is compact. One object far from the rest inflates it for everything. The fix for that is per-object and per-CSG-node bounds — the next item on the list, and the reason we wrote the per-primitive radius function as a standalone, hand-verified piece: it's exactly what that work needs.
+
+Quick answers for likely questions
+"Is this culling?" No, and the distinction matters. Culling removes things from consideration — frustum culling drops objects outside the view. Inside the box, we still evaluate every object at every step. What we changed is the interval of the *ray* we walk. The next optimization on our list is the one that's actually culling.
+
+"Why a box and not a sphere?" At the scene level the box is tighter for the layouts this editor produces, and cheaper to compute correctly — a good bounding sphere of many spheres requires the box first anyway. At the per-object level we do use spheres, for rotation-invariance.
+
+"What happens when the scene is empty?" The box is stored inverted — minimum greater than maximum. That's the identity element of the union we build it with, so it needs no special case, and the ray test rejects every ray against it automatically.
+
+"What if the camera is inside the box?" The entry distance comes out negative, which is true and useless, so we clamp the march start to zero. That case happens constantly — any time you zoom in — and it's the single most likely place to introduce a bug here.
+
+"Why didn't you just return early for rays that miss?" Because the grid floor is drawn analytically, not as SDF geometry, on the same code path. Returning early would have left the scene floating in a void with no horizon. We skip the loop and fall through instead.

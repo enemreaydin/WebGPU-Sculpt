@@ -14,7 +14,7 @@
 | P1 | Every object's exact SDF evaluated at **every march step of every ray** — no culling, no bounds | O(pixels × steps × objects) | **The fix for your symptom.** Near-flat cost in object count for typical scenes | Medium |
 | DONE | Full raymarch re-rendered **every vsync, even when nothing changed** | 100% of GPU, 100% of the time | Idle GPU ≈ 0; editor feels instantly usable | Low | 
 | P3 | Shadow / AO / normal each re-run the full O(N) evaluator — secondary rays ~2–3× the primary cost | multiplies P1 | 2–3× during interaction | Low–Medium |
-| P4 | No whole-scene bounds — background & grazing rays pay full march cost | ~30–60% of pixels are background | Big for sparse scenes | Low |
+| DONE | No whole-scene bounds — background & grazing rays pay full march cost | ~30–60% of pixels are background | **Landed.** `E_background_10` 300 ms → 13 ms; `D_cluster_12` ~flat, `H_ultra_48` ~flat (both as predicted) | Low |
 | P5 | Naive marcher: fixed `hitEpsilon`, no over-relaxation → more steps than necessary | multiplies everything | 20–50% fewer steps | Low–Medium |
 | P6 | Per-evaluation constant math: quaternion rotate always runs, `sin/cos` per cone eval, etc. | per object per step | 10–30% of eval cost | Low |
 | P7 | Register pressure: three 16-deep stacks in `evaluateScene` + 16-deep in `distanceCalc` may cap GPU occupancy for the whole shader | global multiplier | Unknown until profiled; possibly large | Medium |
@@ -22,7 +22,7 @@
 | P9 | Architectural ceiling: re-evaluating the CSG per pixel per frame at all — vs. Dreams/Claybook "evaluate once per **edit**, march a cached field per frame" | O(1) in object count per frame | Hundreds of objects; the endgame | High |
 | P10 | Minor: object-id target written every frame, un-cleared accum layers, `maxDistance` generous default | small | small | Trivial |
 
-Recommended attack order: **P2 → P4 → P8 (days, makes the app usable) → P1 + P3 (the real fix) → P5/P6/P7 (polish) → P9 (long-term project)**.
+Recommended attack order: **~~P2~~ → ~~P4~~ (both done) → P8 (days, makes the app usable) → P1 + P3 (the real fix) → P5/P6/P7 (polish) → P9 (long-term project)**.
 
 ---
 
@@ -261,7 +261,19 @@ and they're enabled by default.
 
 ---
 
-## P4 — No whole-scene bound: background and grazing rays pay full price
+## P4 — No whole-scene bound: background and grazing rays pay full price  ✅ LANDED
+
+> **Shipped** as `src/scene/SceneBounds.{h,cpp}` + `intersectSceneBounds` in `main.wgsl`, via
+> solution 1 below (scene AABB ray clip, slab test). See CLAUDE.md §7b for the implementation and
+> its invariants. `E_background_10` 300 ms → 13 ms; `D_cluster_12` and `H_ultra_48` flat.
+> Two notes the estimate below got wrong, worth keeping:
+> **(a)** the win is much larger than "~30–60% of pixels" suggests, because a *miss* has no early
+> exit and pays the full `maxSteps` budget while a *hit* breaks out on convergence — near-misses
+> are the most expensive rays in the frame, so removing them removes disproportionate work. The
+> ceiling is `1 / (share of frame work done by hit pixels)`.
+> **(b)** solution 2 (tighter `maxDistance`) is now genuinely moot — the `tExit` clamp subsumes it.
+> Solution 3 still stands as a P1 follow-on. Clamping the *shadow* march to `tExit` is the obvious
+> next increment and is not yet done.
 
 **Where:** the march ([main.wgsl:101-111](assets/shaders/main.wgsl#L101-L111)) starts at
 `t = 0` and walks until `t > maxDistance (50)` for every pixel, including the typically
