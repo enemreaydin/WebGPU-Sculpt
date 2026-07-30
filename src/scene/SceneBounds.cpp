@@ -90,6 +90,43 @@ float SceneBounds::EnclosingRadius(SdfObjectType type, const std::array<float, 4
     return enclosingRadius * kRadiusSafetyFactor;
 }
 
+// Fail-safe radius for an object we cannot vouch for. A bubble this large means
+// the shader's dBound is hugely negative, never exceeds delta, and the object
+// therefore ALWAYS takes the exact path. Note 0.0f would be the worst possible
+// choice here: it makes the proxy OVERestimate the distance, which is exactly
+// how the marcher tunnels through a surface.
+static constexpr float kAlwaysExactRadius = 1e30f;
+
+// Publish each primitive's bubble radius into the unused position.w, where the
+// shader's proxy substitution (P1a) reads it. Derived data, recomputed on every
+// refresh — the position setters in Application zero this slot, so it can only
+// live on the refresh path.
+void SceneBounds::WriteEnclosingRadii(std::vector<SdfObjectData>& objects, const CsgTree& tree){
+
+    std::unordered_map<int32_t, size_t> objectIdToIndex;
+    objectIdToIndex.reserve(objects.size());
+    for (size_t i = 0; i < objects.size(); ++i)
+        objectIdToIndex[objects[i].objectId] = i;
+
+    for (const CsgNode& node : tree.GetNodes()){
+        if (!node.alive) continue;
+        if (node.type == CsgNodeType::Primitive)
+        {
+            const auto it = objectIdToIndex.find(node.objectId);
+            if (it == objectIdToIndex.end()) continue;   // corrupt file: node points at a missing object
+            SdfObjectData& object = objects[it->second];
+
+            // EnclosingRadius already applies kRadiusSafetyFactor — do not scale again.
+            const float radius = SceneBounds::EnclosingRadius(
+                static_cast<SdfObjectType>(object.type), object.size);
+
+            object.position[3] = (std::isfinite(radius) && radius > 0.0f)
+                ? radius
+                : kAlwaysExactRadius;
+        }
+    }
+}
+
 // Inverted (min > max) is how an empty scene is represented: it is the identity
 // element of the union below, so "no objects" needs no separate flag, and the
 // slab test in the shader rejects every ray against it for free.

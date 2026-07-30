@@ -29,4 +29,6 @@ namespace SceneBounds {
 
     // World-space bound of everything the CSG program can draw, plus proxyMargin.
     SceneAABB Compute(const std::vector<SdfObjectData>& objects, const CsgTree& tree);
+
+    void WriteEnclosingRadii(std::vector<SdfObjectData>& objects, const CsgTree& tree);
 }

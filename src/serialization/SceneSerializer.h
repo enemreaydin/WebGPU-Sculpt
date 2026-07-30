@@ -24,6 +24,11 @@ public:
     const SceneAABB& GetSceneBounds() const { return sceneBounds; }
 
 private:
+    // Refresh every piece of derived state the GPU upload depends on, and return
+    // the compiled RPN program. Both Refresh* entry points go through here so they
+    // can never disagree about what was uploaded.
+    std::vector<CsgCommand> PrepareSceneForUpload();
+
     // Owned by value: this is derived state this class computes, not a handle to
     // something Application owns (unlike every reference member below).
     SceneAABB sceneBounds;
