@@ -17,7 +17,14 @@ struct alignas(16) SdfObjectData
                          // Application::UpdateSelectionHighlight() for every primitive
                          // under any selected CSG node (so a whole group highlights).
 
-    std::array<float, 4> position;   // xyz used, w = 0
+    std::array<float, 4> position;   // xyz = world position.
+                                     // w = enclosing-sphere radius, a DERIVED cache
+                                     // written by SceneBounds::WriteEnclosingRadii on
+                                     // every buffer refresh (the setters below zero it,
+                                     // so it cannot live anywhere else). Currently
+                                     // written but not read by any shader — reserved
+                                     // for per-ray sphere culling. A stale value in a
+                                     // .sdfp is harmless: loading triggers a refresh.
 
     std::array<float, 4> rotation;   // Quaternion (x,y,z,w), identity = (0,0,0,1).
                                      // Reserved for a future gizmo rotate mode.

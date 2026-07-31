@@ -12,11 +12,16 @@ struct SceneAABB {
     float minBoxDistances[3] = {  1e30f,  1e30f,  1e30f };   // inverted = "empty", the union identity
     float maxBoxDistances[3] = { -1e30f, -1e30f, -1e30f };
 
-    // Delta for the per-object proxy substitution (P1a): a point must be MORE than
-    // this far outside an object's bubble before the bubble's distance may be
-    // trusted in place of the exact SDF. Published to globals.sceneBoundsMin.w.
-    // Scene-dependent, because it has to exceed the widest smooth blend in the
-    // scene — see the constants block in SceneBounds.cpp.
+    // How far outside an object's bubble a point must be before that bubble may
+    // stand in for the object at all. Scene-dependent: it has to exceed the widest
+    // smooth blend in the scene, because inside a blend zone the surface is shaped
+    // by both operands, and because subtraction negates its operand (turning a safe
+    // underestimate into an unsafe overestimate). See the constants block in
+    // SceneBounds.cpp.
+    //
+    // Published to globals.sceneBoundsMin.w. !! STAGED, NOT YET CONSUMED — the
+    // shader path that read it (P1a) was removed; per-ray sphere culling will use
+    // the same value to inflate the bubbles it tests against.
     float proxyMargin = 0.0f;
 
     bool IsEmpty() const;

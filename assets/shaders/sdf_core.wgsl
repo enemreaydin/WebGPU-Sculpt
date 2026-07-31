@@ -154,8 +154,6 @@ fn opSmoothSubtract(dA: f32, dB: f32, radius: f32) -> f32
     return opSmoothIntersection(dA, -dB, radius);
 }
 
-const OBJECT_CULLING_ENABLED = true;
-
 fn distanceCalc(p : vec3f) -> f32
 {
     var resultDistance = 100000.0;
@@ -174,26 +172,20 @@ fn distanceCalc(p : vec3f) -> f32
         if (cmd.cmd_type == 0)
         {
             let obj = scene_objects[cmd.operand];
-            let toCentre = p - obj.position.xyz;
+            let localPos = rotateInverse(p - obj.position.xyz, obj.rotation);
             var dist = 100000.0;
-            let dBound = length(toCentre) - obj.position.w;
-            if (OBJECT_CULLING_ENABLED && dBound > globals.sceneBoundsMin.w){
-                dist = dBound;
-            } else {
-                let localPos = rotateInverse(toCentre, obj.rotation);
-                switch(obj.obj_type)
-                {
-                    case 0: { dist = sdfSphere(localPos, obj.size.x); }
-                    case 1: { dist = sdfRoundedBoxPreserveBounds(localPos, obj.size.xyz, cmd.parameter); }
-                    case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
-                    case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
-                    case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
-                    case 5: { dist = sdfCone(localPos, obj.size.x, obj.size.y); }
-                    case 6: { dist = sdfCapsule(localPos, vec3f(0.0, -obj.size.y, 0.0), vec3f(0.0, obj.size.y, 0.0), obj.size.x); }
-                    case 7: { dist = sdfSolidAngle(localPos, obj.size.x, obj.size.y); }
-                    case 8: { dist = sdfPyramid(localPos, obj.size.x, obj.size.y); }
-                    default: { dist = 100000.0; }
-                }
+            switch(obj.obj_type)
+            {
+                case 0: { dist = sdfSphere(localPos, obj.size.x); }
+                case 1: { dist = sdfRoundedBoxPreserveBounds(localPos, obj.size.xyz, cmd.parameter); }
+                case 2: { dist = sdfCylinder(localPos, obj.size.x, obj.size.y); }
+                case 3: { dist = sdfTorus(localPos, obj.size.x, obj.size.y); }
+                case 4: { dist = sdfLink(localPos, obj.size.y, obj.size.x, obj.size.z); }
+                case 5: { dist = sdfCone(localPos, obj.size.x, obj.size.y); }
+                case 6: { dist = sdfCapsule(localPos, vec3f(0.0, -obj.size.y, 0.0), vec3f(0.0, obj.size.y, 0.0), obj.size.x); }
+                case 7: { dist = sdfSolidAngle(localPos, obj.size.x, obj.size.y); }
+                case 8: { dist = sdfPyramid(localPos, obj.size.x, obj.size.y); }
+                default: { dist = 100000.0; }
             }
             if (sp < 16)
             {

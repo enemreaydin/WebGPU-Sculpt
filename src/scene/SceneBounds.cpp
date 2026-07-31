@@ -97,10 +97,17 @@ float SceneBounds::EnclosingRadius(SdfObjectType type, const std::array<float, 4
 // how the marcher tunnels through a surface.
 static constexpr float kAlwaysExactRadius = 1e30f;
 
-// Publish each primitive's bubble radius into the unused position.w, where the
-// shader's proxy substitution (P1a) reads it. Derived data, recomputed on every
-// refresh — the position setters in Application zero this slot, so it can only
-// live on the refresh path.
+// Publish each primitive's bubble radius into the unused position.w.
+//
+// !! STAGED, NOT YET CONSUMED. The per-object proxy substitution that read this
+// (P1a) was removed: skipping an object outright beats discounting it, and it
+// only bought ~12%. The radii stay because the *next* optimisation needs exactly
+// this data — per-ray sphere culling tests each ray against these bubbles once,
+// builds a bitmask, and skips masked objects entirely (including the 80-byte
+// object load, which P1a still had to pay). Do not delete as dead code.
+//
+// Derived data, recomputed on every refresh — the position setters in
+// Application zero this slot, so it can only live on the refresh path.
 void SceneBounds::WriteEnclosingRadii(std::vector<SdfObjectData>& objects, const CsgTree& tree){
 
     std::unordered_map<int32_t, size_t> objectIdToIndex;
