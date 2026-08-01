@@ -8,7 +8,7 @@
 // RefreshCsgBuffer can ALSO re-upload the object array (SdfRenderer's
 // CreateSceneBuffer fallback when the program size changes), so derived per-object
 // data living in only one entry point would ship stale on the other path.
-std::vector<CsgCommand> SceneSerializer::PrepareSceneForUpload()
+CsgTree::CompiledProgram SceneSerializer::PrepareSceneForUpload()
 {
     // Per-object bubble radii into position.w (the P1a proxy), then the whole-scene
     // box built from those same bubbles (the P4 ray clip). Radii first: they are
@@ -20,30 +20,49 @@ std::vector<CsgCommand> SceneSerializer::PrepareSceneForUpload()
     // objectId -> current array index, then the CSG tree compiled into the RPN
     // program the shader interprets.
     const auto objectIdMap = SceneManager::BuildObjectIdMap(sceneManager.GetObjects());
-    return sceneManager.GetCsgTree().CompileToRPN(objectIdMap);
+    CsgTree::CompiledProgram compiled = sceneManager.GetCsgTree().CompileToRPN(objectIdMap);
+
+    // Size the shader's RPN stacks to what this program actually needs. Must happen
+    // before the upload below, so the pipeline and the program it will interpret are
+    // never a frame out of step. The renderer buckets, caches and warns; it is the
+    // single owner of the shader-side depth (there is no C++ constant mirroring the
+    // WGSL any more — the value is injected into the source at compile time).
+    renderer.EnsureScenePipeline(graphics.device, compiled.requiredStackDepth);
+
+    // Log on change only: this runs on every scene edit, including every frame of a
+    // slider drag, so an unconditional print would bury the console.
+    if (compiled.requiredStackDepth != csgStackDepth)
+    {
+        csgStackDepth = compiled.requiredStackDepth;
+        std::cout << "[CSG] program " << compiled.commands.size()
+                  << " cmds, required stack depth " << csgStackDepth
+                  << ", shader variant " << renderer.GetActiveCsgStackDepth() << "\n";
+    }
+
+    return compiled;
 }
 
 void SceneSerializer::RefreshSceneBuffer()
 {
     // Upload both the scene objects and the recompiled program.
-    const std::vector<CsgCommand> program = PrepareSceneForUpload();
+    const CsgTree::CompiledProgram compiled = PrepareSceneForUpload();
     renderer.UpdateSceneBuffer(
         graphics.device,
         graphics.queue,
         sceneManager.GetObjects(),
-        program
+        compiled.commands
     );
 }
 
 void SceneSerializer::RefreshCsgBuffer()
 {
     // Upload the program only (unless the size changed — see the note above).
-    const std::vector<CsgCommand> program = PrepareSceneForUpload();
+    const CsgTree::CompiledProgram compiled = PrepareSceneForUpload();
     renderer.UpdateCsgProgramBuffer(
         graphics.device,
         graphics.queue,
         sceneManager.GetObjects(),
-        program
+        compiled.commands
     );
 }
 

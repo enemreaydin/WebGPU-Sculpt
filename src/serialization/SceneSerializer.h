@@ -23,15 +23,21 @@ public:
     // it into the per-frame `globals` uniform (CLAUDE.md 6).
     const SceneAABB& GetSceneBounds() const { return sceneBounds; }
 
+    // Peak RPN stack height the currently-uploaded program reaches. This is what
+    // PrepareSceneForUpload hands to SdfRenderer::EnsureScenePipeline to pick the
+    // shader variant; the renderer owns the clamping and the overflow warning.
+    int32_t GetRequiredCsgStackDepth() const { return csgStackDepth; }
+
 private:
     // Refresh every piece of derived state the GPU upload depends on, and return
     // the compiled RPN program. Both Refresh* entry points go through here so they
     // can never disagree about what was uploaded.
-    std::vector<CsgCommand> PrepareSceneForUpload();
+    CsgTree::CompiledProgram PrepareSceneForUpload();
 
     // Owned by value: this is derived state this class computes, not a handle to
     // something Application owns (unlike every reference member below).
     SceneAABB sceneBounds;
+    int32_t   csgStackDepth = 0;
 
     SceneManager& sceneManager;
     SdfRenderer& renderer;

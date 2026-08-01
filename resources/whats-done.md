@@ -257,4 +257,84 @@ Quick answers for likely questions
 
 "What if the camera is inside the box?" The entry distance comes out negative, which is true and useless, so we clamp the march start to zero. That case happens constantly — any time you zoom in — and it's the single most likely place to introduce a bug here.
 
+12) Register baskısı — bir sabit sayı, iki kat hız (perf raporundaki P7)
+
+The one-liner
+"We made the renderer twice as fast by changing one integer from 16 to 8. It removes no work — the shader computes exactly the same thing, in exactly the same number of instructions. What changed is how many copies of it the GPU can run at once."
+
+The result
+Eight benchmark scenes, camera and settings fixed, images pixel-identical: 12.2 seconds of frame time across the suite became 5.7. Every scene improved, between 23% and 60%. The heaviest scene — 48 objects — went from about 8.5 seconds a frame to 3.4.
+
+For comparison, every algorithmic optimization we had attempted on the same shader, combined, was worth less.
+
+The idea, and the sentence that makes it click
+A GPU doesn't make a single thread fast. It makes thousands of threads and hides the fact that each one spends most of its life waiting for memory. When one group of threads stalls on a read, the scheduler instantly switches to another group that's ready. As long as there's always another group, the waiting is invisible and the machine runs at full speed.
+
+The number of groups that can be resident at once is fixed by a budget: each thread's variables occupy registers, and a chip has a finite register file shared by everyone. So every extra variable a shader needs reduces how many threads fit — and therefore how much waiting can be hidden.
+
+That is the whole thing: **registers are the currency you buy latency-hiding with.**
+
+Our shader kept a CSG evaluation stack — actually four of them, sixteen slots deep. That's roughly ninety-six values held live per thread, for a data structure that was almost always nearly empty. We were spending most of our latency-hiding budget on empty stack slots.
+
+How we knew where to look — the part I'd actually present
+We didn't guess this. We arrived at it by elimination, and the eliminations are more interesting than the fix.
+
+We first built a proper algorithmic optimization: skip an object's expensive exact distance function when a cheap bound proves it's far away. Textbook, correct, pixel-identical. It bought 12%.
+
+That was disappointing enough to be informative, so we ran two diagnostics. We quadrupled the marching step budget — no change, so rays weren't running out of steps. We shrank a safety margin until shapes visibly corrupted — the timing didn't move, so the expensive distance functions weren't where the time went either.
+
+Both results said the same thing: **the shader is not limited by arithmetic.** It's limited by waiting for memory. And once you believe that, "remove some math" is obviously the wrong lever, and "let more threads run so the waiting overlaps" is obviously the right one.
+
+The lesson I'd draw out: a negative result is a result, if you designed it to discriminate between hypotheses. A 12% win that we couldn't explain was worth more than a 12% win we could have shrugged at.
+
+The genuinely surprising part: smaller is not better
+Having found that a smaller stack was faster, the obvious next step was to size it per scene. The required depth is knowable exactly — it's a property of how deeply the CSG tree nests, not how many objects there are, and a flat union of a thousand objects only ever needs two slots. So we computed it during compilation and compiled a shader variant to match.
+
+It made things slower. Measurably, reproducibly.
+
+The curve turned out to be a valley, not a slope: depth 4 was bad, 8 was best, 16 was bad again. That non-monotonicity is the interesting result, and the explanation is that we were never tuning a *quantity* — we were tuning which side of a compiler decision we landed on.
+
+GPU registers can't be indexed at runtime. The register number is baked into the instruction, so there is no "read register number N" where N is a variable. That means an array you index dynamically cannot simply live in registers. The compiler has to choose: either keep every element in its own register and replace each access with a chain of conditional moves, or put the array in per-thread memory and use real loads and stores.
+
+Small arrays get the first treatment, and it eats registers. Larger ones get the second, which costs almost no registers and lands in cache. So at depth 4 we were burning registers to avoid memory; at depth 8 the compiler gave up and spilled, which handed the registers back and let far more threads run. The spilled accesses cost maybe twenty-five cycles each, and we got that back many times over because the extra threads were also hiding the much larger stalls we already had. At depth 16 it spills too, but the spill space itself comes out of a limited pool and starts capping occupancy from the other direction.
+
+Two different resources squeeze from opposite sides, and 8 is the gap between them.
+
+The uncomfortable part I'd say out loud
+Our per-scene sizing optimization *worked*. It correctly computed the minimum depth and correctly compiled a shader for it. And that is exactly why it hurt — it drove scenes down into the bad end of the valley.
+
+"Did it do what I intended?" and "did it help?" are different questions, and we only found the difference by measuring. There is no version of reading the source code that would have revealed this.
+
+So what did the machinery buy, if not speed?
+Honest answer: the 2× came from the constant, which was always one line away. The per-scene infrastructure adds no performance.
+
+What it does add is correctness. A fixed stack silently drops values when a program is deeper than it — the guard that prevents memory corruption also makes geometry disappear, with no error anywhere. Now the engine computes the exact requirement, picks a variant that fits, and prints a loud warning if a scene exceeds even the deepest one. Since project files are untrusted input, that matters.
+
+It also made the number visible. Before, the safe stack depth was a hope; now it's printed for every scene you load.
+
+The engineering details worth a slide
+The required depth is computed *during* code emission rather than by a separate pass, so it can't disagree with the program it describes. A second traversal would be a second copy of the emission rules, and the day they drift is the day the stack is silently too small.
+
+Sibling order matters, and reordering is free for some operators and forbidden for others. Emitting the deepest subtree first minimizes peak stack usage — a classic compiler result — and collapses accidental nesting to depth 2. But it's only valid where the operator is associative and commutative: plain union and intersection qualify, subtraction doesn't, and the smooth-blend variants aren't even associative. Reordering those would silently change the rendered shape.
+
+The depth is injected into the shader source as text before compilation, because shader array sizes must be compile-time constants — you cannot pass this in a uniform. One compiled pipeline is cached per size.
+
+We also found a real bug on the way: the compiler counted a child node that emitted no instructions, producing an operator with nothing to operate on. Harmless — a runtime guard caught it — but it was a dead instruction sitting in a loop the GPU walks at every single marching step.
+
+The honest caveats
+The optimum is 8 *on this machine, with this driver.* The compiler's threshold is undocumented and vendor-specific; on other hardware the valley could sit elsewhere, and the code has no way to discover that at runtime. We ship a measured constant with the measurement written next to it.
+
+The mechanism is inference, not verification. The occupancy argument is textbook. The specific claim about where the compiler switches strategies is a hypothesis that fits a U-shaped curve — confirmable in ten minutes with a GPU profiler on the native build, which we haven't done.
+
+And measurement noise on this suite is 6–10% run to run, which is worth stating whenever quoting any of these numbers. It's also why the 12% algorithmic result was genuinely ambiguous rather than merely small.
+
+Quick answers for likely questions
+"Why not just always use the biggest stack?" Because that's what we were doing, and it cost half the frame rate.
+
+"Why can't the shader size the array at runtime?" Shading languages require compile-time array sizes, and the underlying reason is the same one that makes this whole problem exist: registers are allocated statically, per thread, before the shader ever runs.
+
+"Isn't 8 arbitrary?" It's measured, not chosen. The comment above the constant carries the table it came from and an instruction to re-measure before changing it.
+
+"Does this help other engines?" The specific number doesn't transfer. The method does: before optimizing what a shader computes, check what limits how many copies of it can run.
+
 "Why didn't you just return early for rays that miss?" Because the grid floor is drawn analytically, not as SDF geometry, on the same code path. Returning early would have left the scene floating in a void with no horizon. We skip the loop and fall through instead.

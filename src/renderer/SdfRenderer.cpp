@@ -8,6 +8,29 @@ double SecondsSince(const std::chrono::steady_clock::time_point& start)
 {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
+
+// Stack-depth buckets a scene pipeline can be compiled for, ascending.
+//
+// Buckets rather than the exact depth because compiling a pipeline is expensive
+// (tens to hundreds of ms in a browser) and a scene's required depth wobbles as the
+// user edits: rounding up means adding one nested group does not trigger a rebuild.
+//
+// 🔴 The ladder starts at 8, NOT at the smallest depth a scene could use. Measured,
+// on the benchmark suite, same programs, only the declared array size varying:
+//
+//        scene   depth 4   depth 8   depth 16
+//        D         330       190       300
+//        G         450       440       720
+//        H       ~8500      3200     ~8500
+//
+// Cost is NOT monotonic in stack size. 16 is expensive (occupancy), and 4 is worse
+// still — some codegen cliff in how a small dynamically-indexed array is lowered.
+// Sizing the stack to what a scene "needs" is therefore actively harmful below 8;
+// what this ladder is for is letting a DEEP scene render correctly rather than
+// silently losing pushes to the `sp < CSG_STACK_DEPTH` guard.
+//
+// Re-measure this table before changing the first entry.
+constexpr int32_t kCsgStackDepthBuckets[] = {8, 16, 32 };
 }
 
 void SdfRenderer::SetProjectRoot(const std::filesystem::path& root)
@@ -15,20 +38,141 @@ void SdfRenderer::SetProjectRoot(const std::filesystem::path& root)
     projectRoot = root;
 }
 
+std::string SdfRenderer::BuildShaderSource(int32_t stackDepth) const
+{
+    // Injected rather than written into the .wgsl: WGSL array sizes must be
+    // const-expressions, so varying the stack depth means varying the source. WGSL
+    // module scope is order-independent, so prepending the declaration is enough —
+    // it does not have to sit near the arrays that use it.
+    return "const CSG_STACK_DEPTH = " + std::to_string(stackDepth) + ";\n"
+        + coreShaderSource + "\n" + mainShaderSource;
+}
+
+int32_t SdfRenderer::BucketForDepth(int32_t requiredStackDepth)
+{
+    for (const int32_t bucket : kCsgStackDepthBuckets)
+    {
+        if (requiredStackDepth <= bucket) return bucket;
+    }
+    return kMaxCsgStackDepth;
+}
+
+void SdfRenderer::EnsureScenePipeline(wgpu::Device device, int32_t requiredStackDepth)
+{
+    if (!device || !pipelineLayout)
+    {
+        return;
+    }
+
+    if (requiredStackDepth > kMaxCsgStackDepth)
+    {
+        // Clamping does not fix this: the shader's own `sp < CSG_STACK_DEPTH` guard
+        // will drop the extra pushes and the scene renders with geometry missing and
+        // no other symptom. Render the best available variant anyway, but be loud.
+        std::cerr << "[SdfRenderer] WARNING: CSG program needs stack depth "
+                  << requiredStackDepth << ", deepest variant is " << kMaxCsgStackDepth
+                  << " — geometry will be silently dropped.\n";
+    }
+
+    const int32_t bucket = BucketForDepth(requiredStackDepth);
+    if (pipeline && bucket == activeCsgStackDepth)
+    {
+        return;
+    }
+
+    const auto cached = scenePipelines.find(bucket);
+    if (cached != scenePipelines.end())
+    {
+        pipeline = cached->second;
+        activeCsgStackDepth = bucket;
+        return;
+    }
+
+    // `source` must outlive the createShaderModule call — wgslDesc.code is a raw
+    // pointer into it, not a copy.
+    const std::string source = BuildShaderSource(bucket);
+
+    wgpu::ShaderModuleWGSLDescriptor wgslDesc{};
+    wgslDesc.chain.next = nullptr;
+    wgslDesc.chain.sType = wgpu::SType::ShaderModuleWGSLDescriptor;
+    wgslDesc.code = source.c_str();
+
+    wgpu::ShaderModuleDescriptor shaderDesc{};
+    shaderDesc.nextInChain = reinterpret_cast<const wgpu::ChainedStruct*>(&wgslDesc);
+
+    wgpu::ShaderModule variantModule = device.createShaderModule(shaderDesc);
+    if (!variantModule)
+    {
+        // Keep whatever pipeline is already bound: a stale-but-deep-enough variant
+        // draws a correct image, an unbound pipeline draws nothing.
+        std::cerr << "[SdfRenderer] shader module for CSG stack depth " << bucket
+                  << " could not be created.\n";
+        return;
+    }
+
+    wgpu::ColorTargetState colorTarget{};
+    colorTarget.format = renderTargetFormat;
+    colorTarget.writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::ColorTargetState objectIdTarget{};
+    objectIdTarget.format = objectIdTargetFormat;
+    objectIdTarget.writeMask = wgpu::ColorWriteMask::All;
+
+    wgpu::ColorTargetState colorTargets[2] = { colorTarget, objectIdTarget };
+
+    wgpu::FragmentState fragmentState{};
+    fragmentState.module = variantModule;
+    fragmentState.entryPoint = "fs_main";
+    fragmentState.targetCount = 2;
+    fragmentState.targets = colorTargets;
+
+    wgpu::RenderPipelineDescriptor pipelineDesc{};
+    pipelineDesc.layout = pipelineLayout;
+    pipelineDesc.vertex.module = variantModule;
+    pipelineDesc.vertex.entryPoint = "vs_main";
+    pipelineDesc.vertex.bufferCount = 0;
+    pipelineDesc.fragment = &fragmentState;
+    pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+    pipelineDesc.primitive.frontFace = wgpu::FrontFace::CCW;
+    pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
+    pipelineDesc.multisample.count = 1;
+    pipelineDesc.multisample.mask = ~0u;
+
+    wgpu::RenderPipeline variantPipeline = device.createRenderPipeline(pipelineDesc);
+    if (!variantPipeline)
+    {
+        std::cerr << "[SdfRenderer] scene pipeline for CSG stack depth " << bucket
+                  << " could not be created.\n";
+        variantModule.release();
+        return;
+    }
+
+    sceneShaderModules[bucket] = variantModule;
+    scenePipelines[bucket] = variantPipeline;
+    pipeline = variantPipeline;
+    activeCsgStackDepth = bucket;
+
+    std::cout << "[SdfRenderer] compiled scene pipeline for CSG stack depth "
+              << bucket << "\n";
+}
+
 void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
 {
     renderTargetFormat = format;
 
-    std::string coreShader = Utils::ReadFile(projectRoot / "assets/shaders/sdf_core.wgsl");
-    std::string mainShader = Utils::ReadFile(projectRoot / "assets/shaders/main.wgsl");
+    coreShaderSource = Utils::ReadFile(projectRoot / "assets/shaders/sdf_core.wgsl");
+    mainShaderSource = Utils::ReadFile(projectRoot / "assets/shaders/main.wgsl");
 
-    if (coreShader.empty() || mainShader.empty())
+    if (coreShaderSource.empty() || mainShaderSource.empty())
     {
         std::cerr << "[KRITIK]: Shader dosyalari okunamadi!\n";
         return;
     }
 
-    std::string combinedShader = coreShader + "\n" + mainShader;
+    // Base module, built at the smallest bucket. Only fs_resolve is taken from it —
+    // that entry point has no RPN stacks, so the depth it was specialised with is
+    // irrelevant to it. The scene pipeline comes from EnsureScenePipeline below.
+    const std::string combinedShader = BuildShaderSource(kCsgStackDepthBuckets[0]);
 
     wgpu::ShaderModuleWGSLDescriptor wgslDesc{};
     wgslDesc.chain.next = nullptr;
@@ -110,39 +254,10 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
         return;
     }
 
-    wgpu::RenderPipelineDescriptor pipelineDesc{};
-    pipelineDesc.layout = pipelineLayout;
-
-    pipelineDesc.vertex.module = shaderModule;
-    pipelineDesc.vertex.entryPoint = "vs_main";
-    pipelineDesc.vertex.bufferCount = 0;
-
-    wgpu::ColorTargetState colorTarget{};
-    colorTarget.format = format;
-    colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-    wgpu::ColorTargetState objectIdTarget{};
-    objectIdTarget.format = objectIdTargetFormat;
-    objectIdTarget.writeMask = wgpu::ColorWriteMask::All;
-
-    wgpu::ColorTargetState colorTargets[2] = { colorTarget, objectIdTarget };
-
-    wgpu::FragmentState fragmentState{};
-    fragmentState.module = shaderModule;
-    fragmentState.entryPoint = "fs_main";
-    fragmentState.targetCount = 2;
-    fragmentState.targets = colorTargets;
-
-    pipelineDesc.fragment = &fragmentState;
-
-    pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-    pipelineDesc.primitive.frontFace = wgpu::FrontFace::CCW;
-    pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
-
-    pipelineDesc.multisample.count = 1;
-    pipelineDesc.multisample.mask = ~0u;
-
-    pipeline = device.createRenderPipeline(pipelineDesc);
+    // Builds (and warms) the smallest bucket. Every later scene edit routes through
+    // the same call from SceneSerializer, so this is the only place a scene pipeline
+    // is ever made.
+    EnsureScenePipeline(device, 0);
 
     if (!pipeline)
     {
@@ -694,6 +809,11 @@ bool SdfRenderer::StartFinalRender(wgpu::Device device, wgpu::Queue queue,
     finalNextBandRows = std::min(kBandFirstRows, height);
     finalBandInFlight = false;
     finalToken = std::make_shared<bool>(true);
+    // Pin the scene pipeline for the whole export. An export spans many frames and
+    // many submits, and any scene edit in between can re-point `pipeline` at a
+    // different stack-depth variant — bands drawn with mismatched shaders would give
+    // an image whose halves disagree.
+    finalPipeline = pipeline;
     finalRenderState = 1;
     SubmitNextFinalBand(device, queue);
     return true;
@@ -723,7 +843,7 @@ void SdfRenderer::SubmitNextFinalBand(wgpu::Device device, wgpu::Queue queue)
     passDesc.colorAttachmentCount = 2; passDesc.colorAttachments = attachments;
     wgpu::CommandEncoder encoder = device.createCommandEncoder();
     wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
-    pass.setPipeline(pipeline);
+    pass.setPipeline(finalPipeline);
     pass.setBindGroup(0, finalBindGroup, 0, nullptr);
     // Same full-screen quad, same shader, same uniforms as before — the
     // scissor is what restricts rasterization (and therefore all fragment
@@ -859,6 +979,8 @@ void SdfRenderer::ReleaseFinalRender()
 {
     RetireFinalCallbacks();
     finalRowsDone = finalBandRows = finalNextBandRows = 0;
+    // Non-owning alias into scenePipelines — drop it, never release it.
+    finalPipeline = nullptr;
     if (finalBindGroup) { finalBindGroup.release(); finalBindGroup = nullptr; }
     if (finalGlobalsBuffer) { finalGlobalsBuffer.release(); finalGlobalsBuffer = nullptr; }
     if (finalReadbackBuffer) { finalReadbackBuffer.release(); finalReadbackBuffer = nullptr; }
@@ -955,11 +1077,24 @@ void SdfRenderer::Destroy()
         pickReadbackBuffer = nullptr;
     }
 
-    if (pipeline)
+    // `pipeline` and `finalPipeline` are non-owning aliases into scenePipelines —
+    // releasing them here as well as below would double-release. Drop the aliases
+    // first, then release each cached variant exactly once.
+    pipeline = nullptr;
+    finalPipeline = nullptr;
+    activeCsgStackDepth = 0;
+
+    for (auto& entry : scenePipelines)
     {
-        pipeline.release();
-        pipeline = nullptr;
+        if (entry.second) entry.second.release();
     }
+    scenePipelines.clear();
+
+    for (auto& entry : sceneShaderModules)
+    {
+        if (entry.second) entry.second.release();
+    }
+    sceneShaderModules.clear();
 
     if (pipelineLayout)
     {

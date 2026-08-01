@@ -160,24 +160,95 @@ void CsgTree::RemoveNode(int32_t index)
     }
 }
 
-std::vector<CsgCommand> CsgTree::CompileToRPN(const std::unordered_map<int32_t, int32_t>& objectIdToIndex) const
+bool CsgTree::ChildOrderIsFree(const CsgNode& node)
 {
-    std::vector<CsgCommand> program;
-
-    if (m_Root >= 0 && m_Root < static_cast<int32_t>(m_Nodes.size()) && m_Nodes[m_Root].alive)
-    {
-        CompileNode(m_Root, objectIdToIndex, program);
-    }
-
-    return program;
+    // min (Union/Group) and max (Intersection) are associative AND commutative, so
+    // any permutation of the children produces the identical distance field.
+    //
+    // Everything else is excluded on purpose:
+    //   Subtract — not commutative in its first operand; the base child must stay
+    //              first, and the RPN folding makes later operands positional.
+    //   Smooth * — not even associative. opSmoothUnion(opSmoothUnion(a,b),c) is not
+    //              opSmoothUnion(a,opSmoothUnion(b,c)); reordering would silently
+    //              change the rendered shape, which is exactly the class of bug
+    //              G_correctness_17 exists to catch.
+    if (node.blendMode == BlendMode::Smooth) return false;
+    return node.type == CsgNodeType::Union
+        || node.type == CsgNodeType::Group
+        || node.type == CsgNodeType::Intersection;
 }
 
-void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, std::vector<CsgCommand>& outProgram) const
+int32_t CsgTree::FillSubtreeDepths(int32_t nodeIndex, std::vector<int32_t>& out) const
 {
     const CsgNode& node = m_Nodes[nodeIndex];
     if (!node.alive)
     {
-        return;
+        out[static_cast<size_t>(nodeIndex)] = 0;
+        return 0;
+    }
+
+    if (node.type == CsgNodeType::Primitive)
+    {
+        out[static_cast<size_t>(nodeIndex)] = 1;
+        return 1;
+    }
+
+    // Same recurrence as CompileNode, and the same ordering, so the hint reflects
+    // what emission will actually do. Children that emit nothing (depth 0) are
+    // skipped here exactly as they are there.
+    std::vector<int32_t> children;
+    for (int32_t child = node.firstChild; child != -1; child = m_Nodes[child].nextSibling)
+    {
+        if (!m_Nodes[child].alive) continue;
+        if (FillSubtreeDepths(child, out) == 0) continue;
+        children.push_back(child);
+    }
+
+    if (ChildOrderIsFree(node))
+    {
+        std::stable_sort(children.begin(), children.end(),
+            [&out](int32_t a, int32_t b) { return out[static_cast<size_t>(a)] > out[static_cast<size_t>(b)]; });
+    }
+
+    int32_t height = 0;
+    int32_t peak = 0;
+    int32_t compiled = 0;
+    for (const int32_t child : children)
+    {
+        peak = std::max(peak, height + out[static_cast<size_t>(child)]);
+        height += 1;
+        if (++compiled >= 2) height -= 1;
+    }
+
+    out[static_cast<size_t>(nodeIndex)] = peak;
+    return peak;
+}
+
+CsgTree::CompiledProgram CsgTree::CompileToRPN(const std::unordered_map<int32_t, int32_t>& objectIdToIndex) const
+{
+    CompiledProgram compiled;
+
+    if (m_Root >= 0 && m_Root < static_cast<int32_t>(m_Nodes.size()) && m_Nodes[m_Root].alive)
+    {
+        // One O(nodes) pass to learn every subtree's cost, so emission can order
+        // siblings cheapest-last without re-descending per comparison.
+        std::vector<int32_t> subtreeDepth(m_Nodes.size(), 0);
+        FillSubtreeDepths(m_Root, subtreeDepth);
+
+        compiled.requiredStackDepth = CompileNode(m_Root, objectIdToIndex, subtreeDepth, compiled.commands).peak;
+    }
+
+    // An empty tree legitimately needs depth 0 — not a sentinel, the shader's
+    // `arrayLength(&csg_program) == 0` early-out never touches the stack.
+    return compiled;
+}
+
+CsgTree::CompileResult CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, const std::vector<int32_t>& subtreeDepth, std::vector<CsgCommand>& outProgram) const
+{
+    const CsgNode& node = m_Nodes[nodeIndex];
+    if (!node.alive)
+    {
+        return {};   // emits nothing, leaves nothing
     }
 
     if (node.type == CsgNodeType::Primitive)
@@ -191,7 +262,7 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
         cmd.parameter = node.modifierEnabled && node.modifierType == ModifierType::Roundness
             ? std::max(node.modifierAmount, 0.0f) : 0.0f;
         outProgram.push_back(cmd);
-        return;
+        return { 1, 1 };   // one push: peaks at 1, leaves 1
     }
 
     // Operation node: postorder walk of the child sibling chain. After every child
@@ -201,14 +272,53 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
         ? SmoothOpNodeTypeToCmdType(node.type) : OpNodeTypeToCmdType(node.type);
     int32_t compiledChildren = 0;
 
+    // Stack bookkeeping, mirroring the emission below exactly.
+    //   height — values this node's children have left on the stack so far
+    //   peak   — highest height reached anywhere in this subtree
+    int32_t height = 0;
+    int32_t peak = 0;
+
+    std::vector<int32_t> children;
     for (int32_t child = node.firstChild; child != -1; child = m_Nodes[child].nextSibling)
     {
-        if (!m_Nodes[child].alive)
+        if (m_Nodes[child].alive) children.push_back(child);
+    }
+
+    // Sibling order changes the peak: the `height + childResult.peak` term below
+    // charges a compound child for everything its earlier siblings left on the
+    // stack, so a deep child costs nothing when it goes FIRST and costs the full
+    // running height when it goes last. Emitting deepest-first therefore minimises
+    // the peak — this is Sethi-Ullman register-minimising evaluation order.
+    //
+    // Ordering only; the hint is never used to decide whether a child emits (that
+    // stays with the authoritative childResult.yield below), so a stale or wrong
+    // hint can only cost depth, never correctness.
+    if (ChildOrderIsFree(node))
+    {
+        std::stable_sort(children.begin(), children.end(),
+            [&subtreeDepth](int32_t a, int32_t b)
+            { return subtreeDepth[static_cast<size_t>(a)] > subtreeDepth[static_cast<size_t>(b)]; });
+    }
+
+    for (const int32_t child : children)
+    {
+        const CompileResult childResult = CompileNode(child, objectIdToIndex, subtreeDepth, outProgram);
+
+        // Alive but emitted nothing (an empty group, or one holding only dead nodes).
+        // Counting it would emit an op with only one value beneath it — harmless at
+        // runtime because the shader guards with `sp >= 2`, but it leaves a dead
+        // command in a program the shader walks linearly at every march step.
+        if (childResult.yield == 0)
         {
             continue;
         }
 
-        CompileNode(child, objectIdToIndex, outProgram);
+        // The child's peak is measured from zero, but its commands execute on top of
+        // whatever its earlier siblings left behind — so offset it by the current
+        // height. This term is the entire reason a compound child costs depth when it
+        // is NOT first and costs none when it is.
+        peak = std::max(peak, height + childResult.peak);
+        height += 1;
         ++compiledChildren;
 
         if (compiledChildren >= 2)
@@ -219,8 +329,11 @@ void CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, i
             cmd.nodeId = node.nodeId;
             cmd.parameter = node.blendMode == BlendMode::Smooth ? std::max(node.blendRadius, 0.0f) : 0.0f;
             outProgram.push_back(cmd);
+            height -= 1;   // the op pops two and pushes one
         }
     }
+
+    return { peak, compiledChildren > 0 ? 1 : 0 };
 }
 
 CsgNode* CsgTree::FindNodeById(int32_t nodeId)

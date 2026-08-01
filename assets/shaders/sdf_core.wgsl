@@ -162,7 +162,7 @@ fn distanceCalc(p : vec3f) -> f32
     {
         return resultDistance;
     }
-    var distanceStack : array<f32, 16>;
+    var distanceStack : array<f32, CSG_STACK_DEPTH>;
     var sp : i32 = 0;
 
     for (var i : u32 = 0u; i < count; i = i + 1u)
@@ -187,7 +187,7 @@ fn distanceCalc(p : vec3f) -> f32
                 case 8: { dist = sdfPyramid(localPos, obj.size.x, obj.size.y); }
                 default: { dist = 100000.0; }
             }
-            if (sp < 16)
+            if (sp < CSG_STACK_DEPTH)
             {
                 distanceStack[sp] = dist;
                 sp = sp + 1;
@@ -298,9 +298,9 @@ fn evaluateScene(p : vec3f) -> SceneResult
         return result;
     }
 
-    var stack : array<f32, 16>;
-    var stackColor : array<vec3f, 16>;
-    var stackId : array<u32, 16>;
+    var stack : array<f32, CSG_STACK_DEPTH>;
+    var stackColor : array<vec3f, CSG_STACK_DEPTH>;
+    var stackId : array<u32, CSG_STACK_DEPTH>;
     var sp : i32 = 0;
 
     for (var i : u32 = 0u; i < count; i = i + 1u)
@@ -332,7 +332,7 @@ fn evaluateScene(p : vec3f) -> SceneResult
                 objColor = mix(objColor, vec3f(1.0), 0.4);
             }
 
-            if (sp < 16)
+            if (sp < CSG_STACK_DEPTH)
             {
                 stack[sp] = dist;
                 stackColor[sp] = objColor;

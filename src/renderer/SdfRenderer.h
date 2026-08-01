@@ -8,7 +8,9 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 class SdfRenderer
@@ -38,6 +40,22 @@ public:
     );
 
     void ClearSceneBuffer();
+
+    // Point `pipeline` at a scene pipeline whose in-shader RPN stacks are just big
+    // enough for the program about to be uploaded, compiling and caching that
+    // variant on first use.
+    //
+    // Why this exists: WGSL function-local array sizes must be const-expressions, so
+    // the stacks in distanceCalc/evaluateScene cannot be sized from a uniform. Their
+    // DECLARED size is charged to the whole fragment shader's register/scratch
+    // footprint, which sets occupancy — measured at 23-62% frame time between depth
+    // 16 and depth 8 on identical programs. The only lever is to specialise the
+    // shader source per depth and compile a pipeline per variant.
+    //
+    // requiredStackDepth comes from CsgTree::CompiledProgram; it is rounded UP to a
+    // bucket so a scene oscillating between depth 2 and 3 does not thrash the cache.
+    void EnsureScenePipeline(wgpu::Device device, int32_t requiredStackDepth);
+    int32_t GetActiveCsgStackDepth() const { return activeCsgStackDepth; }
 
     void CreateRenderTarget(
         wgpu::Device device,
@@ -85,6 +103,13 @@ public:
     // change, which is why Application::RequestRedraw reads it.
     static constexpr int32_t kAccumLayers = 4;
 
+    // Deepest RPN stack any shader variant provides. A program needing more than
+    // this renders with pushes silently dropped (the `sp < CSG_STACK_DEPTH` guard),
+    // i.e. missing geometry — EnsureScenePipeline warns loudly when it happens.
+    // 32 covers a perfectly balanced binary CSG tree of ~2 billion primitives; only
+    // pathological hand-built or hostile nesting can exceed it.
+    static constexpr int32_t kMaxCsgStackDepth = 32;
+
     wgpu::RenderPipeline pipeline = nullptr;
     wgpu::BindGroup bindGroup = nullptr;
     wgpu::RenderPipeline resolvePipeline = nullptr;  
@@ -97,7 +122,25 @@ public:
 private:
     std::filesystem::path projectRoot;
 
-    wgpu::ShaderModule shaderModule = nullptr;
+    wgpu::ShaderModule shaderModule = nullptr;   // base module; fs_resolve comes from here
+
+    // Raw WGSL kept in memory so a new depth variant costs a string concat, not a
+    // file read — the engine reads these from the WASM virtual FS, and a variant can
+    // be requested at any scene edit.
+    std::string coreShaderSource;
+    std::string mainShaderSource;
+
+    // One shader module + one render pipeline per stack-depth bucket, created lazily
+    // and never evicted (a handful of buckets, and recompiling is the expensive part).
+    // Modules are retained alongside their pipelines: the pipeline keeps the module
+    // alive on the API side, but holding the wrapper keeps Destroy symmetrical.
+    std::map<int32_t, wgpu::ShaderModule>   sceneShaderModules;
+    std::map<int32_t, wgpu::RenderPipeline> scenePipelines;
+    int32_t activeCsgStackDepth = 0;
+
+    std::string BuildShaderSource(int32_t stackDepth) const;
+    static int32_t BucketForDepth(int32_t requiredStackDepth);
+
     wgpu::PipelineLayout pipelineLayout = nullptr;
     wgpu::BindGroupLayout bindGroupLayout = nullptr;
     wgpu::PipelineLayout resolvePipelineLayout = nullptr;
@@ -130,6 +173,11 @@ private:
     wgpu::Buffer finalGlobalsBuffer = nullptr;
     wgpu::BindGroup finalBindGroup = nullptr;
     wgpu::Buffer finalReadbackBuffer = nullptr;
+    // The scene pipeline this export started with. An export spans many frames and
+    // many band submits, while `pipeline` can be re-pointed at a different stack-depth
+    // variant by any scene edit in between — bands must all run the same shader, so
+    // the export pins its own.
+    wgpu::RenderPipeline finalPipeline = nullptr;
     std::vector<uint8_t> finalPixels;
     int finalRenderState = 0; // 0 idle, 1 rendering bands, 2 reading, 3 ready, 4 failed
     uint32_t finalWidth = 0;

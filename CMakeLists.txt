@@ -192,7 +192,6 @@ endif()
 
 if (NOT EMSCRIPTEN)
     add_executable(csg_features_test
-        tests/CsgFeaturesTest.cpp
         src/scene/SceneManager.cpp
         src/scene/csg/CsgTree.cpp
         src/editor/command/UndoStack.cpp

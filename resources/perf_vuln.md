@@ -11,18 +11,52 @@
 
 | # | Vulnerability | Cost scaling | Expected win | Effort |
 |---|---|---|---|---|
-| P1 | Every object's exact SDF evaluated at **every march step of every ray** — no culling, no bounds | O(pixels × steps × objects) | **The fix for your symptom.** Near-flat cost in object count for typical scenes | Medium |
+| P1 | Every object's exact SDF evaluated at **every march step of every ray** — no culling, no bounds | O(pixels × steps × objects) | **The fix for your symptom.** P1a tried & removed (~12–23%, see below); **P1b (per-ray mask) is the live item** | Medium |
 | DONE | Full raymarch re-rendered **every vsync, even when nothing changed** | 100% of GPU, 100% of the time | Idle GPU ≈ 0; editor feels instantly usable | Low | 
 | P3 | Shadow / AO / normal each re-run the full O(N) evaluator — secondary rays ~2–3× the primary cost | multiplies P1 | 2–3× during interaction | Low–Medium |
 | DONE | No whole-scene bounds — background & grazing rays pay full march cost | ~30–60% of pixels are background | **Landed.** `E_background_10` 300 ms → 13 ms; `D_cluster_12` ~flat, `H_ultra_48` ~flat (both as predicted) | Low |
 | P5 | Naive marcher: fixed `hitEpsilon`, no over-relaxation → more steps than necessary | multiplies everything | 20–50% fewer steps | Low–Medium |
 | P6 | Per-evaluation constant math: quaternion rotate always runs, `sin/cos` per cone eval, etc. | per object per step | 10–30% of eval cost | Low |
-| P7 | Register pressure: three 16-deep stacks in `evaluateScene` + 16-deep in `distanceCalc` may cap GPU occupancy for the whole shader | global multiplier | Unknown until profiled; possibly large | Medium |
+| DONE | Register pressure: three 16-deep stacks in `evaluateScene` + 16-deep in `distanceCalc` cap GPU occupancy for the whole shader | global multiplier | **Landed — the biggest win in this document.** Whole suite 12.2 s → 5.7 s (**2.1×**), every scene 23–60% faster. Optimum stack depth is **8**, found by measurement; cost is *not* monotonic in size | Low |
 | P8 | Interaction-time quality not auto-scaled (resolution/shadows stay at full while orbiting); SSAA multiplies everything ×N² | UX | Smooth camera at any scene size | Low |
 | P9 | Architectural ceiling: re-evaluating the CSG per pixel per frame at all — vs. Dreams/Claybook "evaluate once per **edit**, march a cached field per frame" | O(1) in object count per frame | Hundreds of objects; the endgame | High |
 | P10 | Minor: object-id target written every frame, un-cleared accum layers, `maxDistance` generous default | small | small | Trivial |
+| P11 | No per-pixel ray interval — `tEnter` comes from one coarse whole-scene box, not from the objects themselves | O(pixels × wasted steps) | Tighter start than P4 on scattered scenes; **rasterized version scales far better than P1b's per-ray loop at high N** | Medium |
+| P12 | *(Rejected, logged)* Per-pixel hit history from the object-id target reused to seed the next frame's march | — | Real but collides with P2; superseded by P11 | — |
 
-Recommended attack order: **~~P2~~ → ~~P4~~ (both done) → P8 (days, makes the app usable) → P1 + P3 (the real fix) → P5/P6/P7 (polish) → P9 (long-term project)**.
+Recommended attack order: **~~P2~~ → ~~P4~~ → ~~P7~~ (all done) → P1b (per-ray mask) → P11 (per-ray `tEnter`, then rasterized) → P8 → P3 → P5/P6 (polish) → P9 (long-term project)**.
+
+> 🔴 **Read P7 before picking the next item.** It changed what this document is about.
+> The shader is **memory-latency-bound and occupancy-limited**, not ALU-bound — proven by
+> elimination, then confirmed by a one-line constant that beat every algorithmic optimisation
+> here combined. Two consequences for everything below:
+> 1. **Optimisations that only remove arithmetic are worth little.** P1a removed a lot of
+>    arithmetic and bought 12%; P7 removed no arithmetic at all and bought 110%. Re-read
+>    P5/P6 in that light — both are pure-ALU wins.
+> 2. **Optimisations that add per-lane state now have a cost on the other side of the ledger.**
+>    P1b's `vec4<u32>` mask is 4 more registers carried through four evaluators, spending the
+>    exact resource that was just proven to be binding. Budget for that when estimating it.
+>
+> Also: measured run-to-run noise on this suite is **±6–10%**. Anything claiming less than
+> ~15% needs repeated runs before it is believed — which is retroactively why P1a's 12% read
+> as ambiguous and needed two follow-up experiments to interpret.
+
+> **The organising idea for P1/P11 (established while designing them — read this before either).**
+> The two attack *different factors of the same product*, and are not substitutes:
+> ```
+> cost = Pixels × StepsPerRay × Objects × CostPerEval
+>                     ↑            ↑
+>               P11 (tEnter)    P1b (mask)
+>              needs a SCALAR   needs a SET
+> ```
+> **You need the set of nearby objects if and only if you intend to skip objects inside
+> `distanceCalc`.** For shortening the ray, one scalar per pixel is enough — and it is safe
+> unconditionally, because the worst case of a too-early `tEnter` is wasted steps, never
+> missing geometry. That asymmetry is why P11 can be built from rasterization (which reports
+> *the nearest* proxy) while P1b cannot (it needs *all* of them: the step size at any point on
+> the walk is set by whichever object is nearest **there**, which changes as the ray travels,
+> and CSG needs operands the ray never hits).
+
 
 ---
 
@@ -89,6 +123,54 @@ waste. Everything in P1 is about exploiting that.
 ---
 
 ## P1 — No spatial culling: every object, every step, every ray  🔴 the scaling wall
+
+> ### ⚠️ P1a was implemented, measured, and **removed**. Read this before re-attempting.
+>
+> **What shipped:** the CPU half is done and still in the tree — `SceneBounds::EnclosingRadius`
+> per primitive, `WriteEnclosingRadii` publishing the radius into `position.w`, and δ
+> (`SceneAABB::proxyMargin`) published into `globals.sceneBoundsMin.w`. **All of it is still
+> uploaded every refresh and is marked `!! STAGED, NOT YET CONSUMED` in the source.** P1b needs
+> exactly this data — do not delete it as dead code.
+>
+> **What was removed:** the shader-side branch in `distanceCalc` that substituted
+> `length(p − c) − r` for the exact SDF when `dBound > δ`.
+>
+> **Why (measured, post-P4 baseline → with P1a):**
+>
+> | scene | before | after | Δ |
+> |---|---|---|---|
+> | `B` | 1100 ms | 850 ms | −23% |
+> | `G_correctness_17` | 720 ms | 630 ms | −12% |
+> | `C` | 280 ms | 245 ms | −12% |
+> | `D`, `E`, `H` | — | ~flat | — |
+>
+> Pixel-identical throughout (the safety math holds). But ~12–23% is a poor return for a
+> permanent branch in the hottest loop, and — more importantly — the *shape* of the result was
+> diagnostic: a uniform win across scenes with very different object distributions is not what a
+> culling optimisation looks like.
+>
+> **What the follow-up experiments proved (worth more than the optimisation itself):**
+> - `maxSteps 100 → 400` changed nothing ⇒ rays are **not** riding the step cap; step count
+>   didn't grow, so P5-class work is not the bottleneck either.
+> - `δ → 0.01` changed performance **not at all** but visibly **corrupted shapes** ⇒ the δ
+>   safety argument is real and load-bearing, *and* the exact-SDF path was not where the time
+>   was going.
+> - ⇒ **The shader is not ALU-bound.** Replacing expensive arithmetic with cheap arithmetic
+>   barely moved the needle. The remaining suspects are (1) the **dependent 80-byte object
+>   load** `scene_objects[cmd.operand]` — an address that depends on a value loaded one
+>   instruction earlier, so it cannot be prefetched — and (2) **P7**, occupancy loss from the
+>   dynamically-indexed RPN stacks.
+>
+> **Consequence for the ranking: P7 is promoted by evidence.** It was ranked on speculation;
+> it is now the best remaining explanation for where the time actually goes. The
+> `CSG_STACK_DEPTH 16 → 8` experiment (P7 solution 1) is the cheapest test in this entire
+> document and is still un-run.
+>
+> **Consequence for P1b:** P1a could never skip the object load — it needed `position.xyz` and
+> `position.w` to compute the proxy. **P1b's mask needs nothing from the object at all**, so
+> the load moves inside the branch and masked lanes never issue it. If the dependent load is
+> the bottleneck, P1b is the only design that removes it. That is now the primary hypothesis
+> P1b tests, not just an optimisation it delivers.
 
 **Where:** [distanceCalc](assets/shaders/sdf_core.wgsl#L157) and
 [evaluateScene](assets/shaders/sdf_core.wgsl#L289) — the `for` loop over the whole
@@ -167,24 +249,131 @@ screen; degrades gracefully (never wrong, per the math above). One caveat: proxi
 *underestimates*, so rays passing near a bound take slightly more steps — the slack margin
 keeps this negligible.
 
-**b) Per-ray pruning (the direct fix for "off-screen objects still cost"):**
-once per pixel, before the march, intersect the ray with each object's bounding sphere
-**inflated by δ**. Objects the ray misses entirely can be *fully skipped* for that ray:
-their `PUSH` pushes a large constant (+∞ stand-in). This is correct because a ray that
-never enters the inflated bound can neither hit the object nor see any surface the object
-influences (carves/blends) — all of that lies inside the inflated bound. Store the result
-as a **u32 bitmask** (fine up to 32 objects; two u32s for 64). The march loop then costs
-O(objects-the-ray-can-see) — for a camera looking at 2 of 10 objects, most pixels evaluate
-1–2 SDFs instead of 10. Off-screen and behind-camera objects: **zero per-step cost**.
-Nuance: the mask is only valid for *that ray* — shadow rays (different origin/direction)
-and normal/AO taps (slightly off-ray; covered by δ-slack) should either recompute a mask
-or just fall back to option (a)'s substitution, which needs no mask.
+**b) Per-ray pruning — 🔴 THE LIVE ITEM. Full design below.**
 
-**c) Screen-tile culling prepass** (the "engine-grade" version of b):
+Once per ray, test it against every object's bubble **inflated by δ**; objects it misses are
+*fully skipped* for that ray. The decision is **constant for the whole ray** (a ray is a fixed
+line, the bubbles are fixed), so it is answered **once** and consumed by the 60–200
+`distanceCalc` calls that follow. That is the structural difference from (a):
+
+| | (a) proxy substitution | (b) per-ray culling |
+|---|---|---|
+| decision made | per step, per object | **once per ray**, per object |
+| cost of deciding | O(steps × N) | O(N) |
+| 80-byte object load | **still paid** (proxy needs `position`) | **skipped** |
+| result for a far object | a cheap approximate distance | **no work at all** |
+
+*(a) discounted; (b) skips.* Given the P1a diagnosis above, skipping the load is the point.
+
+**The general principle.** Amortise an O(N) test over an O(N × M) loop, then carry the answer
+in a register. Structurally identical to **tiled/clustered light culling (Forward+)** — test
+once, build a short list, let the hot loop walk only that list. That framing is what makes (c)
+the obvious destination rather than a random idea.
+
+**Why a bitmask.** The mask is not an algorithm, it is a *container*: the cheapest way to carry
+N booleans from the top of `shadeRay` into the innermost loop. `array<bool,N>` with a runtime
+index usually spills to per-lane scratch memory (and that is P7's problem, i.e. paying for the
+fix in the same currency); recomputing per step is (a). A `vec4<u32>` is **4 registers holding
+128 answers**, tested in ~5 ALU with no memory access at all. That cheapness is load-bearing:
+the test sits in the same O(N × steps) slot (a)'s proxy occupied, so if reading the answer cost
+anything meaningful, (b) would have rebuilt (a)'s overhead and won nothing.
+
+**Why pushing `BIG` is safe — the whole correctness argument.** A culled object must still
+**push**, or `sp` desyncs and every downstream operator reads the wrong operands. It pushes
+`100000.0`, the file's existing "nothing here" sentinel — which is the most extreme
+*over*estimate possible, normally the cardinal sin. It is legal here because **the bubble
+encloses the object, the ray misses the bubble, therefore the ray never touches the object**:
+there is no surface on this ray to tunnel through. Per operator, with `dA = BIG`:
+
+| op | result | why it's right |
+|---|---|---|
+| `opUnion(BIG, dB)` = `min` | `dB` | true value away from A |
+| `opSubtract` = `max(−BIG, dB)` | `dB` | the cavity lies inside A's bubble; this ray never enters it |
+| `opIntersection(BIG, dB)` = `max` | `BIG` | `A∩B ⊆ A`, and the ray never enters A — the subtree genuinely contributes nothing |
+| `opSmoothUnion(BIG, dB, k)` | `h→0` ⇒ `dB` | requires `BIG ≫ k` |
+| `opSmoothIntersection(BIG, dB, k)` | `h→1` ⇒ `BIG` | as hard intersect |
+
+Note row 3: `BIG` propagating upward is the *payoff*, not a bug — a whole culled subtree
+collapses to "nothing here" and the marcher takes one giant step.
+
+**The one hole, and δ plugs it.** The argument above needs "misses the bubble ⇒ misses the
+object", but a smooth union bulges **outward** past both operands by up to `k/4`, so the
+compound surface can poke outside A's bubble and a grazing ray could hit that bulge. Hence the
+rule is not "misses the bubble" but:
+
+> **Cull A for this ray iff the ray's closest approach to A's bubble exceeds δ**,
+> with δ = `maxBlendRadius + slack` — *exactly the `proxyMargin` already computed and
+> published to `globals.sceneBoundsMin.w`.* The δ derived for P1a is the correct δ here.
+
+**Staging (each with a verification gate, so a failure is traceable):**
+
+1. **Plumbing only.** Thread `mask : vec4<u32>` through `distanceCalc` → and its callers
+   `calcNormal` / `calcAO` / `calcSoftShadow`; every call site passes all-ones. Gate: *pixel
+   identical AND GPU ms unchanged.* This isolates the floor cost of an O(N × steps) test
+   before any win is layered on top — otherwise "P1b gave 30%" is really "35% minus 5% of
+   self-inflicted overhead" and you can never separate them.
+2. **Build + use the mask** on the primary march. Cull test:
+   `sqrt(max(dot(oc,oc) − dot(oc,rd)², 0)) − obj.position.w > δ`. Start with the *unclamped
+   perpendicular* form — it under-reports the miss distance for spheres behind the camera, so
+   it culls less than it could, i.e. it errs safe. Gate: `G_correctness_17` pixel-identical.
+3. **Tighten `tStart`/`tLimit`** from the same loop (see P11 — `min(tEnter)` falls out of it
+   nearly free) and skip the march entirely when no bubble is hit.
+4. **A second mask for the shadow ray.** Best cost ratio in the feature: one O(N) build feeding
+   an O(N × shadowMaxSteps) march.
+
+**Gotchas, front-loaded (these are the hours-costing ones):**
+
+- 🔴 **`calcSoftShadow` is a different ray** (different origin *and* direction). Reusing the
+  primary mask makes objects stop casting shadows. Either pass all-ones or build a second mask
+  — never silently reuse.
+- 🔴 **Shift width is undefined behaviour.** `1u << k` for `k ≥ 32` is undefined in WGSL, and
+  `H_ultra_48` reaches operand 47. Write `1u << (idx & 31u)` with explicit word selection
+  (`select` chains, **not** `mask[w]` with a runtime `w` — dynamic vector indexing often lowers
+  to scratch memory, defeating the whole point). `vec4<u32>` covers 128 objects; beyond that
+  **fail open** to all-ones. The asymmetry is absolute: culling too little is slow, culling too
+  much deletes geometry.
+- ⚪ **`calcAO` (≤0.13 along the normal) and `calcNormal` (0.0005) probe off-ray.** Reusing the
+  primary mask is safe *only because* δ ≥ 0.5 ≫ those radii. That is a consequence of δ's
+  value, not of geometry — if δ is ever tuned below ~0.15, AO breaks first and it will look
+  like a shading bug. Note it next to `proxyMargin`.
+- ⚪ **Do not cull in `evaluateScene`.** It runs once per pixel (nothing to win) and is the only
+  evaluator carrying color and object-id up the stack — a `BIG`-pushing object still writes a
+  color that `opSubtract`'s unconditional `c = cA` would read. All risk, no reward.
+- ⚪ **The mask must live inside `shadeRay`, not `fs_main`.** SSAA calls `shadeRay` n² times
+  with different `uv` ⇒ different `rd` ⇒ genuinely different rays. Hoisting it "to avoid
+  recomputation" would let a sub-sample cull an object it can see.
+- ⚪ **Divergence caps the win.** The mask is per-ray, so lanes in a warp disagree; if *any* lane
+  needs object A the whole warp executes A. **The real win tracks warp coherence, not average
+  mask density** — expect background/empty regions to win big (whole tiles agree) and
+  silhouettes to win little, i.e. the same scene-dependence P4 showed, for the same reason.
+  This is the main argument for (c), which removes divergence by construction.
+- ⚪ **Neutralize inputs, don't gate the loop.** `PER_RAY_CULL_ENABLED = false` must set the mask
+  to all-ones and run identical code — copy the `SCENE_BOUNDS_OPT_ENABLED` pattern exactly, or
+  the A/B isn't one.
+
+**c) Screen-tile culling prepass** (the "engine-grade" version of b — **the endgame for P1+P11
+together**):
 a tiny compute pass bins objects into 8×8 or 16×16 pixel tiles (frustum-vs-sphere per
 tile), writing one bitmask per tile to a storage buffer; `fs_main` reads its tile's mask.
 Amortizes the per-pixel sphere tests and also lets you *sort* per tile. Same idea as tiled
-deferred lighting. Do this only if (b)'s per-pixel tests show up in profiles.
+deferred lighting.
+
+Two things make this strictly better than (b), not merely cheaper:
+
+1. **~256× less culling work.** At 1080p that's ~8,100 tiles instead of 2M pixels.
+2. 🔴 **It kills the divergence ceiling.** A per-ray mask differs across a warp, so the warp
+   executes the union of all its lanes' objects; a **per-tile mask is identical for every lane
+   in the warp by construction**. The measured win moves much closer to the theoretical one.
+
+It also produces **both** halves at once — the mask *and* the tile's `min(tEnter)`/`max(tExit)`
+— which is what makes it the common destination of P1b and P11.
+
+**Sequencing note:** (b) is not a detour. `distanceCalc(p, mask)` does not care whether the mask
+came from a per-ray loop or a tile buffer, so **(b) stage 1's plumbing is the consumer side of
+(c), unchanged.** Do (b) first anyway, because it is ~40 lines of shader and answers the
+question (c) costs a day to ask: *does masking objects out of `distanceCalc` actually make this
+shader faster?* Given the P1a diagnosis, that is still genuinely unknown — and if the answer is
+no, the correct next move is P7, not a compute prepass.
 
 **d) Hierarchical pruning via the CSG tree** (scales to big scenes):
 compute bounds **per CSG node** bottom-up (union/group = enclosing sphere of children + k;
@@ -340,30 +529,113 @@ Small individually, but they sit inside the innermost loop that runs ~10⁹ time
 
 ---
 
-## P7 — Register pressure from the RPN stacks (needs profiling, potentially big)
+## P7 — Register pressure from the RPN stacks  ✅ LANDED — the largest win in this document
 
-**Where:** `distanceCalc` holds `array<f32, 16>`; `evaluateScene` holds **three** parallel
-16-deep stacks (`f32` + `vec3f` + `u32` ≈ 80 scalars)
-([sdf_core.wgsl:301-303](assets/shaders/sdf_core.wgsl#L301-L303)). Dynamically-indexed
-local arrays usually live in registers only if the compiler can promote them; otherwise
-they spill to scratch memory (slow), and either way the **peak** register demand of the
-whole fragment shader sets its occupancy — fewer resident warps → the GPU can't hide the
-memory latency of the storage-buffer reads → everything slows down, even the parts that
-don't touch the stacks.
+> **Shipped** as a shader-source-injected `CSG_STACK_DEPTH`, an exact required-depth
+> computed by `CsgTree::CompileToRPN`, and a per-depth pipeline cache in `SdfRenderer`.
+> See CLAUDE.md §6b.
 
-**Solutions:**
+**Where:** `distanceCalc` held `array<f32, 16>`; `evaluateScene` holds **three** parallel
+stacks (`f32` + `vec3f` + `u32` = 5 scalars per slot, so 80 at depth 16)
+([sdf_core.wgsl](assets/shaders/sdf_core.wgsl)). The **peak** register demand of the whole
+fragment shader sets its occupancy, and `evaluateScene` sets the peak even though it runs
+once per pixel.
 
-1. **Shrink the stacks.** Depth 16 supports 16-deep *nesting*, which the UI can't
-   realistically produce (depth grows with nesting, not object count — a flat union of 100
-   objects needs depth 2). Depth **8** is still generous and halves the pressure. Keep the
-   existing overflow guards; optionally have `CompileToRPN` compute the actual required
-   depth and warn.
-2. **Pack `evaluateScene`'s color stack**: color as one packed u32 (`pack4x8unorm`) instead
-   of `vec3f` — 3 stacks × 16 → effectively half the scalars. `evaluateScene` runs once
-   per pixel, so its *runtime* is irrelevant — but its *register footprint* is charged to
-   the whole shader.
-3. **Verify before investing:** on the native build, RenderDoc/Nsight will show occupancy
-   and scratch usage. If occupancy is already fine, skip this entirely.
+### The result
+
+Whole suite, `maxSteps`/scene/camera unchanged, only the declared array size varying:
+
+| scene | depth 16 (before) | depth 8 (after) | Δ |
+|---|---|---|---|
+| A | 130 ms | 80 ms | −38% |
+| B | 1100 ms | 700 ms | −36% |
+| C | 280 ms | 210 ms | −25% |
+| D | 300 ms | 190 ms | −37% |
+| E `background_10` | 13 ms | 10 ms | −23% |
+| F | 1180 ms | 680 ms | −42% |
+| G `correctness_17` | 720 ms | 450 ms | −38% |
+| H `ultra_48` | ~8500 ms | 3400 ms | −60% |
+| **total** | **12.2 s** | **5.7 s** | **2.1×** |
+
+Pixel-identical throughout. **Zero arithmetic was removed.** The programs, the step counts
+and the SDF evaluations are byte-for-byte what they were; only how many warps fit on an SM
+changed.
+
+### 🔴 Cost is NOT monotonic in stack size — this is the finding
+
+The obvious next move was "size the stack to what each scene actually needs." It was
+implemented (see below) and it made things **worse**, which is how the real shape came out:
+
+| scene | depth 4 | **depth 8** | depth 16 |
+|---|---|---|---|
+| D | 330 | **190** | 300 |
+| G | 450 | **440** | 720 |
+| H | ~8500 | **3200** | ~8500 |
+
+A valley, not a slope. The best-fitting explanation (inferred from the curve, **not**
+verified against a driver disassembly):
+
+- **GPU registers are not addressable.** A register operand is encoded into the instruction
+  word, so there is no `read r[sp]`. A dynamically-indexed local array therefore cannot
+  simply live in registers.
+- The compiler picks one of two lowerings: **scalarize** (keep all N in registers and turn
+  every access into a `select` chain — a *write* must conditionally rewrite all N), or
+  **spill to scratch** (per-thread memory, backed by VRAM, in practice L1-resident).
+- **At 4 it scalarizes** → ~20 scalars charged to every invocation of the whole shader →
+  fewer resident warps → the storage-buffer latency is exposed.
+- **At 8 it spills** → register cost collapses to ~0, scratch footprint still small → most
+  warps resident → latency hidden. The ~25-cycle L1 access is repaid many times over,
+  because the extra warps also hide the pre-existing 80-byte `scene_objects` loads.
+- **At 16 it spills too**, but the bigger scratch allocation comes out of a fixed per-SM
+  pool and caps occupancy from the other side.
+
+Two resources bind occupancy — registers below the notch, scratch above it — and 8 is where
+neither does. **The optimum is a property of this machine and this driver.** Re-measure
+before changing it; it is a measured constant, not a derived one.
+
+### What was actually built
+
+1. **Exact required depth, computed during emission.** `CsgTree::CompileToRPN` returns
+   `CompiledProgram { commands, requiredStackDepth }`. `CompileNode` now returns
+   `{peak, yield}` and tracks the running stack height, so the bound comes from the real
+   emission rather than a second traversal that could drift from it. Depth grows with CSG
+   *nesting*, not object count — **a flat union of any size peaks at 2**.
+2. **Sibling reordering (Sethi–Ullman).** For *hard* Union/Group/Intersection only — `min`
+   and `max` are associative and commutative, so any permutation gives the identical field.
+   Subtract is not commutative and the smooth ops are not even associative, so they are
+   excluded. Emitting the deepest child first collapses accidental nesting chains to depth 2.
+3. **Per-depth pipeline variants.** WGSL array sizes must be const-expressions, so the depth
+   is injected into the shader source (`SdfRenderer::BuildShaderSource`) and one pipeline is
+   compiled and cached per bucket.
+4. **A latent bug fixed on the way.** The old loop counted an *alive* child even when it
+   emitted nothing (an empty group), producing an op command with one value beneath it —
+   harmless at runtime thanks to the `sp >= 2` guard, but a dead instruction in a program the
+   shader walks linearly at every march step.
+
+### The honest accounting
+
+**The 2.1× came from a one-line constant (16 → 8), which was always available.** The
+machinery above adds **no speed**. What it adds is:
+
+- **Deep scenes render correctly.** A program needing more than the fixed depth silently lost
+  pushes to the `sp < CSG_STACK_DEPTH` guard — missing geometry, no error. It now gets a
+  deeper variant, and anything past `kMaxCsgStackDepth` gets a loud warning. That matters
+  because `.sdfp` is untrusted input (§11).
+- **The depth is a measured number**, printed per scene, instead of a hope.
+
+The bucket ladder starts at **8, not at the smallest depth a scene could use** — sizing down
+is actively harmful, which is the whole point of the valley above.
+
+### Still on the table (untested)
+
+**Pack `evaluateScene`'s colour stack**: `vec3f` → one `u32` via `pack4x8unorm`, dropping 5
+scalars per slot to 3. Its *runtime* is irrelevant (once per pixel) but its *footprint* is
+charged to the whole shader. Given the valley, this may move the notch rather than simply
+help — measure the same three depths again after.
+
+**Verify the mechanism**: RenderDoc/Nsight on the native build reports registers-per-thread,
+scratch bytes and achieved occupancy. Ten minutes, and it would turn the inference above into
+a fact.
 
 ---
 
@@ -446,21 +718,156 @@ scene complexity — and the two famous SDF games both escaped it the same way:
 
 ---
 
+## P11 — No per-pixel ray interval: `tEnter` is one coarse box for the whole screen
+
+**Where:** P4 clips the march to the **whole-scene AABB** ([main.wgsl](assets/shaders/main.wgsl),
+`intersectSceneBounds`). That box is a single O(1) answer shared by every ray, so on a scene of
+scattered objects it is enormously loose: a ray entering the box may still travel most of its
+length through empty space before reaching anything, paying full O(N) steps the entire way.
+`E_background_10` is the canonical case — P4 already made *missing* rays free, but rays that
+*hit the box* still crawl through the emptiness inside it.
+
+**The fix, in one sentence:** derive `tEnter` from the **objects' own bubbles** instead of from
+the box around all of them.
+
+**Why this is safe unconditionally — and why it needs no mask.** The worst case of a `tEnter`
+that is too small is *wasted steps*; it can never skip geometry, because the full object set is
+still evaluated from that point onward. Contrast P1b, where a wrong answer deletes geometry.
+**This is why P11 needs only a scalar per pixel while P1b needs a set** (see the box in §0):
+rasterization reports *the nearest* proxy, which is exactly `tEnter` and is useless as a mask.
+
+### Solution options (a → b, in increasing cost and payoff)
+
+**a) Per-ray `min(tEnter)` over the bubbles — ~20 lines, no new plumbing.**
+While looping over objects, solve the ray-sphere entry and track the minimum; then
+`tStart = max(tStart, minEnter − δ)`, and if no bubble was hit at all, **skip the march
+entirely** (the P4 miss early-out, now exact instead of box-shaped). Two notes: this needs the
+real `t ≥ 0` entry solve, which — unlike P1b's closest-approach test — is **not** conservative
+in its naive form, so it is a separate increment; and `tExit` can be tightened the same way with
+`max(tExit) + δ`.
+
+If P1b's mask loop already exists this is nearly free (it is P1b stage 3). Standalone it is
+still the cheapest experiment available, and it is the **correct prototype for (b)**: same
+number, 20 lines instead of a pipeline. If (a) gives nothing, (b) gives nothing either.
+
+**b) Rasterized bounding-proxy depth prepass — better asymptote, the real version.**
+Draw one screen-space quad per object covering its projected bubble; the fragment shader solves
+the ray-sphere entry and writes it as **depth**, with `depthCompare: "less"` so the fixed-function
+depth test performs the `min` across overlapping proxies **for free**. `fs_main` then reads that
+texture for its `tStart`.
+
+*This is how GPU volume raycasting has worked for twenty years* (rasterize bounding-box front
+faces for ray entry, back faces for exit, march only the interval). Cost scales with **summed
+projected area**, not with pixels × objects: at 128 objects, (a) does 128 sphere solves on each
+of 1.4M rays, while (b) does roughly one per covered pixel — plausibly 50–100× less. Since P1
+exists to fix the many-object cliff, that is the regime that matters.
+
+Implementation notes:
+- **Do not** use an `R32Float` target with min-blending — float32 blending is not in core
+  WebGPU. The `depth32float` + `less` route is core and free.
+- 🔴 **Conservative coverage is the gotcha that will bite.** A proxy quad only produces fragments
+  for pixels whose **center** it covers, but the marched ray is jittered up to half a pixel by
+  TAA ([main.wgsl:199](assets/shaders/main.wgsl#L199)) and sub-pixel-offset again by SSAA. A ray
+  can therefore graze a bubble the rasterizer decided missed that pixel, whose `tEnter` then
+  comes from a farther bubble — and the march **starts past real geometry.** It presents as a
+  one-pixel sparkle on silhouettes that reads like an AA artifact, not a culling bug. WebGPU has
+  no conservative-rasterization mode, so inflate the proxy yourself by one pixel's world-space
+  footprint at that depth plus the jitter. Same shape as δ: a margin that makes the bound
+  provably not-tight.
+- A pixel covered by **no** proxy keeps the depth clear value — that is the free "this ray
+  touches nothing" early-out, provided the clear value reads as a miss and not as `tEnter = 0`.
+
+**Where it converges:** P1(c)'s tile prepass produces the tile's `min(tEnter)` alongside the
+mask, so P11(b) and P1b(c) are the same pass. Build them separately, merge them there.
+
+---
+
+## P12 — *(Rejected, logged)* Reusing the object-id target as per-pixel hit history
+
+**The idea:** the scene pass already writes an `R32Uint` object-id target every frame, and it
+already stores the **array index** (CLAUDE.md §4: *"Pick returns a vector index, not an
+objectId"*). So frame N tells every pixel which object it hit; frame N+1 could look that up,
+re-derive that object's bubble entry analytically, and start its march there.
+
+**What is right about it** (and worth keeping in mind elsewhere): it needs **no readback** — the
+target is bound as a texture and read on the GPU, sidestepping the `mapAsync` stall that makes
+`PickObjectAt` async. And **storing the id rather than the distance is the good variant**: a
+stored `t` is stale garbage the moment an object moves, whereas a stored *id* re-derives the
+entry against that object's **current** position, so the guess degrades to "which object" and
+the geometry is always fresh.
+
+**Why it was rejected, in order:**
+
+1. 🔴 **It collides head-on with P2.** The stored id is only valid if the ray and the scene are
+   unchanged — but under render-on-demand `FrameScheduler` *idles at zero cost* when nothing
+   changed. The frames that get drawn are, by construction, the ones right after the camera or
+   scene changed, i.e. exactly when the history is invalid. **Two optimisations can each be
+   sound and still be mutually exclusive; the one that removes work beats the one that spreads
+   work out.**
+2. **P11 computes the same quantity, exactly, with no history**, and is correct on the first
+   frame after an invalidation — where this is worthless.
+3. It needs **ping-pong targets** after all (a pass cannot read and write the same texture), so
+   the "no second buffer" advantage doesn't survive contact.
+4. When the history *is* wrong (camera moved, or an object moved into the path), the march
+   starts past a real surface: the disappearing-geometry failure class again.
+
+**The one place it survives:** the 4 TAA accumulation frames after an invalidation share a
+camera and a scene, differing only by ≤0.25 px of jitter, so the history is valid *by
+construction* — no reprojection, no disocclusion, no unbounded object motion. Two caveats if it
+is ever revisited: it buys a **starting `t`, not a cheaper evaluation** (knowing the pixel hits
+object 5 does not let you evaluate only object 5 — the surface there may be a subtraction or a
+smooth blend, so the full RPN program still runs), and it does not skip the mask build, so it
+stacks on top of P1b/P11 rather than replacing either. Capped at 3 of every 4 rendered frames.
+
+**General rule this produced:** never move per-pixel work toward the CPU to make the GPU faster.
+CPU precomputation pays when the thing is *scene-sized* (tens of items — `SceneBounds::Compute`);
+it is catastrophic when the thing is *pixel-sized*.
+
+---
+
 ## Suggested roadmap
 
 | Phase | Items | Outcome |
 |---|---|---|
-| 1 — days | P2 (render-on-demand), P4 (scene AABB clip), P8.1 (dynamic res on interaction), P3.2/3.3 (interaction degradation, cheaper defaults) | 10-object scenes usable today; idle cost ≈ 0 |
-| 2 — the real fix | P1a (bounding radii in `position.w` + proxy substitution with δ-margin), then P1b (per-ray bitmask pruning) | Cost tracks *visible* objects; off-screen objects ≈ free; the 5→10 cliff gone |
-| 3 — polish | P5 (adaptive epsilon + over-relaxation), P6 (precompute constants), P7 (stack/occupancy, after profiling on native) | 1.5–2.5× on top |
+| ~~1~~ ✅ | ~~P2 (render-on-demand)~~, ~~P4 (scene AABB clip)~~ — both landed. P8.1 / P3.2 / P3.3 still open | Idle cost ≈ 0; background rays free (`E` 300 → 13 ms) |
+| ~~1.5~~ ⛔ | ~~P1a (proxy substitution)~~ — built, measured at ~12–23%, **removed**. CPU half retained and staged for P1b | Proved the shader is **not ALU-bound**; promoted P7 by evidence |
+| ~~1.75~~ ✅ | ~~**P7 (RPN stack depth)**~~ — one constant, 16 → 8, plus exact-depth computation, Sethi–Ullman sibling ordering and per-depth pipeline variants | **Suite 2.1×.** Confirmed the shader is occupancy-limited, and that cost is non-monotonic in stack size |
+| 2 — the real fix | **P1b (per-ray bitmask pruning)** — attacks the `Objects` factor and the dependent object load. Then **P11a** (per-ray `min(tEnter)`) — attacks the `StepsPerRay` factor | Cost tracks *visible* objects; the 5→10 cliff gone. Also decides whether masking helps **at all** — if not, go straight to P7 |
+| 2.5 — scale it | **P11b** (rasterized depth prepass) if P11a pays, then **P1c** (tile compute prepass) which produces the mask *and* the interval in one pass and removes P1b's warp-divergence ceiling | The two lines converge; culling cost drops ~256× |
+| 3 — polish | P5 (adaptive epsilon + over-relaxation), P6 (precompute constants) — **both pure-ALU wins, so discount them: P1a proved arithmetic is not the constraint**. P7's remaining item (pack the colour stack) is the better-odds one | modest |
 | 4 — endgame | P9.1 (global distance volume hybrid), optionally P1d (hierarchical node bounds) first | Hundreds of objects, Dreams-direction architecture |
 
 A note on process: land **one phase at a time and measure** (fixed benchmark scene,
-frame-time in ms via the native build or A/B toggles in the Advanced panel). P1's proxy
-substitution in particular should ship behind a render-setting toggle at first, so any
-reappearance of the old clipping bug is one click to isolate — and verify it against
-rotated/scaled primitives, subtract nodes, and large smooth-blend radii, which are exactly
-the cases that sank the previous attempt.
+frame-time in **ms**, not FPS — the loop is rAF-driven so frame *rate* saturates at 60 and can
+never show headroom). Every optimisation ships behind a shader-side `const` A/B that
+**neutralises its inputs rather than gating its code path**, so "off" is provably the previous
+behaviour. Re-check `G_correctness_17` after *every* bounds change — it is the clipping trap,
+and rotated/scaled primitives, subtract nodes and large smooth-blend radii are exactly the cases
+that sank the first attempt. Note that `FrameScheduler::ForceContinuous(true)` (set in
+`Application::Initialize`, **must not ship**) is the harness that makes steady-state readings
+possible at all under P2.
+
+Two process lessons this pass produced, worth more than either optimisation:
+
+- **A negative result is a result.** P1a's ~12% and the flat `maxSteps 100 → 400` test together
+  proved the shader is not ALU-bound and pointed at the dependent object load and occupancy —
+  which re-ranked the remaining work. Design the *experiment* that distinguishes hypotheses, not
+  just the optimisation.
+- **Check which factor of the cost model you are attacking.** `Pixels × Steps × Objects ×
+  CostPerEval` — P8 hits the first, P4/P5/P11 the second, P1 the third, P6 the fourth. Two ideas
+  that attack the same factor compete; two that attack different factors multiply.
+- **The cost model has a fifth factor that isn't in the product: occupancy.** It multiplies
+  everything and appears nowhere in the source. P7 was ranked on speculation, promoted by
+  evidence, and then beat every algorithmic item combined — by changing one integer. Before
+  optimising *what the shader computes*, check what limits *how many copies of it can run*.
+- **Establish the noise floor before trusting a result.** ±6–10% here. P1a's 12% was inside it.
+- **Change one thing.** The stack-depth work shipped three changes at once (depth, stray-op
+  removal, sibling reordering) and produced an unreadable result; two one-line isolation runs
+  untangled it. The rule is cheap to follow and expensive to skip.
+- **An optimisation can succeed at its stated goal and still be a pessimisation.** Sibling
+  reordering worked perfectly — it drove scenes from depth 6 to depth 3 — and that is precisely
+  why they got slower, because 3 rounds into a worse bucket than 6. "Did it do what I intended?"
+  and "did it help?" are different questions.
 
 ## References
 
