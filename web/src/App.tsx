@@ -179,6 +179,15 @@ const ACTIVE_SHORTCUTS_GRID_HTML = `<div style="display:grid;grid-template-colum
 // engine sync cannot drift apart when a tool is added.
 const TRANSFORM_TOOLS = ["move", "rotate", "scale"];
 
+// Multiplier applied to the user's Render Resolution while a camera drag is in
+// flight. 0.5 = a quarter of the rays, since raymarch cost scales with pixel count.
+const INTERACT_SCALE = 0.5;
+
+// How long the wheel must stay quiet before full resolution comes back. Long
+// enough to bridge the gap between notches of a real scroll, short enough that a
+// single notch doesn't leave the viewport soft for a noticeable beat.
+const ZOOM_IDLE_MS = 180;
+
 // Small helper: render an editable/drag numeric field control (transform axis,
 // shape param, demo field) from a mockup `field()` descriptor.
 function FieldCtl({ f, wrapS, editS, showS, prefix }: any) {
@@ -338,6 +347,16 @@ export default class App extends React.Component<any, any> {
   _downPos: { x: number; y: number } | null = null;
   _didDrag = false;
   _gizmoDrag = false;                // dragging a gizmo axis
+  // Transient multiplier on top of state.renderScale, applied only while the user
+  // is actively dragging the camera. 1 = normal. It is deliberately NOT state:
+  // renderScale is the user's persistent preference and must survive an orbit
+  // untouched, so the temporary degradation rides alongside it instead of
+  // overwriting it. syncCanvasSize multiplies the two into the effective scale.
+  _interactScale = 1;
+  // Wheel zoom has no pointerup to restore on, so it restores on a debounce timer
+  // instead: every wheel event pushes the deadline out, and the scale comes back
+  // once the user has stopped scrolling for ZOOM_IDLE_MS.
+  _zoomIdleTimer: number | null = null;
   _cleanSnapshot: { renderedPreview: boolean; showOverlays: boolean; showObjectGizmos: boolean; tool: string; propsTab: string | null } | null = null;
   _renderUrl: string | null = null;
   _renderGeneration = 0;
@@ -641,6 +660,7 @@ export default class App extends React.Component<any, any> {
 
     if (this._rafId !== null) cancelAnimationFrame(this._rafId);
     if (this._renderUrl) URL.revokeObjectURL(this._renderUrl);
+    this.cancelZoomIdleRestore();
 
   }
 
@@ -755,9 +775,11 @@ export default class App extends React.Component<any, any> {
     const viewport = this.viewportRef.current;
     if (!canvas || !viewport || !this.engine) return;
     const rect = viewport.getBoundingClientRect();
-    // Backing-store size = CSS size × renderScale. CSS keeps the canvas full-size
-    // (width:100%/height:100%), so the browser upscales a smaller buffer for free.
-    const scale = this.state.renderScale || 1;
+    // Backing-store size = CSS size × renderScale × the interaction multiplier. CSS
+    // keeps the canvas full-size (width:100%/height:100%), so the browser upscales a
+    // smaller buffer for free. The floor stops a user already at 50% from landing
+    // somewhere unreadably coarse while dragging.
+    const scale = Math.max(0.25, (this.state.renderScale || 1) * this._interactScale);
     const w = Math.max(1, Math.floor(rect.width * scale));
     const h = Math.max(1, Math.floor(rect.height * scale));
     canvas.width = w;
@@ -774,6 +796,53 @@ export default class App extends React.Component<any, any> {
   // picking + the gizmo stay pixel-correct at any scale.
   setRenderScale(scale: number, profile: string = "custom") {
     this.setState({ renderScale: scale, perfProfile: profile }, () => this.syncCanvasSize());
+  }
+
+  // Temporarily render fewer pixels while the user drags the camera. Image quality
+  // matters least at exactly the moment framerate matters most, and the raymarch
+  // cost is linear in pixel count, so 0.5 is ~4x fewer rays for the duration of the
+  // drag. Standard editor behaviour (Blender does the same).
+  //
+  // Both helpers are idempotent, and that guard is the point rather than tidiness:
+  // each real transition runs engine.resize -> Application::OnResize ->
+  // SdfRenderer::CreateRenderTarget, which reallocates the render target, the
+  // object-id target, the 4-layer accumulation array and the resolve bind group.
+  // That must happen twice per drag, not once per pointermove.
+  //
+  // Neither touches state.renderScale or perfProfile: dragging the camera is not a
+  // change to the user's Render Resolution preference and must not knock their
+  // quality preset to "Custom".
+  beginInteractiveScale() {
+    if (this._interactScale !== 1) return;
+    this._interactScale = INTERACT_SCALE;
+    this.syncCanvasSize();
+  }
+  endInteractiveScale() {
+    if (this._interactScale === 1) return;
+    this._interactScale = 1;
+    this.syncCanvasSize();
+  }
+
+  // Push the wheel-zoom restore deadline out to ZOOM_IDLE_MS from now. Called on
+  // every wheel event, so a continuous scroll keeps re-arming and only the last one
+  // actually restores — the standard debounce, and the closest thing a wheel has to
+  // a pointerup.
+  armZoomIdleRestore() {
+    this.cancelZoomIdleRestore();
+    this._zoomIdleTimer = window.setTimeout(() => {
+      this._zoomIdleTimer = null;
+      // A drag that began while the wheel was still settling owns the scale now and
+      // camUp will restore it. Firing here would snap the viewport back to full
+      // resolution in the middle of an orbit — the exact thing this feature exists
+      // to avoid.
+      if (this._camDrag || this._gizmoDrag) return;
+      this.endInteractiveScale();
+    }, ZOOM_IDLE_MS);
+  }
+  cancelZoomIdleRestore() {
+    if (this._zoomIdleTimer === null) return;
+    clearTimeout(this._zoomIdleTimer);
+    this._zoomIdleTimer = null;
   }
 
   // Mouse position in render (device) pixels — the space the engine picks and
@@ -800,6 +869,10 @@ export default class App extends React.Component<any, any> {
 
   camDown = (e: React.PointerEvent) => {
     if (e.button === 2) return; // right-click → context menu
+
+    // A press supersedes a zoom that is still settling: from here the drag path owns
+    // the interaction scale and camUp is the single restore site.
+    this.cancelZoomIdleRestore();
 
     // Grabbing a gizmo axis takes priority over camera/pick. If no axis is hit
     // we fall through, so clicking elsewhere still orbits / selects as before.
@@ -832,6 +905,12 @@ export default class App extends React.Component<any, any> {
     }
 
     const wasClick = this._camDrag && !this._didDrag && e.button === 0;
+
+    // Unconditional: a no-op when the press never became a drag, and it must also
+    // run on a cancelled pointer, which is why this handler is wired to
+    // onPointerCancel too. Missing it strands the viewport at half resolution with
+    // no way back except touching the Render Resolution setting.
+    this.endInteractiveScale();
 
     this._camDrag = false;
     this._camPan = false;
@@ -880,11 +959,20 @@ export default class App extends React.Component<any, any> {
       const dy = e.clientY - this._downPos.y;
       if (Math.abs(dx) > 4 || Math.abs(dy) > 4) this._didDrag = true;
     }
+    // Drop the render resolution only once the press has become a real drag. The
+    // same 4px threshold already distinguishes orbiting from clicking, and clicking
+    // is how the user selects — degrading on pointerdown would reallocate every
+    // render target twice on each selection and flicker the viewport.
+    if (this._didDrag) this.beginInteractiveScale();
     if (this._camPan) this.engine.cameraPan(e.movementX, e.movementY);
     else this.engine.cameraOrbit(e.movementX, e.movementY);
   };
   camWheel = (e: React.WheelEvent) => {
     this.engine?.cameraZoom(-e.deltaY * 0.01);
+    // Unlike a drag there is no end event, so entering and re-arming happen on the
+    // same call and the debounce below is what eventually restores.
+    this.beginInteractiveScale();
+    this.armZoomIdleRestore();
   };
 
   snapCamera(x: number, y: number, z: number) {
@@ -3124,6 +3212,7 @@ export default class App extends React.Component<any, any> {
                 onPointerDown={this.camDown}
                 onPointerMove={this.camMove}
                 onPointerUp={this.camUp}
+                onPointerCancel={this.camUp}
                 onWheel={this.camWheel}
                 onContextMenu={(e) => {
                   e.preventDefault();

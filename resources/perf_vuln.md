@@ -9,37 +9,110 @@
 
 ## 0. TL;DR — ranked list
 
-| # | Vulnerability | Cost scaling | Expected win | Effort |
-|---|---|---|---|---|
-| P1 | Every object's exact SDF evaluated at **every march step of every ray** — no culling, no bounds | O(pixels × steps × objects) | **The fix for your symptom.** P1a tried & removed (~12–23%, see below); **P1b (per-ray mask) is the live item** | Medium |
-| DONE | Full raymarch re-rendered **every vsync, even when nothing changed** | 100% of GPU, 100% of the time | Idle GPU ≈ 0; editor feels instantly usable | Low | 
-| P3 | Shadow / AO / normal each re-run the full O(N) evaluator — secondary rays ~2–3× the primary cost | multiplies P1 | 2–3× during interaction | Low–Medium |
-| DONE | No whole-scene bounds — background & grazing rays pay full march cost | ~30–60% of pixels are background | **Landed.** `E_background_10` 300 ms → 13 ms; `D_cluster_12` ~flat, `H_ultra_48` ~flat (both as predicted) | Low |
-| P5 | Naive marcher: fixed `hitEpsilon`, no over-relaxation → more steps than necessary | multiplies everything | 20–50% fewer steps | Low–Medium |
-| P6 | Per-evaluation constant math: quaternion rotate always runs, `sin/cos` per cone eval, etc. | per object per step | 10–30% of eval cost | Low |
-| DONE | Register pressure: three 16-deep stacks in `evaluateScene` + 16-deep in `distanceCalc` cap GPU occupancy for the whole shader | global multiplier | **Landed — the biggest win in this document.** Whole suite 12.2 s → 5.7 s (**2.1×**), every scene 23–60% faster. Optimum stack depth is **8**, found by measurement; cost is *not* monotonic in size | Low |
-| P8 | Interaction-time quality not auto-scaled (resolution/shadows stay at full while orbiting); SSAA multiplies everything ×N² | UX | Smooth camera at any scene size | Low |
-| P9 | Architectural ceiling: re-evaluating the CSG per pixel per frame at all — vs. Dreams/Claybook "evaluate once per **edit**, march a cached field per frame" | O(1) in object count per frame | Hundreds of objects; the endgame | High |
-| P10 | Minor: object-id target written every frame, un-cleared accum layers, `maxDistance` generous default | small | small | Trivial |
-| P11 | No per-pixel ray interval — `tEnter` comes from one coarse whole-scene box, not from the objects themselves | O(pixels × wasted steps) | Tighter start than P4 on scattered scenes; **rasterized version scales far better than P1b's per-ray loop at high N** | Medium |
-| P12 | *(Rejected, logged)* Per-pixel hit history from the object-id target reused to seed the next frame's march | — | Real but collides with P2; superseded by P11 | — |
-
-Recommended attack order: **~~P2~~ → ~~P4~~ → ~~P7~~ (all done) → P1b (per-ray mask) → P11 (per-ray `tEnter`, then rasterized) → P8 → P3 → P5/P6 (polish) → P9 (long-term project)**.
-
-> 🔴 **Read P7 before picking the next item.** It changed what this document is about.
-> The shader is **memory-latency-bound and occupancy-limited**, not ALU-bound — proven by
-> elimination, then confirmed by a one-line constant that beat every algorithmic optimisation
-> here combined. Two consequences for everything below:
-> 1. **Optimisations that only remove arithmetic are worth little.** P1a removed a lot of
->    arithmetic and bought 12%; P7 removed no arithmetic at all and bought 110%. Re-read
->    P5/P6 in that light — both are pure-ALU wins.
-> 2. **Optimisations that add per-lane state now have a cost on the other side of the ledger.**
->    P1b's `vec4<u32>` mask is 4 more registers carried through four evaluators, spending the
->    exact resource that was just proven to be binding. Budget for that when estimating it.
+> 🔴 **Read this before picking an item — the ranking below was rebuilt after P7.**
 >
-> Also: measured run-to-run noise on this suite is **±6–10%**. Anything claiming less than
-> ~15% needs repeated runs before it is believed — which is retroactively why P1a's 12% read
-> as ambiguous and needed two follow-up experiments to interpret.
+> The shader is **memory-latency-bound and occupancy-limited, not ALU-bound.** Proven by
+> elimination (`maxSteps` ×4 changed nothing; δ→0.01 corrupted shapes without changing
+> timing; P1a removed a lot of arithmetic for 12%), then confirmed when a one-integer change
+> that removes *no* work gave **2.1× on the whole suite**.
+>
+> So the old ranking — which sorted by "how much arithmetic does this remove" — was sorting
+> on the wrong axis. The list below is re-sorted by **which bottleneck the item attacks**:
+>
+> ```
+>  cost  =  Pixels × StepsPerRay × Objects × CostPerEval
+>                                                          ← the visible product
+>        ÷  Concurrency (resident warps)
+>                                                          ← the invisible divisor
+> ```
+>
+> Occupancy is a *fifth factor that appears nowhere in the source* and multiplies everything.
+> Two consequences that reorder the whole document:
+> 1. **Pure-ALU wins are discounted.** P5 and P6 remove arithmetic on a shader that is not
+>    short of arithmetic.
+> 2. **Anything that adds per-thread state now has a cost on the other side of its ledger.**
+>    P1b's `vec4<u32>` mask is 4 more registers carried through four evaluators — spending the
+>    exact resource proven to be binding.
+>
+> Measured run-to-run noise on the suite is **±6–10%**. Anything claiming under ~15% needs
+> repeated runs before it is believed — retroactively, that is why P1a's 12% read as ambiguous.
+
+### Tier 1 — attack the latency directly (start here)
+
+These target the *proven* bottleneck: the serialized memory chain in the hot loop, and the
+per-thread state that stops the GPU from hiding it.
+
+> 🔴 **Read this before P14 or P13 — the valley is a trap, and it has now sprung twice.**
+>
+> P7 established that cost is non-monotonic in the stacks' footprint: below the notch the
+> compiler **scalarizes** (registers eaten, occupancy collapses), above it **spills to scratch**
+> (bigger allocation out of a fixed per-SM pool). Depth 8 is where neither binds.
+>
+> **P15 was implemented and reverted because it made things much worse** (§P15). It removed
+> ~22 scalars from the peak — exactly what it claimed — and the most likely reason that hurt is
+> that shrinking the arrays by ~40% flipped the compiler's spill-vs-scalarize decision, putting
+> depth 8 **packed** where depth 4 **unpacked** used to sit.
+>
+> The transferable warning: **the depth-8 constant is not independent of everything else in the
+> shader. It is the optimum for the footprint the shader had when it was measured.** Any change
+> that alters per-thread state — P15's packing, **P14's removal of ~8 live registers from
+> `distanceCalc`'s scope**, P13's wider command struct, P1b's `vec4<u32>` mask — moves the notch
+> as a side effect. So for each of them, "did it help?" and "did it help *at depth 8*?" are
+> different questions, and a bad result must be re-tested at a neighbouring bucket before it is
+> believed. A one-build check (set `kCsgStackDepthBuckets` to a single entry `{16}`, or `{4}`)
+> distinguishes "this change is bad" from "this change moved the optimum."
+
+| # | Vulnerability | Bottleneck attacked | Expected win | Effort |
+|---|---|---|---|---|
+| **P13** | 🔴 **The dependent load.** `scene_objects[cmd.operand]` cannot issue until `csg_program[i]` returns — a two-deep pointer chase per object per march step, unhideable *within* a thread | Latency (the root cause) | Fusing geometry into the command makes it one sequential prefetchable stream; removes the chain outright | **Medium** |
+| **P14** | The 80-byte object struct is **45% dead weight in `distanceCalc`** (`color`, `selected`, ids, pad = 36 B never read there) and holds 20 live registers across the whole SDF switch | Latency + occupancy | Hot/cold split to a 48-byte geometry buffer: fewer bytes, 8 fewer live registers. Renderer-side only — no data-model or `.sdfp` change | **Medium** |
+
+### Tier 2 — reduce the number of loop iterations (the structural ceiling)
+
+Tier 1 makes each iteration cheaper. These reduce how many there are — the only thing that
+changes the complexity class, and the only thing that survives a 5,000-object target.
+
+| # | Vulnerability | Bottleneck attacked | Expected win | Effort |
+|---|---|---|---|---|
+| **P1d** | The RPN program is **flat**, so `distanceCalc` walks every command on every step even for subtrees the ray is nowhere near. At 5k objects this alone is ~10⁴ iterations × ~10² steps × 1.4M pixels — the walk dominates before a single SDF runs | Objects (iteration count) | `SKIP_IF_FAR` + bottom-up node bounds makes the walk sublinear. **The only item that scales to thousands** | Medium |
+| P1b | No per-ray culling: every object evaluated on every ray | Objects | Real, but now discounted — the `vec4<u32>` mask spends registers, and it does not reduce the *walk* | Medium |
+| P11 | No per-pixel ray interval — `tEnter` comes from one coarse whole-scene box | StepsPerRay | Tighter start than P4 on scattered scenes; the rasterized version scales far better than P1b's per-ray loop at high N | Medium |
+| P3 | Shadow / AO / normal each re-run the full O(N) evaluator — on a hit pixel, usually **more** work than the primary march | Objects × Steps | 2–3× during interaction; P1d and P14 both reach it for free | Low–Medium |
+
+### Tier 3 — fewer pixels, fewer steps, cheaper steps
+
+| # | Vulnerability | Bottleneck attacked | Expected win | Effort |
+|---|---|---|---|---|
+| P8 | Interaction-time quality not auto-scaled (resolution/shadows stay at full while orbiting); SSAA multiplies everything ×N² | Pixels | Smooth camera at any scene size. **Best UX-per-hour in the document** | Low |
+| P5 | Naive marcher: fixed `hitEpsilon`, no over-relaxation | StepsPerRay | 20–50% fewer steps — but adds per-step branching and state, which now costs occupancy | Low–Medium |
+| P6 | Per-evaluation constant math: quaternion rotate always runs, `sin/cos` per cone eval | CostPerEval (ALU) | 🔻 **Discounted.** Pure ALU on a latency-bound shader; expect single digits | Low |
+| P10 | Minor: object-id target written every frame, un-cleared accum layers, generous `maxDistance` | — | small | Trivial |
+
+### Tier 4 — architecture
+
+| # | Vulnerability | Bottleneck attacked | Expected win | Effort |
+|---|---|---|---|---|
+| P9 | Re-evaluating the CSG per pixel per frame **at all** — vs. Dreams/Claybook "evaluate once per *edit*, march a cached field per frame" | All of them | O(1) in object count per frame. The real answer at thousands of objects | High |
+
+### Landed
+
+| # | What | Result |
+|---|---|---|
+| ~~P2~~ | Full raymarch re-rendered every vsync even when nothing changed | Idle GPU ≈ 0 (`FrameScheduler`, §6a of CLAUDE.md) |
+| ~~P4~~ | No whole-scene bounds — background & grazing rays paid full march cost | `E_background_10` 300 → 13 ms; dense scenes flat, as predicted |
+| ~~P7~~ | Register pressure from the RPN stacks | **Suite 12.2 s → 5.7 s (2.1×)**, every scene 23–60%. Optimum depth **8**, found by measurement; cost is *not* monotonic in size |
+| ~~P1a~~ | Per-object proxy substitution — built, measured at ~12%, **removed** | Its CPU half is retained and staged for P1b. Proved the shader is not ALU-bound |
+| ~~P15~~ | Pack `evaluateScene`'s colour stack (`array<vec3f,N>` → `array<u32,N>`) — built, **much worse**, reverted | Removed ~22 scalars and lost performance. Best explanation: it moved the P7 notch. **The valley is now a known hazard for every remaining footprint change** |
+| ~~P12~~ | *(Rejected, logged)* Per-pixel hit history reused to seed the next frame | Collides with P2; superseded by P11 |
+
+**Recommended attack order:**
+**P14 → P13 → P1d → P8 → P11/P1b → P5 → P9.**
+
+P14 before P13 because it is renderer-side only — no change to `CsgCommand`, the
+GPU contract, or the id spaces — so it is the cheaper of the two structural memory fixes and
+its result tells you how much of the win is bytes versus dependency before you commit to P13.
+**P15 previously led this list and no longer does** — see the box above; it was Low effort and
+a direct continuation of P7's mechanism, and it still lost.
 
 > **The organising idea for P1/P11 (established while designing them — read this before either).**
 > The two attack *different factors of the same product*, and are not substitutes:
@@ -825,6 +898,182 @@ it is catastrophic when the thing is *pixel-sized*.
 
 ---
 
+## P13 — The dependent load: a two-deep pointer chase in the hottest loop  🔴 the root cause
+
+**Where:** [sdf_core.wgsl:168-176](assets/shaders/sdf_core.wgsl#L168-L176), inside `distanceCalc`:
+
+```wgsl
+for (var i = 0u; i < count; i++) {
+    let cmd = csg_program[i];                    // load 1: 16 B, sequential, uniform
+    if (cmd.cmd_type == 0) {
+        let obj = scene_objects[cmd.operand];    // load 2: 80 B, DEPENDENT on load 1
+```
+
+The two loads are not equal:
+
+- **Load 1 is nearly free.** `i` is the loop counter — identical across every lane, sequential
+  across iterations. The hardware broadcasts one address to the warp, and the program (a few KB)
+  stays resident in L1.
+- **Load 2 is the bottleneck.** Its *address* is `cmd.operand`, a value that was itself just
+  loaded. The memory unit cannot begin issuing it until load 1 returns. **Two serialized round
+  trips per object per march step, with zero instruction-level parallelism available to fill
+  them** — the only way to hide it is to run a different warp, which is exactly why P7's
+  occupancy fix was worth 2.1×.
+
+**Latency, not bandwidth — and the distinction decides the fix.** At current scene sizes the
+whole dataset is ~4 KB and lives in L1 permanently; you are not moving much data. You are paying
+~25 cycles, twice, in a chain. So the fix that matters is the one that **breaks the dependency**,
+not the one that moves fewer bytes (that is P14).
+
+**Solution — fuse the geometry into the command.** Widen `CsgCommand` to carry the primitive's
+geometry inline instead of an index into a second buffer:
+
+```
+before:  csg_program[i] → operand → scene_objects[operand]     2 loads, serialized
+after:   csg_program[i]                                        1 load, streaming
+```
+
+One sequential, prefetchable stream and **no pointer chase at all**. At 5k objects it is also
+better for cache: ~320 KB streamed linearly beats random access into a 400 KB array.
+
+Costs and cautions:
+- The program buffer grows (16 B → ~64 B per PUSH). An object referenced by two nodes is
+  duplicated — rare, and correctness is unaffected.
+- The program must be rebuilt when an object *moves*, not just when the tree changes. Today
+  `SetObjectPosition` → `OnSceneChanged` → `RefreshSceneBuffer` already recompiles, so this is
+  free — but `OnCsgChanged`'s cheaper path would need auditing.
+- `evaluateScene` still needs `color`/`selected`, and the pick target still writes
+  `cmd.operand` as the array index (§4). Both keep the indexed path; both run once per pixel.
+- ⚠️ Trades a small dependent load for a much larger sequential one. Could surprise in either
+  direction — this is a measure-it item, not a certainty.
+
+---
+
+## P14 — The object struct is 45% dead weight in the hot path
+
+**Where:** [SdfObjectData.h](src/scene/data/SdfObjectData.h) / the `SdfObject` struct in
+[sdf_core.wgsl:1-13](assets/shaders/sdf_core.wgsl#L1-L13). `distanceCalc` reads all 80 bytes
+and uses 44:
+
+| field | bytes | used by `distanceCalc`? |
+|---|---|---|
+| `obj_type` | 4 | ✅ |
+| `position.xyz` | 12 | ✅ |
+| `rotation` | 16 | ✅ |
+| `size.xyz` | 12 | ✅ |
+| `color` | 16 | ❌ — `evaluateScene` only |
+| `selected` | 4 | ❌ — `evaluateScene` only |
+| `object_id`, `parent_id` | 8 | ❌ — never read by either |
+| `position.w`, `size.w` | 8 | ❌ — staged (§P1) / reserved |
+
+Two separate costs, both now known to matter:
+
+1. **36 wasted bytes** fetched per object per march step.
+2. 🔴 **`let obj = scene_objects[...]` holds all 80 bytes — 20 scalars — live across the entire
+   SDF switch.** P7 proved this shader is acutely sensitive to live-register count. That is
+   ~8 registers of pure waste in the hottest scope in the program.
+
+**Solution — hot/cold split (AoS → SoA).** Geometry (`type`, `position`, `rotation`, `size`) into
+one packed 48-byte buffer that `distanceCalc` reads; shading (`color`, `selected`, ids) into a
+second buffer only `evaluateScene` touches.
+
+The property that makes this cheap: **it is a renderer-side transformation only.**
+`SdfObjectData` stays the CPU and `.sdfp` struct; `SdfRenderer::UpdateSceneBuffer` builds two
+packed arrays from it. No change to the data model, the serialization format (§12), or the three
+id spaces (§4). Cost is one extra binding in the scene bind-group layout and a little CPU work
+per refresh — once per edit, irrelevant at any object count.
+
+**Do this before P13.** Same class of fix, strictly less blast radius, and its result tells you
+how much of the win is *bytes* versus *dependency* before you commit to changing the GPU
+command contract.
+
+---
+
+## P15 — `evaluateScene`'s register footprint is charged to every thread  ⛔ TRIED, REVERTED
+
+> ### ⚠️ P15 was implemented exactly as specified below and **made performance much worse.**
+> ### The code was reverted. Read this before re-attempting — and before attempting P14 or P13.
+>
+> **What was built:** the ten-line change described below. `array<vec3f, CSG_STACK_DEPTH>` →
+> `array<u32, CSG_STACK_DEPTH>`, packed with `pack4x8unorm` at the push site, unpacked only
+> inside the smooth-blend branch (the sole place colour arithmetic happens — hard union /
+> subtract / intersection just *select* an operand, so they never need the unpacked value) and
+> once at the exit. `cA`/`cB`/`c` stayed packed as locals too, so the peak dropped by ~22
+> scalars rather than the 16 estimated below.
+>
+> **Result: a large regression across the suite**, at `kCsgStackDepthBuckets[0] = 8`.
+> It was not close, and it was not inside the ±6–10% noise floor.
+>
+> **The best explanation — and the reason this is worth more than the optimisation was:**
+> the change did precisely what it set out to do, and that is *why* it lost. P7 showed the
+> compiler **spills the stacks to scratch at depth 8**, which is the good regime: scratch costs
+> almost no registers, occupancy stays high, and the L1 latency is repaid many times over by the
+> extra resident warps. Depth 4 was slower because the arrays were small enough that the compiler
+> **scalarized** instead — all N slots in registers, every access a `select` chain, every write
+> conditionally rewriting all N. Shrinking the arrays ~40% is a large input to exactly that
+> spill-vs-scalarize decision. **The most likely story is that depth 8 packed now sits where
+> depth 4 unpacked sat: we moved along the valley rather than down it.**
+>
+> **The experiment that would settle it, and is UNRUN (one build).** Re-apply the packing and set
+> `kCsgStackDepthBuckets` to the single entry `{16}`.
+> - packed+16 **fast** ⇒ the notch moved; packing is fine, it was paired with the wrong depth,
+>   and P15 is recoverable at a different bucket.
+> - packed+16 **also slow** ⇒ packing itself is the problem regardless of depth, and P15 is
+>   closed for good.
+>
+> It was skipped as a deliberate scheduling call, not because the question is uninteresting —
+> P14 was judged the better use of the next build. **If P14 reads worse than expected, this is
+> the first thing to suspect**, because P14 removes ~8 live registers from `distanceCalc` and
+> therefore perturbs the same decision.
+>
+> **The reusable finding:** the depth-8 constant is **not independent of the rest of the shader.**
+> It is the optimum for the footprint the shader had when it was measured. Treat it as a
+> *coupled* parameter from here on: after any change to per-thread state, "did it help?" and
+> "did it help at depth 8?" are different questions, and only the second one was asked here.
+>
+> Everything below is the original (still correct) reasoning about *why* the footprint matters.
+> The mechanism is real — `evaluateScene` genuinely does charge every thread for state that only
+> hit pixels use. What is now known is that shrinking that state is not automatically a win.
+
+**Where:** [sdf_core.wgsl:301-303](assets/shaders/sdf_core.wgsl#L301-L303):
+
+```wgsl
+var stack      : array<f32,   CSG_STACK_DEPTH>;   // 1 scalar/slot
+var stackColor : array<vec3f, CSG_STACK_DEPTH>;   // 3 scalars/slot  ← the target
+var stackId    : array<u32,   CSG_STACK_DEPTH>;   // 1 scalar/slot
+```
+
+**Why this is the leftover half of P7.** Three of the four RPN stacks live in `evaluateScene`,
+and they are **80 of the shader's ~96 stack scalars** — five of every six. Yet `evaluateScene`
+is called exactly **once per hit pixel** ([main.wgsl:160](assets/shaders/main.wgsl#L160)).
+
+Its *runtime* is irrelevant. Its *footprint* is not, because **register allocation is static,
+per-shader, and decided before the shader runs.** `fs_main` is compiled as one entry point;
+everything reachable from it is allocated out of a single budget sized to the worst case in the
+call graph, handed to each thread at launch, and never reallocated on function entry or exit.
+So a background pixel that never calls `evaluateScene` still reserved 80 scalars for it — and
+that is 30–60% of the frame.
+
+**Solution — pack the colour stack.** `array<vec3f, N>` → `array<u32, N>` via
+`pack4x8unorm` / `unpack4x8unorm`. Per slot: 5 scalars → 3. At depth 8 that removes 16 scalars
+from the shader's peak, on top of P7's 48.
+
+The colour precision loss is 8 bits per channel, which is exactly what the swapchain stores
+anyway. The pack/unpack cost lands entirely in the once-per-pixel function.
+
+**Effort: Low** — roughly ten lines, all inside `evaluateScene`.
+
+⚠️ **Re-measure the depth valley afterwards** (§P7). Changing the footprint may move the notch;
+`4 / 8 / 16` on D, G and H is a three-build check, and `kCsgStackDepthBuckets` carries the table.
+
+> 🔴 **This last warning was written, published, and then not acted on — and it is exactly what
+> killed the item.** The change was measured at depth 8 only, the result was bad, and the item was
+> reverted before the notch was re-checked. The warning was correct; the process failed to honour
+> it. If any future footprint change is measured at a single depth, the result is not
+> interpretable — it confounds "the change is bad" with "the change moved the optimum."
+
+---
+
 ## Suggested roadmap
 
 | Phase | Items | Outcome |
@@ -832,10 +1081,11 @@ it is catastrophic when the thing is *pixel-sized*.
 | ~~1~~ ✅ | ~~P2 (render-on-demand)~~, ~~P4 (scene AABB clip)~~ — both landed. P8.1 / P3.2 / P3.3 still open | Idle cost ≈ 0; background rays free (`E` 300 → 13 ms) |
 | ~~1.5~~ ⛔ | ~~P1a (proxy substitution)~~ — built, measured at ~12–23%, **removed**. CPU half retained and staged for P1b | Proved the shader is **not ALU-bound**; promoted P7 by evidence |
 | ~~1.75~~ ✅ | ~~**P7 (RPN stack depth)**~~ — one constant, 16 → 8, plus exact-depth computation, Sethi–Ullman sibling ordering and per-depth pipeline variants | **Suite 2.1×.** Confirmed the shader is occupancy-limited, and that cost is non-monotonic in stack size |
-| 2 — the real fix | **P1b (per-ray bitmask pruning)** — attacks the `Objects` factor and the dependent object load. Then **P11a** (per-ray `min(tEnter)`) — attacks the `StepsPerRay` factor | Cost tracks *visible* objects; the 5→10 cliff gone. Also decides whether masking helps **at all** — if not, go straight to P7 |
-| 2.5 — scale it | **P11b** (rasterized depth prepass) if P11a pays, then **P1c** (tile compute prepass) which produces the mask *and* the interval in one pass and removes P1b's warp-divergence ceiling | The two lines converge; culling cost drops ~256× |
-| 3 — polish | P5 (adaptive epsilon + over-relaxation), P6 (precompute constants) — **both pure-ALU wins, so discount them: P1a proved arithmetic is not the constraint**. P7's remaining item (pack the colour stack) is the better-odds one | modest |
-| 4 — endgame | P9.1 (global distance volume hybrid), optionally P1d (hierarchical node bounds) first | Hundreds of objects, Dreams-direction architecture |
+| ~~2.0~~ ⛔ | ~~**P15** (pack the colour stack)~~ — built, **much worse**, reverted. The packed+depth-16 re-test is unrun | Established that the depth-8 optimum is **coupled** to the shader's footprint, so every remaining Tier-1 item must be measured at ≥2 depths |
+| **2 — finish the latency work** | **P14** (hot/cold split the object buffer — Medium, renderer-side only), then **P13** (fuse geometry into the command — Medium, changes the GPU command contract) | Attacks the *proven* bottleneck: the dependent 80-byte load that survived P1a. 🔴 Both perturb the P7 valley — measure each at depth 8 **and** one neighbouring bucket |
+| 3 — reduce the iteration count | **P1d** (`SKIP_IF_FAR` + bottom-up node bounds) — the only item that changes the complexity class and the only one that survives a 5,000-object target. Then P11a/P11b and P1b, converging on P1c's tile prepass | Cost tracks *visible* geometry rather than total scene size |
+| 4 — UX and polish | P8 (dynamic resolution + shadows/AO off during interaction — **best UX-per-hour in this document**), P3.2/3.3, then P5. **P6 is discounted**: pure ALU on a shader proven not to be ALU-bound | Smooth camera at any scene size |
+| 5 — endgame | P9.1 (global distance volume hybrid) — the real answer if 5,000 objects is a firm target, since even P1d only makes the walk sublinear rather than removing it | Thousands of objects, Dreams/Claybook-direction architecture |
 
 A note on process: land **one phase at a time and measure** (fixed benchmark scene,
 frame-time in **ms**, not FPS — the loop is rAF-driven so frame *rate* saturates at 60 and can
@@ -867,7 +1117,14 @@ Two process lessons this pass produced, worth more than either optimisation:
 - **An optimisation can succeed at its stated goal and still be a pessimisation.** Sibling
   reordering worked perfectly — it drove scenes from depth 6 to depth 3 — and that is precisely
   why they got slower, because 3 rounds into a worse bucket than 6. "Did it do what I intended?"
-  and "did it help?" are different questions.
+  and "did it help?" are different questions. **P15 is the second instance of this exact
+  shape**: it removed ~22 scalars as designed, and losing them is the best available explanation
+  for why it lost. Twice now, on this shader, *reducing per-thread state made things worse.*
+- **A tuned constant is a coupled parameter, not a fixed one.** `CSG_STACK_DEPTH = 8` is the
+  optimum *for the footprint the shader had when it was measured*. Any change to per-thread state
+  moves the optimum with it. So a footprint change measured at one depth is uninterpretable — it
+  confounds "the change is bad" with "the change moved the optimum." Budget two builds, not one,
+  for every remaining Tier-1 item.
 
 ## References
 
