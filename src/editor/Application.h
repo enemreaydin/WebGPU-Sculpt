@@ -2,6 +2,7 @@
 #include <webgpu/webgpu.hpp>
 #include <SDL3/SDL.h>
 #include <array>
+#include <chrono>
 #include <filesystem>
 #include <string>
 
@@ -271,6 +272,18 @@ private:
     // viewport sync and the export's one-off globals, so the two contexts can
     // never drift in how they map settings onto the uniform.
     static void ApplyQuality(const QualitySettings& q, GlobalsData& g);
+    // Temporarily switch off the two optional secondary marches while the user is
+    // actively dragging the camera or a gizmo. Applied to the per-frame globals
+    // only, AFTER ApplyQuality — never written back into QualitySettings, so the
+    // user's Shadows/AO toggles and their preset survive an orbit untouched.
+    static void ApplyInteractionQuality(GlobalsData& g);
+    // True while the user should be considered mid-interaction. NOT the same as
+    // "the camera moved this frame": a gesture arrives as discrete events with
+    // gaps between them (a paused drag, the space between wheel notches), and
+    // treating every gap as idle makes full-quality frames land in the middle of
+    // the gesture — the most expensive frame at the worst possible moment. So
+    // camera motion starts a cooldown instead of gating directly.
+    bool InteractionActive() const;
     // The QualitySettings instance a QualityContext id refers to (viewport for
     // any unknown id, so a bad call degrades to the safe/cheap one).
     QualitySettings& QualityFor(int context);
@@ -317,6 +330,17 @@ private:
     // finishes, so MainLoop has to notice the change itself.
     bool m_CameraWasMoving = false;
     int  m_LastExportState = 0;
+
+    // How long after the last camera movement the viewport keeps rendering at
+    // interaction quality. Covers the gaps inside a gesture; the cost of being
+    // wrong is one second of missing contact shading, never a wrong image.
+    static constexpr double kInteractionIdleSeconds = 1.0;
+    // Default-constructed to the clock's epoch, so a freshly started app reads as
+    // "last moved a very long time ago" and never starts out degraded.
+    std::chrono::steady_clock::time_point m_LastCameraMotion{};
+    // The cooldown expiring is a third transition with no setter behind it, so
+    // MainLoop detects that edge too (see the m_CameraWasMoving comment above).
+    bool m_WasInteracting = false;
 
     TransformTransaction m_TransformTransaction;
 

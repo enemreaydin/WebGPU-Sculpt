@@ -89,9 +89,28 @@ void Application::MainLoop() {
     // Must sit above the ShouldRender guard, or the request would never be made.
     if (cameraTransition.IsActive()) RequestRedraw();
 
+    // Falling edge interacting -> idle, i.e. the interaction cooldown expiring.
+    // This is the same class of problem as the camera and export edges: a
+    // transition nobody calls a setter for. It is worse than those, though, because
+    // it happens on a WALL CLOCK a whole second after the last input — by which
+    // time the scheduler has long since drained and MainLoop is returning early.
+    // So it must sit ABOVE the ShouldRender guard: the entire point is to notice
+    // the expiry on a vsync where nothing else asked for a frame, and schedule the
+    // one that repaints with shadows and AO back on. Below the guard it would never
+    // run, and the viewport would sit at interaction quality until an unrelated
+    // edit happened to invalidate it.
+    const bool interacting = InteractionActive();
+    if (m_WasInteracting && !interacting) RequestRedraw();
+    m_WasInteracting = interacting;
+
     if (!frameScheduler.ShouldRender()) {return;}
 
     bool isCameraMoving = UpdateCamera();
+    // Stamp the gesture clock, don't gate on the per-frame result. UpdateCamera
+    // reports whether the camera moved on THIS frame, so a pause mid-drag or the
+    // gap between two wheel notches reads as idle and would let a full-quality
+    // frame through in the middle of the gesture.
+    if (isCameraMoving) m_LastCameraMotion = std::chrono::steady_clock::now();
     // Falling edge camera-moving -> idle. A camera gesture arrives as a stream of
     // discrete input events, so the last one only ever schedules the frame that
     // draws it; nothing schedules the run that accumulates the remaining samples
@@ -114,6 +133,24 @@ void Application::MainLoop() {
 
     // Push the user's render settings into the GPU uniform.
     SyncRenderGlobals();
+
+    // Interaction-time degradation. A hit pixel's secondary work — calcSoftShadow
+    // (up to shadowMaxSteps full-scene evaluations) plus calcAO (aoSamples more) —
+    // usually costs more than its primary march, and both are pure image quality:
+    // worth the least at exactly the moment framerate is worth the most. Must sit
+    // after SyncRenderGlobals, which has just written the user's real budget, so
+    // the override wins for this frame and this frame only.
+    //
+    // Nothing has to restore it: globals is rebuilt from appSettings every frame,
+    // so the override evaporates as soon as the condition is false. What DOES have
+    // to be arranged is that a frame gets drawn at that moment — the cooldown edge
+    // above (camera) and the gizmo entry points (drag release) are what schedule it.
+    //
+    // Re-evaluated rather than reusing `interacting` from above the guard: the
+    // stamp landed in between, so this is the value for the frame being drawn.
+    if (InteractionActive()) {
+        ApplyInteractionQuality(globals);
+    }
 
     // ---- Temporal accumulation bookkeeping (CLAUDE.md 7a) ------------------
     // The layers must only ever be averaged with each other while they are all
@@ -1772,6 +1809,32 @@ void Application::ApplyQuality(const QualitySettings& q, GlobalsData& g) {
     g.shadowsEnabled    = q.shadowsEnabled ? 1 : 0;
     g.aoEnabled         = q.aoEnabled ? 1 : 0;
     g.taaEnabled        = q.taaEnabled ? 1 : 0;
+}
+
+// The interaction-time override, kept next to ApplyQuality because it is the only
+// other thing allowed to write these fields. It takes no QualitySettings on
+// purpose: there is no "interaction budget" to configure or persist, and adding
+// one would put a third quality context (viewport/export/interaction) into a
+// system whose whole point is that there are exactly two.
+//
+// Both fallbacks are physically neutral — the shader substitutes shadow = 1.0 and
+// ao = 1.0 — so the image loses contact shading, not correctness. The branches are
+// on uniforms, i.e. coherent across every pixel, so "off" genuinely skips the loop
+// rather than executing both sides.
+void Application::ApplyInteractionQuality(GlobalsData& g) {
+    g.shadowsEnabled = 0;
+    g.aoEnabled      = 0;
+}
+
+// A gizmo drag is a held state — the controller knows the button is down even on a
+// frame where the pointer did not move — so it needs no cooldown and shadows come
+// back the instant it is released. Camera motion has no such flag: it is inferred
+// per frame from input deltas, so it gets the timer instead.
+bool Application::InteractionActive() const {
+    if (IsGizmoDragging()) return true;
+    const double sinceMotion = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - m_LastCameraMotion).count();
+    return sinceMotion < kInteractionIdleSeconds;
 }
 
 QualitySettings& Application::QualityFor(int context) {
