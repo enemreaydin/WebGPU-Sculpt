@@ -239,3 +239,125 @@ SceneAABB SceneBounds::Compute(const std::vector<SdfObjectData>& objects, const 
 
     return bounds;
 }
+
+namespace {
+
+void ExpandToInclude(SceneAABB& target, const SceneAABB& other)
+{
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        target.minBoxDistances[axis] = std::min(target.minBoxDistances[axis], other.minBoxDistances[axis]);
+        target.maxBoxDistances[axis] = std::max(target.maxBoxDistances[axis], other.maxBoxDistances[axis]);
+    }
+}
+
+// Post-order: a node's box is the union of its children's, so children must be
+// finished first. Recursion mirrors CsgTree::CompileNode rather than iterating
+// the node vector, because only a walk from the root establishes that order —
+// and because an alive-but-orphaned node must NOT inflate any ancestor's box.
+//
+// Boolean type is deliberately ignored. Subtract only removes and Intersection
+// only keeps what both operands cover, so bounding every operator by the union
+// of its children is a superset in all three cases. A tighter rule (Subtract =
+// base child only, Intersection = smallest child) is a real future win but a
+// separate change: it must hold for the RUNTIME skip test too, and erring large
+// only ever costs march steps.
+void AccumulateNodeBounds(const std::vector<SdfObjectData>& objects,
+                          const std::vector<CsgNode>& nodes,
+                          const std::unordered_map<int32_t, size_t>& objectIdToIndex,
+                          int32_t nodeIndex,
+                          std::vector<SceneAABB>& out)
+{
+    if (nodeIndex < 0 || static_cast<size_t>(nodeIndex) >= nodes.size()) return;
+
+    const CsgNode& node = nodes[static_cast<size_t>(nodeIndex)];
+    if (!node.alive) return;
+
+    SceneAABB box;   // starts inverted == empty
+
+    if (node.type == CsgNodeType::Primitive)
+    {
+        const auto it = objectIdToIndex.find(node.objectId);
+        if (it != objectIdToIndex.end())
+        {
+            const SdfObjectData& object = objects[it->second];
+            const float radius = SceneBounds::EnclosingRadius(
+                static_cast<SdfObjectType>(object.type), object.size);
+
+            // Same non-finite guards as Compute(), and for the same reason: a
+            // corrupt .sdfp blits these floats straight off disk and load-time
+            // validation checks CSG links only. Leaving the box empty here makes
+            // the subtree unskippable, which is the safe direction.
+            const bool finite = std::isfinite(radius) && radius >= 0.0f
+                && std::isfinite(object.position[0])
+                && std::isfinite(object.position[1])
+                && std::isfinite(object.position[2]);
+            if (finite)
+            {
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    box.minBoxDistances[axis] = object.position[axis] - radius;
+                    box.maxBoxDistances[axis] = object.position[axis] + radius;
+                }
+            }
+        }
+    }
+    else
+    {
+        for (int32_t child = node.firstChild; child != -1; child = nodes[static_cast<size_t>(child)].nextSibling)
+        {
+            AccumulateNodeBounds(objects, nodes, objectIdToIndex, child, out);
+            ExpandToInclude(box, out[static_cast<size_t>(child)]);
+        }
+    }
+
+    out[static_cast<size_t>(nodeIndex)] = box;
+}
+
+}   // namespace
+
+NodeBoundsTable SceneBounds::ComputeNodeBounds(const std::vector<SdfObjectData>& objects, const CsgTree& tree)
+{
+    const std::vector<CsgNode>& nodes = tree.GetNodes();
+
+    NodeBoundsTable table;
+    table.byNodeIndex.assign(nodes.size(), SceneAABB{});
+
+    std::unordered_map<int32_t, size_t> objectIdToIndex;
+    objectIdToIndex.reserve(objects.size());
+    for (size_t i = 0; i < objects.size(); ++i)
+        objectIdToIndex[objects[i].objectId] = i;
+
+    // delta must exceed the widest smooth blend ANYWHERE in the tree, not just
+    // inside the subtree being bounded: a blend is a property of the operator, and
+    // an ancestor's blend can push this subtree's contribution outward. Taking the
+    // global max is the conservative reading and matches Compute()'s proxyMargin,
+    // which is what keeps the CPU box and the shader's skip threshold consistent.
+    float maxBlendRadius = 0.0f;
+    for (const CsgNode& node : nodes)
+    {
+        if (!node.alive) continue;
+        if (node.blendMode == BlendMode::Smooth &&
+            std::isfinite(node.blendRadius) && node.blendRadius > 0.0f)
+        {
+            maxBlendRadius = std::max(maxBlendRadius, node.blendRadius);
+        }
+    }
+    table.margin = maxBlendRadius + kProxySafetyDistance;
+
+    AccumulateNodeBounds(objects, nodes, objectIdToIndex, tree.GetRoot(), table.byNodeIndex);
+
+    // Inflate after the union, not per primitive: doing it per leaf would compound
+    // the margin once per tree level on the way up.
+    for (SceneAABB& box : table.byNodeIndex)
+    {
+        if (box.IsEmpty()) continue;   // inverted stays inverted; see SceneAABB
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            box.minBoxDistances[axis] -= table.margin;
+            box.maxBoxDistances[axis] += table.margin;
+        }
+    }
+
+    return table;
+}

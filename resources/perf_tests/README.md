@@ -25,6 +25,38 @@ off-screen objects are visible, defeating the test).
 | `G_correctness_17.sdfp` | 17 | **Correctness guard, not a speed test.** Every clipping trap that sank the previous culling attempt: rotated primitives of *every* exotic type, hard + smooth subtract, intersection, a k=0.6 smooth chain, roundness modifier, ~6-deep nesting (also guards any RPN-stack shrink). | The image must look **pixel-identical** before and after every optimization. Any missing/eaten geometry here = a conservative-bound bug. Keep a screenshot as reference. |
 | `H_ultra_48.sdfp` | 48 | **Everything at once:** smooth blob + subtract, spread grid, floor + shadow floaters, rotated exotics in a group, 16 off-screen objects. | Your headline before/after number. Expect a slideshow today; after Phases 1–2 of the roadmap it should be interactive. |
 
+## Scale scenes (P1d — hierarchical subtree skipping)
+
+The eight files above top out at 48 objects, where an O(N)-per-march-step
+program walk is invisible. These four exist to make it visible. All are a
+**flat hard Union** under the root — the realistic shape of a large scene, and
+the one with no hierarchy to exploit: a flat union peaks at RPN stack depth 2
+for any child count, so `distanceCalc` walks all 2N−1 commands at *every* march
+step.
+
+| File | Objects | Shape | Why |
+|---|---|---|---|
+| `S_wide_250.sdfp` | 250 | Ball-shaped lattice cloud, spacing 1.1, radius ~0.22 (~2% volume fill) | **Load this one first.** Safe warm-up, and the smallest point on the scaling curve. |
+| `S_wide_1000.sdfp` | 1000 | Same density, larger cloud | Mid point. |
+| `S_wide_4000.sdfp` | 4000 | Same density, larger still | **Headline.** Constant local density means most objects are far from any given ray — the case hierarchical skipping wins biggest. |
+| `S_dense_1000.sdfp` | 1000 | 1000 objects squeezed into roughly the `S_wide_250` volume | **Honest worst case.** Objects sit near every ray, so little can be skipped; this proves the traversal overhead doesn't cost more than it saves. |
+
+Non-spherical primitives are randomly rotated on purpose: an enclosing sphere
+is rotation-invariant, so rotation must not change any bound P1d computes.
+Free regression check.
+
+🔴 **Watch the GPU watchdog.** These scenes are far heavier than anything else
+in the suite. A frame that runs longer than the OS TDR window (Windows default
+**2 s**) gets the display driver reset under it and loses the WebGPU device —
+the canvas goes blank and you have to reload. Before opening `S_wide_4000`,
+drop **Render Resolution to 50%** and turn **Shadows and AO off** (Properties →
+Render). Work up from `S_wide_250`. If a scene does kill the device, that is
+itself a data point, not a bug — note it and measure the next size down.
+
+Read **GPU frame time (ms)**, not FPS: at these sizes the frame rate is far
+below vsync so FPS is readable, but ms stays comparable after the optimisation
+lands and the scene goes fast.
+
 ## Measurement procedure
 
 1. Same machine, same browser, laptop plugged in, same window size every run
@@ -48,6 +80,15 @@ off-screen objects are visible, defeating the test).
 | F_shadow_12 (shadows off) | 11 | | |
 | G_correctness_17 | — | — | image identical? Y/N |
 | H_ultra_48 | 1 | | headline number |
+
+### P1d scale baseline (record GPU **ms**, note the settings used)
+
+| Scene | Res % | Shadows/AO | ms before | ms after | Stack depth printed |
+|---|---|---|---|---|---|
+| S_wide_250 | | | | | 2 → |
+| S_wide_1000 | | | | | 2 → |
+| S_wide_4000 | | | | | 2 → |
+| S_dense_1000 | | | | | 2 → |
 
 ## Uncapping the 60 FPS limit
 

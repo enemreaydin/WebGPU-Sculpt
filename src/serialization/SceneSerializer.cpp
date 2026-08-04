@@ -17,10 +17,19 @@ CsgTree::CompiledProgram SceneSerializer::PrepareSceneForUpload()
     SceneBounds::WriteEnclosingRadii(sceneManager.GetObjects(), sceneManager.GetCsgTree());
     sceneBounds = SceneBounds::Compute(sceneManager.GetObjects(), sceneManager.GetCsgTree());
 
+    // Per-subtree boxes, from the same objects and the same tree the program is
+    // about to be compiled from. Recomputed here rather than cached because every
+    // input to it (positions, sizes, tree shape, blend radii) can change on any
+    // edit that reaches this function — and a stale box would regroup the program
+    // around geometry that has moved.
+    const NodeBoundsTable nodeBounds =
+        SceneBounds::ComputeNodeBounds(sceneManager.GetObjects(), sceneManager.GetCsgTree());
+
     // objectId -> current array index, then the CSG tree compiled into the RPN
-    // program the shader interprets.
+    // program the shader interprets. nodeBounds lets the compiler regroup wide flat
+    // operation nodes into a spatial hierarchy (P1d) — see CsgTree::CompileToRPN.
     const auto objectIdMap = SceneManager::BuildObjectIdMap(sceneManager.GetObjects());
-    CsgTree::CompiledProgram compiled = sceneManager.GetCsgTree().CompileToRPN(objectIdMap);
+    CsgTree::CompiledProgram compiled = sceneManager.GetCsgTree().CompileToRPN(objectIdMap, &nodeBounds);
 
     // Size the shader's RPN stacks to what this program actually needs. Must happen
     // before the upload below, so the pipeline and the program it will interpret are
@@ -36,7 +45,10 @@ CsgTree::CompiledProgram SceneSerializer::PrepareSceneForUpload()
         csgStackDepth = compiled.requiredStackDepth;
         std::cout << "[CSG] program " << compiled.commands.size()
                   << " cmds, required stack depth " << csgStackDepth
-                  << ", shader variant " << renderer.GetActiveCsgStackDepth() << "\n";
+                  << ", shader variant " << renderer.GetActiveCsgStackDepth()
+                  << ", skip nodes " << compiled.skipNodeCount
+                  << " (" << (compiled.skipNodeCount * kCsgSkipHeaderCommands)
+                  << " cmds overhead)\n";
     }
 
     return compiled;

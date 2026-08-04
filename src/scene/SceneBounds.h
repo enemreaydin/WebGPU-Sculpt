@@ -27,6 +27,33 @@ struct SceneAABB {
     bool IsEmpty() const;
 };
 
+// One AABB per CSG node: the world-space bound of everything THAT SUBTREE can
+// draw. Scene-wide Compute() above is exactly the root entry of this table.
+//
+// Indexed by node VECTOR INDEX, not nodeId — the compiler walks indices, and a
+// nodeId lookup per node would make the build O(nodes^2). Nodes that are dead,
+// unreachable from the root, or bound nothing keep the inverted "empty" box.
+//
+// Used by CsgTree::CompileToRPN to regroup a wide flat operation node into a
+// spatial hierarchy, so the emitted program can carry per-subtree skip bounds
+// (P1d). A missing or wrong entry can only cost performance, never correctness:
+// it feeds the ORDER children are emitted in and the bounds a runtime skip test
+// consults, and a skip whose box is too large simply never fires.
+struct NodeBoundsTable
+{
+    std::vector<SceneAABB> byNodeIndex;
+
+    // delta, already folded into every box above. Kept alongside because the
+    // shader-side skip threshold must use the same number the boxes were
+    // inflated by, and deriving it twice is how the two drift apart.
+    float margin = 0.0f;
+
+    bool InRange(int32_t nodeIndex) const
+    {
+        return nodeIndex >= 0 && static_cast<size_t>(nodeIndex) < byNodeIndex.size();
+    }
+};
+
 namespace SceneBounds {
     // Radius of a ball centred on position.xyz that fully contains the primitive.
     // Rotation-invariant by construction, and already carries its safety factor.
@@ -34,6 +61,10 @@ namespace SceneBounds {
 
     // World-space bound of everything the CSG program can draw, plus proxyMargin.
     SceneAABB Compute(const std::vector<SdfObjectData>& objects, const CsgTree& tree);
+
+    // Per-subtree version of Compute(). One post-order walk from the root, so it
+    // is O(nodes) for the whole table rather than O(nodes) per node.
+    NodeBoundsTable ComputeNodeBounds(const std::vector<SdfObjectData>& objects, const CsgTree& tree);
 
     void WriteEnclosingRadii(std::vector<SdfObjectData>& objects, const CsgTree& tree);
 }

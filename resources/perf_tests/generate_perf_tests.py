@@ -14,6 +14,7 @@ Run:  python generate_perf_tests.py   (any Python 3; emsdk's bundled one works:
 
 import math
 import os
+import random
 import struct
 
 OUT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -365,6 +366,92 @@ def scene_g():
     s.prim(SPHERE, (1.6, 4.0, -0.9), (0.30, 0, 0), parent=cur)
     s.write()
 
+# ---- scale scenes (P1d: hierarchical subtree skipping) ---------------------
+#
+# Everything above tops out at 48 objects, where an O(N)-per-march-step program
+# walk is invisible. These exist to make it visible: the whole point of P1d is
+# that cost currently scales with TOTAL scene size instead of with what the ray
+# can see, and you cannot measure that on 17 objects.
+#
+# All of them are a FLAT hard Union under the root, which is deliberate and is
+# the realistic shape of a big scene. A flat union peaks at RPN stack depth 2
+# no matter how many children, so before P1d there is no hierarchy to skip and
+# distanceCalc walks all 2N-1 commands at every single march step.
+#
+# Two families, because they stress opposite things:
+#   S_wide_*   constant local density, cloud GROWS with count. Most objects end
+#              up far from any given ray -> the case hierarchical skipping wins
+#              biggest, and the clearest demonstration of the complexity change.
+#   S_dense_*  constant extent, density grows with count. Objects are near every
+#              ray, so little can be skipped -> the honest worst case, and the
+#              one that proves the traversal overhead does not cost more than
+#              it saves.
+
+def _cloud_cells(count, spacing, center):
+    """The `count` lattice cells nearest the centre, so the cloud is roughly a
+    ball and the framing stays comparable across counts. Deterministic."""
+    k = int(math.ceil(count ** (1.0 / 3.0))) + 2      # +2: ball < cube, need slack
+    half = (k - 1) * 0.5
+    cells = []
+    for ix in range(k):
+        for iy in range(k):
+            for iz in range(k):
+                d = (ix - half) ** 2 + (iy - half) ** 2 + (iz - half) ** 2
+                cells.append((d, ix, iy, iz))
+    cells.sort()
+    out = []
+    for _, ix, iy, iz in cells[:count]:
+        out.append((center[0] + (ix - half) * spacing,
+                    center[1] + (iy - half) * spacing,
+                    center[2] + (iz - half) * spacing))
+    return out
+
+
+def scale_cloud(name, count, spacing, radius, seed):
+    s = Scene(name)
+    rng = random.Random(seed)
+    # Lifted off y=0 so the analytic grid plane still reads underneath.
+    cells = _cloud_cells(count, spacing, (0.0, 1.6 + spacing * 0.5, 0.0))
+    jitter = spacing * 0.30
+    types = [SPHERE, BOX, CAPSULE, CYLINDER]
+    for i, (cx, cy, cz) in enumerate(cells):
+        pos = (cx + rng.uniform(-jitter, jitter),
+               cy + rng.uniform(-jitter, jitter),
+               cz + rng.uniform(-jitter, jitter))
+        t = types[i % len(types)]
+        r = radius * rng.uniform(0.75, 1.25)
+        size = {SPHERE:   (r, 0, 0),
+                BOX:      (r * 0.8, r * 0.8, r * 0.8),
+                CAPSULE:  (r * 0.55, r * 0.9, 0),
+                CYLINDER: (r * 0.7, r * 1.1, 0)}[t]
+        # Rotate the non-spheres: an enclosing sphere is rotation-invariant, so
+        # this must not change any bound P1d computes. Free regression check.
+        rot = IDENTITY if t == SPHERE else quat_axis_angle(
+            (rng.uniform(-1, 1), rng.uniform(-1, 1), rng.uniform(-1, 1)) ,
+            rng.uniform(0, 360))
+        s.prim(t, pos, size, rot=rot)
+    s.write()
+
+
+def scene_scale_wide():
+    # Constant density (spacing 1.1, radius ~0.22): ~2% volume fill, so the
+    # cloud is mostly empty space and its AABB is useless to P4.
+    #
+    # The 60/120 rungs exist because a weak GPU loses the device (Windows TDR,
+    # 2s) well before 250 objects. Start at 60 and climb until it breaks — the
+    # rung where it breaks is itself the "before" number worth recording.
+    scale_cloud("S_wide_60",   60,   1.10, 0.22, seed=60)
+    scale_cloud("S_wide_120",  120,  1.10, 0.22, seed=120)
+    scale_cloud("S_wide_250",  250,  1.10, 0.22, seed=250)
+    scale_cloud("S_wide_1000", 1000, 1.10, 0.22, seed=1000)
+    scale_cloud("S_wide_4000", 4000, 1.10, 0.22, seed=4000)
+
+
+def scene_scale_dense():
+    # 1000 objects squeezed into roughly the S_wide_250 volume.
+    scale_cloud("S_dense_1000", 1000, 0.70, 0.16, seed=7000)
+
+
 def scene_h():
     s = Scene("H_ultra_48")
     # -- smooth blob, 6 prims, k = 0.5 (large)
@@ -425,4 +512,7 @@ if __name__ == "__main__":
     scene_f()
     scene_g()
     scene_h()
+    print("scale scenes (P1d):")
+    scene_scale_wide()
+    scene_scale_dense()
     print("done.")

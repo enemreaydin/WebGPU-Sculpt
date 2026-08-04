@@ -4,6 +4,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace
 {
@@ -30,6 +31,107 @@ namespace
             case CsgNodeType::Intersection: return CsgCmdType::OP_SMOOTH_INTERSECTION;
             default:                        return CsgCmdType::OP_UNION;
         }
+    }
+
+    // Interleave the low 10 bits of v with two zero bits each ("bit expansion"),
+    // the standard way to build a 30-bit Morton key from three 10-bit coordinates.
+    static uint32_t ExpandBits10(uint32_t v)
+    {
+        v = (v * 0x00010001u) & 0xFF0000FFu;
+        v = (v * 0x00000101u) & 0x0F00F00Fu;
+        v = (v * 0x00000011u) & 0xC30C30C3u;
+        v = (v * 0x00000005u) & 0x49249249u;
+        return v;
+    }
+
+    // Z-order key for a point already normalised to the unit cube. Sorting by this
+    // key lands spatial neighbours next to each other in the array, which is what
+    // lets CompileChildRange treat a contiguous slice as a compact spatial cluster
+    // without building an explicit BVH. This is the LBVH construction trick.
+    static uint32_t MortonCode01(float nx, float ny, float nz)
+    {
+        const auto quantize = [](float v) -> uint32_t
+        {
+            const float scaled = v * 1024.0f;
+            // Written as `!(scaled > 0)` so NaN takes this branch too — a NaN
+            // centroid must produce a defined key, not an undefined cast.
+            if (!(scaled > 0.0f))    return 0u;
+            if (scaled >= 1023.0f)   return 1023u;
+            return static_cast<uint32_t>(scaled);
+        };
+        return (ExpandBits10(quantize(nx)) << 2)
+             | (ExpandBits10(quantize(ny)) << 1)
+             |  ExpandBits10(quantize(nz));
+    }
+
+    // memcpy, not a union or a reinterpret_cast: type-punning through either is
+    // undefined behaviour in C++, and every compiler here folds this to a move.
+    static int32_t FloatBits(float value)
+    {
+        int32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        return bits;
+    }
+
+    // Union of the subtree boxes of children[lo, hi).
+    //
+    // Returns false if ANY child in the range lacks a usable box, and the caller
+    // must then emit that range with no skip header at all. This is the untrusted-
+    // input path (CLAUDE.md §11): SceneBounds leaves the box empty for a primitive
+    // whose position or size is non-finite, but CompileNode still emits a
+    // PUSH_OBJECT for it. Bounding the range as if that child were not there would
+    // produce a box that does not contain everything the range draws — the exact
+    // under-covering bound that made the first culling attempt clip geometry.
+    // An empty group also lands here and merely loses a skip it did not need.
+    static bool ComputeRangeBounds(const std::vector<int32_t>& children,
+                                   int32_t lo, int32_t hi,
+                                   const NodeBoundsTable& bounds,
+                                   SceneAABB& out)
+    {
+        out = SceneAABB{};   // inverted == empty
+        for (int32_t i = lo; i < hi; ++i)
+        {
+            const int32_t child = children[static_cast<size_t>(i)];
+            if (!bounds.InRange(child)) return false;
+
+            const SceneAABB& box = bounds.byNodeIndex[static_cast<size_t>(child)];
+            if (box.IsEmpty()) return false;
+
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                out.minBoxDistances[axis] = std::min(out.minBoxDistances[axis], box.minBoxDistances[axis]);
+                out.maxBoxDistances[axis] = std::max(out.maxBoxDistances[axis], box.maxBoxDistances[axis]);
+            }
+        }
+        return !out.IsEmpty();
+    }
+
+    // SKIP_SUBTREE + the two SKIP_BOUNDS carrying the six AABB floats. The jump
+    // distance is left at 0 and patched by the caller once the subtree has been
+    // emitted and its length is known — the classic forward-reference backpatch,
+    // and the reason the header cannot simply be built after the body.
+    static void EmitSkipHeader(const SceneAABB& box, int32_t nodeId, std::vector<CsgCommand>& program)
+    {
+        CsgCommand header{};
+        header.cmdType   = CsgCmdType::SKIP_SUBTREE;
+        header.operand   = 0;
+        header.nodeId    = nodeId;
+        header.parameter = 0.0f;
+        program.push_back(header);
+
+        CsgCommand low{};
+        low.cmdType   = CsgCmdType::SKIP_BOUNDS;
+        low.operand   = FloatBits(box.minBoxDistances[0]);
+        low.nodeId    = FloatBits(box.minBoxDistances[1]);
+        low.parameter = box.minBoxDistances[2];
+        program.push_back(low);
+
+        CsgCommand high{};
+        high.cmdType   = CsgCmdType::SKIP_BOUNDS;
+        high.operand   = FloatBits(box.maxBoxDistances[0]);
+        high.nodeId    = FloatBits(box.maxBoxDistances[1]);
+        high.parameter = box.maxBoxDistances[2];
+        program.push_back(high);
     }
 }
 
@@ -224,7 +326,8 @@ int32_t CsgTree::FillSubtreeDepths(int32_t nodeIndex, std::vector<int32_t>& out)
     return peak;
 }
 
-CsgTree::CompiledProgram CsgTree::CompileToRPN(const std::unordered_map<int32_t, int32_t>& objectIdToIndex) const
+CsgTree::CompiledProgram CsgTree::CompileToRPN(const std::unordered_map<int32_t, int32_t>& objectIdToIndex,
+                                               const NodeBoundsTable* nodeBounds) const
 {
     CompiledProgram compiled;
 
@@ -235,7 +338,21 @@ CsgTree::CompiledProgram CsgTree::CompileToRPN(const std::unordered_map<int32_t,
         std::vector<int32_t> subtreeDepth(m_Nodes.size(), 0);
         FillSubtreeDepths(m_Root, subtreeDepth);
 
-        compiled.requiredStackDepth = CompileNode(m_Root, objectIdToIndex, subtreeDepth, compiled.commands).peak;
+        // The table must cover the node vector, or an index into it is a lie. A
+        // size mismatch means the caller built it against a different tree state,
+        // so drop it rather than regroup on stale geometry.
+        const NodeBoundsTable* usableBounds =
+            (nodeBounds && nodeBounds->byNodeIndex.size() == m_Nodes.size()) ? nodeBounds : nullptr;
+
+        CompileContext ctx;
+        ctx.objectIdToIndex = &objectIdToIndex;
+        ctx.subtreeDepth    = &subtreeDepth;
+        ctx.nodeBounds      = usableBounds;
+        ctx.program         = &compiled.commands;
+        ctx.skipNodeCount   = &compiled.skipNodeCount;
+
+        // The root's own value is the final distance and is never negated.
+        compiled.requiredStackDepth = CompileNode(m_Root, ctx, /*negated=*/false).peak;
     }
 
     // An empty tree legitimately needs depth 0 — not a sentinel, the shader's
@@ -243,7 +360,81 @@ CsgTree::CompiledProgram CsgTree::CompileToRPN(const std::unordered_map<int32_t,
     return compiled;
 }
 
-CsgTree::CompileResult CsgTree::CompileNode(int32_t nodeIndex, const std::unordered_map<int32_t, int32_t>& objectIdToIndex, const std::vector<int32_t>& subtreeDepth, std::vector<CsgCommand>& outProgram) const
+bool CsgTree::ShouldRegroup(const CsgNode& node, size_t childCount, const CompileContext& ctx)
+{
+    // ChildOrderIsFree is exactly the right predicate, and it is doing MORE work
+    // here than it does for the Sethi-Ullman reorder. Reordering needs only
+    // commutativity; regrouping also needs ASSOCIATIVITY, because it changes which
+    // operands each binary op sees. min and max have both. Subtract has neither in
+    // the relevant sense, and the smooth ops are not associative at all — which is
+    // why a smooth chain must keep its authored shape no matter how wide it is.
+    return ctx.nodeBounds != nullptr
+        && ChildOrderIsFree(node)
+        && childCount > static_cast<size_t>(kRegroupLeafMax);
+}
+
+void CsgTree::SortChildrenSpatially(std::vector<int32_t>& children, const NodeBoundsTable& bounds)
+{
+    // Normalise against the extent of just these children, not the whole scene:
+    // Morton keys only discriminate to 1/1024 of the range they are quantised
+    // against, so using the scene extent for a small cluster would collapse every
+    // child onto the same key and the sort would degenerate to a no-op.
+    float lo[3] = {  1e30f,  1e30f,  1e30f };
+    float hi[3] = { -1e30f, -1e30f, -1e30f };
+    for (const int32_t child : children)
+    {
+        if (!bounds.InRange(child)) continue;
+        const SceneAABB& box = bounds.byNodeIndex[static_cast<size_t>(child)];
+        if (box.IsEmpty()) continue;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            lo[axis] = std::min(lo[axis], box.minBoxDistances[axis]);
+            hi[axis] = std::max(hi[axis], box.maxBoxDistances[axis]);
+        }
+    }
+
+    float inverseExtent[3];
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const float extent = hi[axis] - lo[axis];
+        // A zero-extent axis (every child on one plane, or nothing bounded at all)
+        // would divide by zero; 0 collapses that axis to key bit 0 for everyone,
+        // which is the correct degenerate answer — it carries no information.
+        inverseExtent[axis] = (extent > 1e-6f) ? (1.0f / extent) : 0.0f;
+    }
+
+    std::vector<std::pair<uint32_t, int32_t>> keyed;
+    keyed.reserve(children.size());
+    for (const int32_t child : children)
+    {
+        uint32_t key = 0u;
+        if (bounds.InRange(child))
+        {
+            const SceneAABB& box = bounds.byNodeIndex[static_cast<size_t>(child)];
+            if (!box.IsEmpty())
+            {
+                float normalised[3];
+                for (int axis = 0; axis < 3; ++axis)
+                {
+                    const float centre = 0.5f * (box.minBoxDistances[axis] + box.maxBoxDistances[axis]);
+                    normalised[axis] = (centre - lo[axis]) * inverseExtent[axis];
+                }
+                key = MortonCode01(normalised[0], normalised[1], normalised[2]);
+            }
+        }
+        keyed.emplace_back(key, child);
+    }
+
+    // stable_sort, so children sharing a key keep their authored order and the
+    // emitted program stays byte-identical across runs.
+    std::stable_sort(keyed.begin(), keyed.end(),
+        [](const std::pair<uint32_t, int32_t>& a, const std::pair<uint32_t, int32_t>& b)
+        { return a.first < b.first; });
+
+    for (size_t i = 0; i < keyed.size(); ++i) children[i] = keyed[i].second;
+}
+
+CsgTree::CompileResult CsgTree::CompileNode(int32_t nodeIndex, const CompileContext& ctx, bool negated) const
 {
     const CsgNode& node = m_Nodes[nodeIndex];
     if (!node.alive)
@@ -257,11 +448,11 @@ CsgTree::CompileResult CsgTree::CompileNode(int32_t nodeIndex, const std::unorde
         // .at() throws on a missing/stale objectId instead of inserting a bogus entry.
         CsgCommand cmd{};
         cmd.cmdType = CsgCmdType::PUSH_OBJECT;
-        cmd.operand = objectIdToIndex.at(node.objectId);
+        cmd.operand = ctx.objectIdToIndex->at(node.objectId);
         cmd.nodeId = node.nodeId;
         cmd.parameter = node.modifierEnabled && node.modifierType == ModifierType::Roundness
             ? std::max(node.modifierAmount, 0.0f) : 0.0f;
-        outProgram.push_back(cmd);
+        ctx.program->push_back(cmd);
         return { 1, 1 };   // one push: peaks at 1, leaves 1
     }
 
@@ -270,70 +461,201 @@ CsgTree::CompileResult CsgTree::CompileNode(int32_t nodeIndex, const std::unorde
     // (n-ary-to-binary folding).
     const CsgCmdType opCmd = node.blendMode == BlendMode::Smooth
         ? SmoothOpNodeTypeToCmdType(node.type) : OpNodeTypeToCmdType(node.type);
-    int32_t compiledChildren = 0;
-
-    // Stack bookkeeping, mirroring the emission below exactly.
-    //   height — values this node's children have left on the stack so far
-    //   peak   — highest height reached anywhere in this subtree
-    int32_t height = 0;
-    int32_t peak = 0;
 
     std::vector<int32_t> children;
     for (int32_t child = node.firstChild; child != -1; child = m_Nodes[child].nextSibling)
     {
         if (m_Nodes[child].alive) children.push_back(child);
     }
+    if (children.empty()) return {};
 
-    // Sibling order changes the peak: the `height + childResult.peak` term below
-    // charges a compound child for everything its earlier siblings left on the
-    // stack, so a deep child costs nothing when it goes FIRST and costs the full
-    // running height when it goes last. Emitting deepest-first therefore minimises
-    // the peak — this is Sethi-Ullman register-minimising evaluation order.
-    //
-    // Ordering only; the hint is never used to decide whether a child emits (that
-    // stays with the authoritative childResult.yield below), so a stale or wrong
-    // hint can only cost depth, never correctness.
-    if (ChildOrderIsFree(node))
+    if (ShouldRegroup(node, children.size(), ctx))
     {
+        // Spatial order REPLACES the depth order below rather than composing with
+        // it. The two want opposite things — Sethi-Ullman wants the deepest child
+        // first, Morton wants spatial neighbours adjacent — and here spatial wins,
+        // because a sub-range that is not compact in space has a bounding box too
+        // loose for any runtime test to reject. The depth the regrouping costs is
+        // bounded and known (one slot per level); the looseness is not.
+        SortChildrenSpatially(children, *ctx.nodeBounds);
+    }
+    else if (ChildOrderIsFree(node))
+    {
+        // Sibling order changes the peak: the `height + childResult.peak` term in
+        // CompileChildRange charges a compound child for everything its earlier
+        // siblings left on the stack, so a deep child costs nothing when it goes
+        // FIRST and costs the full running height when it goes last. Emitting
+        // deepest-first therefore minimises the peak — Sethi-Ullman ordering.
+        //
+        // Ordering only; the hint is never used to decide whether a child emits
+        // (that stays with the authoritative childResult.yield), so a stale or
+        // wrong hint can only cost depth, never correctness. FillSubtreeDepths does
+        // not model regrouping, so on a regrouped subtree the hint now UNDERSTATES
+        // the real depth — which is fine for exactly that reason, and why the
+        // reported requiredStackDepth still comes from the emission itself.
+        const std::vector<int32_t>& subtreeDepth = *ctx.subtreeDepth;
         std::stable_sort(children.begin(), children.end(),
             [&subtreeDepth](int32_t a, int32_t b)
             { return subtreeDepth[static_cast<size_t>(a)] > subtreeDepth[static_cast<size_t>(b)]; });
     }
 
-    for (const int32_t child : children)
+    return CompileChildRange(children, 0, static_cast<int32_t>(children.size()), node, opCmd, ctx, negated);
+}
+
+CsgTree::CompileResult CsgTree::CompileChildRange(const std::vector<int32_t>& children,
+                                                  int32_t lo, int32_t hi,
+                                                  const CsgNode& opNode, CsgCmdType opCmd,
+                                                  const CompileContext& ctx, bool negated) const
+{
+    const int32_t count = hi - lo;
+
+    // Stack bookkeeping, mirroring the emission exactly.
+    //   height   — values this range's operands have left on the stack so far
+    //   peak     — highest height reached anywhere inside it
+    //   operands — how many actually emitted something (drives the op count)
+    int32_t height   = 0;
+    int32_t peak     = 0;
+    int32_t operands = 0;
+
+    // Folding one operand in, identical whether that operand is a real child node
+    // or a synthetic sub-range. Keeping it in one place is what makes the two
+    // branches below provably equivalent in stack behaviour.
+    const auto fold = [&](const CompileResult& operand)
     {
-        const CompileResult childResult = CompileNode(child, objectIdToIndex, subtreeDepth, outProgram);
+        // Alive but emitted nothing (an empty group, or one holding only dead
+        // nodes). Counting it would emit an op with only one value beneath it —
+        // harmless at runtime because the shader guards with `sp >= 2`, but it
+        // leaves a dead command in a program the shader walks at every march step.
+        if (operand.yield == 0) return;
 
-        // Alive but emitted nothing (an empty group, or one holding only dead nodes).
-        // Counting it would emit an op with only one value beneath it — harmless at
-        // runtime because the shader guards with `sp >= 2`, but it leaves a dead
-        // command in a program the shader walks linearly at every march step.
-        if (childResult.yield == 0)
-        {
-            continue;
-        }
-
-        // The child's peak is measured from zero, but its commands execute on top of
-        // whatever its earlier siblings left behind — so offset it by the current
-        // height. This term is the entire reason a compound child costs depth when it
-        // is NOT first and costs none when it is.
-        peak = std::max(peak, height + childResult.peak);
+        // The operand's peak is measured from zero, but its commands execute on top
+        // of whatever earlier operands left behind — so offset it by the current
+        // height. This term is the entire reason a compound operand costs depth
+        // when it is NOT first and costs none when it is.
+        peak = std::max(peak, height + operand.peak);
         height += 1;
-        ++compiledChildren;
+        ++operands;
 
-        if (compiledChildren >= 2)
+        if (operands >= 2)
         {
             CsgCommand cmd{};
             cmd.cmdType = opCmd;
             cmd.operand = 0;
-            cmd.nodeId = node.nodeId;
-            cmd.parameter = node.blendMode == BlendMode::Smooth ? std::max(node.blendRadius, 0.0f) : 0.0f;
-            outProgram.push_back(cmd);
+            cmd.nodeId = opNode.nodeId;
+            cmd.parameter = opNode.blendMode == BlendMode::Smooth
+                ? std::max(opNode.blendRadius, 0.0f) : 0.0f;
+            ctx.program->push_back(cmd);
             height -= 1;   // the op pops two and pushes one
+        }
+    };
+
+    if (!ShouldRegroup(opNode, static_cast<size_t>(count), ctx))
+    {
+        // A flat leaf range has no sub-ranges, so ordering inside it cannot affect
+        // what a runtime skip test can reject — only the stack peak. So the
+        // Sethi-Ullman order is restored HERE, on the slice, undoing locally what
+        // the Morton sort had to do globally.
+        //
+        // This is not cosmetic. G_correctness_17 mixes a ~6-deep chain with eight
+        // shallow siblings; leaving that chain in Z-order can put it last in its
+        // bucket, which adds the full running height to the deepest subtree in the
+        // scene and pushes the program from depth 6 to depth 8. One more and it
+        // would cross into the depth-16 shader variant, which §6b measured at
+        // 1.5-2x the frame time — a regression far larger than any skip could pay
+        // back, arriving from a sort order nobody would think to look at.
+        // Only Subtract flips the sign, and only for operands past the first: the
+        // RPN fold makes the first EMITTED operand the base (see SelectionState —
+        // "click A, then B, Subtract" is A - B). `operands` is incremented inside
+        // fold(), so reading it before the call gives exactly "how many operands
+        // already landed", which is the positional test the base rule needs.
+        const bool subtractsOperands = (opNode.type == CsgNodeType::Subtract);
+
+        if (count > 1 && ChildOrderIsFree(opNode) && ctx.subtreeDepth)
+        {
+            std::vector<int32_t> slice(children.begin() + lo, children.begin() + hi);
+            const std::vector<int32_t>& subtreeDepth = *ctx.subtreeDepth;
+            std::stable_sort(slice.begin(), slice.end(),
+                [&subtreeDepth](int32_t a, int32_t b)
+                { return subtreeDepth[static_cast<size_t>(a)] > subtreeDepth[static_cast<size_t>(b)]; });
+            // ChildOrderIsFree already excludes Subtract, so nothing here is ever
+            // negated by this node — but the flag still has to carry down from
+            // above, because this range may sit inside someone else's subtrahend.
+            for (const int32_t child : slice) fold(CompileNode(child, ctx, negated));
+        }
+        else
+        {
+            for (int32_t i = lo; i < hi; ++i)
+            {
+                const bool childNegated = negated != (subtractsOperands && operands > 0);
+                fold(CompileNode(children[static_cast<size_t>(i)], ctx, childNegated));
+            }
+        }
+    }
+    else
+    {
+        // Splitting count=9 into 8 buckets would make seven of them hold a single
+        // primitive, and a one-primitive bucket is not a hierarchy — it is P1a,
+        // which was measured at ~12% and removed for being a poor return. Worse,
+        // each bucket will carry a fixed command overhead once the skip metadata
+        // lands, so tiny buckets cost program size for nothing. Aim every bucket at
+        // roughly kRegroupLeafMax entries and let the arity fall out of that; the
+        // floor of 2 is what guarantees the recursion still terminates.
+        // Rounded UP, so that whenever count <= kRegroupArity * kRegroupLeafMax the
+        // split lands entirely on flat leaves and costs exactly one level. Rounding
+        // down would leave an oversized remainder that has to recurse again, adding
+        // a level (and a stack slot) purely to arithmetic.
+        const int32_t bucketsNeeded = (count + kRegroupLeafMax - 1) / kRegroupLeafMax;
+        const int32_t arity = std::max(2, std::min(kRegroupArity, bucketsNeeded));
+
+        // Even contiguous slices of an array already sorted into Z-order. Computing
+        // the split points from the running index (rather than a fixed slice size)
+        // keeps every bucket within one element of the others when count is not a
+        // multiple of the arity — an even split is what bounds the depth at
+        // log_arity(count); a lopsided one degenerates toward a linear chain.
+        for (int32_t bucket = 0; bucket < arity; ++bucket)
+        {
+            const int64_t wide = static_cast<int64_t>(count);
+            const int32_t bucketLo = lo + static_cast<int32_t>((wide *  bucket)      / arity);
+            const int32_t bucketHi = lo + static_cast<int32_t>((wide * (bucket + 1)) / arity);
+            if (bucketHi <= bucketLo) continue;
+
+            // Where the header would start, so it can be patched — or unwound.
+            const int32_t headerIndex = static_cast<int32_t>(ctx.program->size());
+
+            SceneAABB bucketBox;
+            const bool skippable = !negated
+                && ComputeRangeBounds(children, bucketLo, bucketHi, *ctx.nodeBounds, bucketBox);
+
+            if (skippable) EmitSkipHeader(bucketBox, opNode.nodeId, *ctx.program);
+
+            const CompileResult emitted =
+                CompileChildRange(children, bucketLo, bucketHi, opNode, opCmd, ctx, negated);
+
+            if (emitted.yield == 0)
+            {
+                // The bucket emitted nothing (every child dead or empty), so the
+                // header now introduces a subtree that does not exist. yield == 0
+                // means literally no commands were appended, so truncating back to
+                // headerIndex removes exactly the header and nothing else.
+                ctx.program->resize(static_cast<size_t>(headerIndex));
+                continue;
+            }
+
+            if (skippable)
+            {
+                // Backpatch: jump from the header to just past the subtree, and NOT
+                // past the fold's op command below — a skip still leaves one value
+                // on the stack, so the op that consumes it must always run.
+                (*ctx.program)[static_cast<size_t>(headerIndex)].operand =
+                    static_cast<int32_t>(ctx.program->size()) - headerIndex;
+                if (ctx.skipNodeCount) ++(*ctx.skipNodeCount);
+            }
+
+            fold(emitted);
         }
     }
 
-    return { peak, compiledChildren > 0 ? 1 : 0 };
+    return { peak, operands > 0 ? 1 : 0 };
 }
 
 CsgNode* CsgTree::FindNodeById(int32_t nodeId)
