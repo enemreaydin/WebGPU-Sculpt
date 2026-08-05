@@ -29,7 +29,16 @@ double SecondsSince(const std::chrono::steady_clock::time_point& start)
 // what this ladder is for is letting a DEEP scene render correctly rather than
 // silently losing pushes to the `sp < CSG_STACK_DEPTH` guard.
 //
-// Re-measure this table before changing the first entry.
+// The numbers above are a HISTORICAL RECORD of one machine, not a policy any
+// more. Variant selection is now measured at runtime by StackDepthCalibrator,
+// because where the valley sits depends on the register file, the scratch pool
+// and the shader compiler — properties of the user's GPU and driver, not of this
+// codebase. Keep the table: it is the evidence that the valley exists at all, and
+// the reference a new machine's calibration output should be compared against.
+//
+// This constant now seeds only the BASE shader module in Initialize, which exists
+// solely to supply fs_resolve — an entry point with no RPN stacks, so the depth it
+// was specialised with is irrelevant to it.
 constexpr int32_t kCsgStackDepthBuckets[] = {8, 16, 32 };
 }
 
@@ -48,13 +57,310 @@ std::string SdfRenderer::BuildShaderSource(int32_t stackDepth) const
         + coreShaderSource + "\n" + mainShaderSource;
 }
 
-int32_t SdfRenderer::BucketForDepth(int32_t requiredStackDepth)
+int32_t SdfRenderer::BucketForDepth(int32_t requiredStackDepth) const
 {
-    for (const int32_t bucket : kCsgStackDepthBuckets)
+    // The calibrator owns the candidate ladder and the policy. Until it has
+    // measured this machine it returns the smallest candidate deep enough for the
+    // program, which is exactly what the old hardcoded ladder did.
+    return calibrator.BestBucketAtLeast(requiredStackDepth);
+}
+
+void SdfRenderer::RequestCalibration()
+{
+    calibrator.Begin();
+    calibProbeSize = kCalibStartSize;
+
+    // A probe already in flight belongs to the sweep being abandoned. Dropping our
+    // shared_ptr orphans its result object — the callback still owns a copy, so it
+    // writes into storage nobody reads, and the next sweep allocates a fresh one.
+    // That is what keeps a late result from being credited to the wrong candidate.
+    // The closure itself is parked, never freed: the driver holds a raw pointer.
+    if (calibProbe && calibProbe->inFlight && calibCallback)
+        calibRetiredCallbacks.push_back(std::move(calibCallback));
+    calibProbe.reset();
+
+    // The snapshot belongs to one sweep. Invalidating it here is also what stops
+    // the bind group outliving scene buffers that a refresh may have recreated.
+    calibBindGroupReady = false;
+
+    // Un-block the viewport until this sweep genuinely starts probing again. A
+    // restart can be triggered by a scene edit at any time, including from paths
+    // that then wait for preconditions — the viewport must not be held hostage in
+    // the meantime.
+    calibProbingStarted = false;
+}
+
+bool SdfRenderer::EnsureCalibrationBindGroup(wgpu::Device device, wgpu::Queue queue, const GlobalsData& snapshot)
+{
+    if (calibBindGroupReady && calibBindGroup) return true;
+    if (!sceneBuffer || !csgProgramBuffer || !bindGroupLayout) return false;
+
+    ReleaseCalibrationBindGroup();
+
+    wgpu::BufferDescriptor globalsDesc{};
+    globalsDesc.size = sizeof(GlobalsData);
+    globalsDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    calibGlobalsBuffer = device.createBuffer(globalsDesc);
+    if (!calibGlobalsBuffer) return false;
+    queue.writeBuffer(calibGlobalsBuffer, 0, &snapshot, sizeof(snapshot));
+
+    wgpu::BindGroupEntry entries[3]{};
+    entries[0].binding = 0; entries[0].buffer = sceneBuffer;      entries[0].size = sceneBufferSize;
+    entries[1].binding = 1; entries[1].buffer = calibGlobalsBuffer; entries[1].size = sizeof(GlobalsData);
+    entries[2].binding = 2; entries[2].buffer = csgProgramBuffer; entries[2].size = csgProgramBufferSize;
+    wgpu::BindGroupDescriptor bgDesc{};
+    bgDesc.layout = bindGroupLayout; bgDesc.entryCount = 3; bgDesc.entries = entries;
+    calibBindGroup = device.createBindGroup(bgDesc);
+    if (!calibBindGroup) { ReleaseCalibrationBindGroup(); return false; }
+
+    calibBindGroupReady = true;
+    return true;
+}
+
+void SdfRenderer::ReleaseCalibrationBindGroup()
+{
+    if (calibBindGroup)     { calibBindGroup.release();     calibBindGroup = nullptr; }
+    if (calibGlobalsBuffer) { calibGlobalsBuffer.destroy(); calibGlobalsBuffer.release(); calibGlobalsBuffer = nullptr; }
+    calibBindGroupReady = false;
+}
+
+uint32_t SdfRenderer::NextProbeSize(uint32_t size, double ms) const
+{
+    // A probe too fast to time carries no information about how much to grow, so
+    // step rather than extrapolate from a near-zero denominator.
+    if (ms <= 0.001) return std::min(size * 2u, kCalibMaxSize);
+
+    // Wide acceptance band. The goal is a probe in the right ORDER OF MAGNITUDE,
+    // not one hitting the target exactly; chasing precision here just restarts
+    // warmup repeatedly and never begins ranking.
+    if (ms >= kCalibTargetMs * 0.4 && ms <= kCalibTargetMs * 2.5) return size;
+
+    double scale = std::sqrt(kCalibTargetMs / ms);
+    scale = std::max(0.5, std::min(2.0, scale));   // at most halve or double per step
+
+    uint32_t next = static_cast<uint32_t>(static_cast<double>(size) * scale);
+    next = (next / 16u) * 16u;                     // quantise, or it churns by 1px forever
+    next = std::max(kCalibMinSize, std::min(kCalibMaxSize, next));
+    return next;
+}
+
+bool SdfRenderer::EnsureCalibrationTarget(wgpu::Device device, uint32_t size)
+{
+    if (calibView && calibIdView && calibTargetSize == size) return true;
+
+    ReleaseCalibrationTarget();
+
+    wgpu::TextureDescriptor colorDesc{};
+    colorDesc.size = { size, size, 1 };
+    colorDesc.format = renderTargetFormat;
+    colorDesc.usage = wgpu::TextureUsage::RenderAttachment;
+    colorDesc.dimension = wgpu::TextureDimension::_2D;
+    colorDesc.mipLevelCount = 1;
+    colorDesc.sampleCount = 1;
+    calibTexture = device.createTexture(colorDesc);
+    if (calibTexture) calibView = calibTexture.createView();
+
+    // fs_main writes two colour attachments; the pipeline's target layout is
+    // fixed, so the probe has to supply an object-id target even though nothing
+    // will ever read it.
+    wgpu::TextureDescriptor idDesc = colorDesc;
+    idDesc.format = objectIdTargetFormat;
+    calibIdTexture = device.createTexture(idDesc);
+    if (calibIdTexture) calibIdView = calibIdTexture.createView();
+
+    if (!calibView || !calibIdView)
     {
-        if (requiredStackDepth <= bucket) return bucket;
+        ReleaseCalibrationTarget();
+        return false;
     }
-    return kMaxCsgStackDepth;
+
+    calibTargetSize = size;
+    return true;
+}
+
+void SdfRenderer::ReleaseCalibrationTarget()
+{
+    if (calibView)      { calibView.release();      calibView = nullptr; }
+    if (calibTexture)   { calibTexture.destroy();   calibTexture.release();   calibTexture = nullptr; }
+    if (calibIdView)    { calibIdView.release();    calibIdView = nullptr; }
+    if (calibIdTexture) { calibIdTexture.destroy(); calibIdTexture.release(); calibIdTexture = nullptr; }
+    calibTargetSize = 0;
+}
+
+bool SdfRenderer::StepCalibration(wgpu::Device device, wgpu::Queue queue, const GlobalsData& snapshot)
+{
+    if (!calibrator.Active()) return false;
+    if (!device || !queue || !bindGroup || !pipelineLayout) return false;
+
+    // Never compete with an export: it is already saturating the GPU, its band
+    // sizer is timing itself against a watchdog, and a probe injected between
+    // bands would corrupt both measurements.
+    if (finalRenderState == 1 || finalRenderState == 2) return false;
+
+    if (csgProgramBufferSize < kCalibMinProgramCommands * sizeof(CsgCommand)) return false;
+
+    // Globals are a per-frame mirror; before the first real frame they are still
+    // zero-initialised, and a zero camera basis makes every ray degenerate. The
+    // probe would then render nothing, time as instant, and calibrate on garbage.
+    if (snapshot.resolution[0] <= 0.0f || snapshot.resolution[1] <= 0.0f) return false;
+
+    // ---- a probe is outstanding ------------------------------------------------
+    if (calibProbe && calibProbe->inFlight)
+    {
+        if (SecondsSince(calibProbe->start) > kCalibStallSeconds)
+        {
+            // The callback is never coming — a driver reset (TDR) loses the device
+            // without delivering it. Park the closure rather than free it: the
+            // driver still holds a raw pointer into it.
+            std::cerr << "[Calibration] probe did not complete within "
+                      << kCalibStallSeconds << "s; abandoning calibration.\n";
+            if (calibCallback) calibRetiredCallbacks.push_back(std::move(calibCallback));
+            calibProbe.reset();
+            calibrator.Abort();
+        }
+        return false;
+    }
+
+    // ---- consume a finished probe ----------------------------------------------
+    if (calibProbe && calibProbe->ready)
+    {
+        calibProbe->ready = false;
+        const bool failed = calibProbe->failed;
+        const double ms = calibProbe->ms;
+
+        if (failed)
+        {
+            std::cerr << "[Calibration] probe failed; abandoning calibration.\n";
+            calibrator.Abort();
+            return false;
+        }
+
+        // Converge the probe size on kCalibTargetMs. Too small and the reading is
+        // mostly queue latency; too large and the sweep freezes the viewport for
+        // an age, or a single draw overruns the GPU watchdog.
+        //
+        // Warmup only, and restarting warmup on every change. Resizing mid-ranking
+        // would change the workload halfway through the comparison — the same
+        // class of mistake as measuring candidates in blocks, since later
+        // candidates would be ranked against a different amount of work. Resizing
+        // mid-warmup without restarting would be almost as bad: the stability
+        // window would contain probes of two different sizes and could never
+        // settle, or would settle on the transition.
+        if (calibrator.InWarmup())
+        {
+            const uint32_t next = NextProbeSize(calibProbeSize, ms);
+            if (next != calibProbeSize)
+            {
+                calibProbeSize = next;
+                std::cout << "[Calibration] probe was " << ms << " ms; resizing to "
+                          << calibProbeSize << "x" << calibProbeSize << "\n";
+                calibrator.Begin();
+                return false;
+            }
+        }
+
+        if (!calibrator.RecordProbe(static_cast<float>(ms))) return false;
+
+        calibrator.Log();
+        ReleaseCalibrationTarget();   // nothing reads it again until a re-sweep
+
+        // Re-select immediately: the scene is very likely running a variant the
+        // sweep just rejected. Clearing activeCsgStackDepth (rather than
+        // `pipeline`) forces the reselect while leaving a valid pipeline bound if
+        // the new one somehow fails to compile.
+        activeCsgStackDepth = -1;
+        EnsureScenePipeline(device, lastRequiredStackDepth);
+        std::cout << "[Calibration] scene now uses depth " << activeCsgStackDepth << "\n";
+        return true;
+    }
+
+    // ---- submit the next probe -------------------------------------------------
+    if (calibProbeSize == 0) calibProbeSize = kCalibStartSize;
+    if (!EnsureCalibrationTarget(device, calibProbeSize) ||
+        !EnsureCalibrationBindGroup(device, queue, snapshot))
+    {
+        std::cerr << "[Calibration] could not allocate probe resources; abandoning.\n";
+        calibrator.Abort();
+        return false;
+    }
+
+    wgpu::RenderPipeline probePipeline = PipelineForDepth(device, calibrator.PendingDepth());
+    if (!probePipeline)
+    {
+        // This depth cannot be compiled on this device. Leaving it unmeasured is
+        // exactly right: the selector only ever chooses among measured candidates.
+        std::cerr << "[Calibration] depth " << calibrator.PendingDepth()
+                  << " failed to compile; skipping it.\n";
+        if (calibrator.SkipCandidate())
+        {
+            calibrator.Log();
+            ReleaseCalibrationTarget();
+            activeCsgStackDepth = -1;
+            EnsureScenePipeline(device, lastRequiredStackDepth);
+            return true;
+        }
+        return false;
+    }
+
+    wgpu::RenderPassColorAttachment attachments[2]{};
+    attachments[0].view = calibView;
+    attachments[0].loadOp = wgpu::LoadOp::Clear;
+    attachments[0].storeOp = wgpu::StoreOp::Store;
+    attachments[0].clearValue = WGPUColor{0.1, 0.1, 0.12, 1.0};
+    attachments[1].view = calibIdView;
+    attachments[1].loadOp = wgpu::LoadOp::Clear;
+    attachments[1].storeOp = wgpu::StoreOp::Discard;
+    attachments[1].clearValue = WGPUColor{4294967295.0, 0, 0, 0};
+#ifdef __EMSCRIPTEN__
+    attachments[0].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+    attachments[1].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+#endif
+
+    wgpu::RenderPassDescriptor passDesc{};
+    passDesc.colorAttachmentCount = 2;
+    passDesc.colorAttachments = attachments;
+
+    wgpu::CommandEncoder encoder = device.createCommandEncoder();
+    wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
+    pass.setPipeline(probePipeline);
+    // The real scene objects and the real CSG program, but against the globals
+    // SNAPSHOT rather than the live buffer. Measuring the actual scene matters:
+    // a synthetic benchmark would not necessarily reproduce the register
+    // behaviour being ranked. Pinning the globals is what makes the candidates
+    // comparable while the user is free to keep moving the camera.
+    pass.setBindGroup(0, calibBindGroup, 0, nullptr);
+    pass.draw(6, 1, 0, 0);
+    pass.end(); pass.release();
+    wgpu::CommandBuffer commands = encoder.finish(); encoder.release();
+
+    if (!calibProbingStarted)
+    {
+        calibProbingStarted = true;
+        std::cout << "[Calibration] measuring CSG stack depth on this GPU; the"
+                     " viewport pauses for about a second.\n";
+    }
+
+    if (!calibProbe) calibProbe = std::make_shared<CalibrationProbe>();
+    calibProbe->inFlight = true;
+    calibProbe->ready = false;
+    calibProbe->failed = false;
+    calibProbe->start = std::chrono::steady_clock::now();
+
+    queue.submit(1, &commands); commands.release();
+
+    // Captured BY VALUE so the storage outlives this renderer if the device dies
+    // before the callback fires (CLAUDE.md §13). Only ever one probe is in
+    // flight, so replacing calibCallback here can never free a live closure.
+    auto probe = calibProbe;
+    calibCallback = queue.onSubmittedWorkDone(
+        [probe](wgpu::QueueWorkDoneStatus status) {
+            probe->ms = SecondsSince(probe->start) * 1000.0;
+            probe->failed = (status != wgpu::QueueWorkDoneStatus::Success);
+            probe->inFlight = false;
+            probe->ready = true;
+        });
+
+    return false;
 }
 
 void SdfRenderer::EnsureScenePipeline(wgpu::Device device, int32_t requiredStackDepth)
@@ -74,18 +380,36 @@ void SdfRenderer::EnsureScenePipeline(wgpu::Device device, int32_t requiredStack
                   << " — geometry will be silently dropped.\n";
     }
 
+    // Remembered so calibration can re-select the pipeline the moment it learns
+    // which variant is fastest, instead of waiting for the next scene edit.
+    lastRequiredStackDepth = requiredStackDepth;
+
     const int32_t bucket = BucketForDepth(requiredStackDepth);
     if (pipeline && bucket == activeCsgStackDepth)
     {
         return;
     }
 
+    wgpu::RenderPipeline selected = PipelineForDepth(device, bucket);
+    if (!selected)
+    {
+        // Keep whatever pipeline is already bound: a stale-but-deep-enough
+        // variant draws a correct image, an unbound pipeline draws nothing.
+        return;
+    }
+
+    pipeline = selected;
+    activeCsgStackDepth = bucket;
+}
+
+wgpu::RenderPipeline SdfRenderer::PipelineForDepth(wgpu::Device device, int32_t bucket)
+{
+    if (!device || !pipelineLayout) return nullptr;
+
     const auto cached = scenePipelines.find(bucket);
     if (cached != scenePipelines.end())
     {
-        pipeline = cached->second;
-        activeCsgStackDepth = bucket;
-        return;
+        return cached->second;
     }
 
     // `source` must outlive the createShaderModule call — wgslDesc.code is a raw
@@ -103,11 +427,9 @@ void SdfRenderer::EnsureScenePipeline(wgpu::Device device, int32_t requiredStack
     wgpu::ShaderModule variantModule = device.createShaderModule(shaderDesc);
     if (!variantModule)
     {
-        // Keep whatever pipeline is already bound: a stale-but-deep-enough variant
-        // draws a correct image, an unbound pipeline draws nothing.
         std::cerr << "[SdfRenderer] shader module for CSG stack depth " << bucket
                   << " could not be created.\n";
-        return;
+        return nullptr;
     }
 
     wgpu::ColorTargetState colorTarget{};
@@ -144,16 +466,15 @@ void SdfRenderer::EnsureScenePipeline(wgpu::Device device, int32_t requiredStack
         std::cerr << "[SdfRenderer] scene pipeline for CSG stack depth " << bucket
                   << " could not be created.\n";
         variantModule.release();
-        return;
+        return nullptr;
     }
 
     sceneShaderModules[bucket] = variantModule;
     scenePipelines[bucket] = variantPipeline;
-    pipeline = variantPipeline;
-    activeCsgStackDepth = bucket;
 
     std::cout << "[SdfRenderer] compiled scene pipeline for CSG stack depth "
               << bucket << "\n";
+    return variantPipeline;
 }
 
 void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
@@ -325,6 +646,12 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
         return;
     }
 
+    // Arm the stack-depth sweep. Nothing happens yet: StepCalibration refuses to
+    // probe until a scene with a non-trivial CSG program exists, so this means
+    // "sweep as soon as there is something real to measure" rather than "sweep
+    // now against an empty scene", which would rank four identical early-outs.
+    RequestCalibration();
+
     std::cout << "[BILGI]: Pipeline basariyla olusturuldu.\n";
 }
 
@@ -461,6 +788,10 @@ void SdfRenderer::CreateSceneBuffer(
         return;
     }
 
+    // sceneBuffer / csgProgramBuffer were just REPLACED, so any pinned
+    // calibration bind group now points at released buffers.
+    OnSceneUploadChanged();
+
     std::cout << "[BILGI]: SceneBuffer ve BindGroup olusturuldu.\n";
 }
 
@@ -481,6 +812,25 @@ void SdfRenderer::UpdateSceneBuffer(
 
     queue.writeBuffer(sceneBuffer, 0, objects.data(), objectBytes);
     queue.writeBuffer(csgProgramBuffer, 0, csgProgram.data(), commandBytes);
+    OnSceneUploadChanged();
+}
+
+// The scene the sweep is ranking against just changed underneath it.
+//
+// Two separate problems, one answer. Correctness: CreateSceneBuffer REPLACES
+// sceneBuffer and csgProgramBuffer, and the pinned bind group holds references to
+// them — reusing it after that reads released buffers. Validity: even on the
+// cheap writeBuffer path the geometry moved, so candidates measured before the
+// edit and after it were not timed against the same work, and comparing them
+// would rank the edit rather than the shader.
+//
+// Restarting means a sweep cannot finish during a slider drag. That is the
+// correct trade: it costs nothing (the probes were going to be meaningless) and
+// it completes the moment the user stops.
+void SdfRenderer::OnSceneUploadChanged()
+{
+    ReleaseCalibrationBindGroup();
+    if (calibrator.Active()) RequestCalibration();
 }
 
 void SdfRenderer::UpdateCsgProgramBuffer(
@@ -496,6 +846,7 @@ void SdfRenderer::UpdateCsgProgramBuffer(
         return;
     }
     queue.writeBuffer(csgProgramBuffer, 0, csgProgram.data(), commandBytes);
+    OnSceneUploadChanged();
 }
 
 void SdfRenderer::CreateRenderTarget(wgpu::Device device, uint32_t width, uint32_t height)
@@ -1056,6 +1407,16 @@ void SdfRenderer::Destroy()
         resolvePipelineLayout.release();
         resolvePipelineLayout = nullptr;
     }
+
+    // A probe still in flight owns a closure the driver holds a raw pointer to.
+    // Park it, never free it — same rule as RetireFinalCallbacks.
+    calibrator.Abort();
+    if (calibProbe && calibProbe->inFlight && calibCallback)
+        calibRetiredCallbacks.push_back(std::move(calibCallback));
+    calibCallback = nullptr;
+    calibProbe.reset();
+    ReleaseCalibrationTarget();
+    ReleaseCalibrationBindGroup();
 
     if (resolveBindGroupLayout)
     {

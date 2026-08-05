@@ -82,6 +82,30 @@ void Application::MainLoop() {
     }
     if (exportState == 1 || exportState == 2) return;
 
+    // Stack-depth calibration: one offscreen probe per iteration until the sweep
+    // has ranked every shader variant on this GPU (StackDepthCalibrator.h).
+    //
+    // Above the redraw guard for the same reason StepFinalRender is: it advances
+    // once per iteration, and an idle viewport is precisely when a sweep should be
+    // making progress rather than waiting for the user to do something. Completing
+    // the sweep re-selects the scene pipeline underneath us, so the viewport has to
+    // be repainted with whichever variant just won.
+    if (renderer.StepCalibration(graphics.device, graphics.queue, globals)) RequestRedraw();
+
+    // 🔴 The viewport must stay OUT of the queue while a sweep runs, and this is a
+    // correctness requirement for the measurement, not a performance nicety.
+    // onSubmittedWorkDone is a queue-wide fence: it resolves when everything
+    // submitted before it has finished, so a probe issued while a viewport frame
+    // is still executing times that frame as well as itself. On a heavy scene
+    // that is most of the reading — H_ultra's 3.2s frame swamped a 20ms probe
+    // outright and ran the stall watchdog out.
+    //
+    // Same treatment an export gets, and for the same reason. The surface keeps
+    // showing its last frame (WebGPU presentation is retained), the sweep is
+    // bounded to about a second by the adaptive probe size, and it happens once
+    // per session.
+    if (renderer.IsProbing()) return;
+
     // An animated view change advances on wall-clock time, so it is the one piece
     // of state that changes without anyone calling a setter. Nothing else
     // invalidates while it runs, so it has to keep asking for frames itself —

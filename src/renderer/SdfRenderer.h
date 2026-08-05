@@ -4,6 +4,7 @@
 #include "scene/data/SdfObjectData.h"
 #include "scene/data/GlobalsData.h"
 #include "scene/csg/CsgCommand.h"
+#include "renderer/StackDepthCalibrator.h"
 
 #include <chrono>
 #include <cstdint>
@@ -56,6 +57,42 @@ public:
     // bucket so a scene oscillating between depth 2 and 3 does not thrash the cache.
     void EnsureScenePipeline(wgpu::Device device, int32_t requiredStackDepth);
     int32_t GetActiveCsgStackDepth() const { return activeCsgStackDepth; }
+
+    // ---- Runtime stack-depth calibration (see StackDepthCalibrator.h) --------
+    //
+    // Arms a sweep: every candidate depth is compiled and timed against the
+    // CURRENT scene, and the fastest one wins. Safe to call at any time; the
+    // sweep runs itself from StepCalibration and simply restarts if it is armed
+    // again mid-flight.
+    void RequestCalibration();
+
+    // Runs at most one probe per call, so a sweep costs one extra offscreen draw
+    // per frame and never blocks. Returns true on the call that COMPLETES the
+    // sweep, which is the caller's cue to request a redraw — the scene pipeline
+    // has just been re-selected underneath it.
+    //
+    // Must be stepped from above MainLoop's redraw guard, for the same reason
+    // StepFinalRender is: it is a state machine that advances once per iteration,
+    // and an idle viewport is exactly when a sweep should be making progress.
+    // `snapshot` is pinned on the first probe of a sweep and reused for every
+    // later one. Candidates must be ranked against IDENTICAL work, and the live
+    // globals buffer is rewritten every frame — an orbit halfway through a sweep
+    // would otherwise charge one variant for a close-up and another for a distant
+    // view and call the difference occupancy.
+    bool StepCalibration(wgpu::Device device, wgpu::Queue queue, const GlobalsData& snapshot);
+
+    bool IsCalibrating() const { return calibrator.Active(); }
+
+    // 🔴 True only once probes are actually being submitted — NOT merely "a sweep
+    // is armed". Callers suppress viewport rendering on this, and a sweep sits
+    // armed from startup while StepCalibration waits for its preconditions (a
+    // real CSG program, valid globals). Gating the viewport on Active() instead
+    // deadlocks: calibration waits for globals, globals are only written by a
+    // frame, and the frame is blocked by calibration. Black screen, forever.
+    bool IsProbing() const { return calibrator.Active() && calibProbingStarted; }
+    bool IsCalibrated() const  { return calibrator.Calibrated(); }
+    // 0 when a depth has not been measured (or the sweep has not run).
+    float CalibratedMsFor(int32_t depth) const { return calibrator.MeasuredMs(depth); }
 
     void CreateRenderTarget(
         wgpu::Device device,
@@ -139,7 +176,88 @@ private:
     int32_t activeCsgStackDepth = 0;
 
     std::string BuildShaderSource(int32_t stackDepth) const;
-    static int32_t BucketForDepth(int32_t requiredStackDepth);
+    // No longer static: the answer now depends on what calibration measured on
+    // this machine, not on a constant baked in at authoring time.
+    int32_t BucketForDepth(int32_t requiredStackDepth) const;
+    // Cached-or-compiled pipeline for one depth, WITHOUT re-pointing `pipeline`.
+    // Calibration needs to draw with a variant the scene is not using, and
+    // `pipeline` is a non-owning alias that the viewport reads every frame.
+    wgpu::RenderPipeline PipelineForDepth(wgpu::Device device, int32_t bucket);
+
+    // ---- calibration state --------------------------------------------------
+    StackDepthCalibrator calibrator;
+    // Remembered so the sweep can re-select the scene pipeline when it finishes,
+    // without waiting for the next scene edit to supply the depth again.
+    int32_t lastRequiredStackDepth = 0;
+
+    // One probe's worth of shared state. Held by shared_ptr and captured BY VALUE
+    // by the work-done lambda so it outlives this renderer if the device dies
+    // mid-sweep (CLAUDE.md §13).
+    struct CalibrationProbe
+    {
+        bool   inFlight = false;
+        bool   ready    = false;   // a result is waiting to be consumed
+        bool   failed   = false;
+        double ms       = 0.0;
+        std::chrono::steady_clock::time_point start{};
+    };
+    std::shared_ptr<CalibrationProbe> calibProbe;
+    std::unique_ptr<wgpu::QueueWorkDoneCallback> calibCallback;
+    std::vector<std::unique_ptr<wgpu::QueueWorkDoneCallback>> calibRetiredCallbacks;
+
+    // A frozen copy of the globals the sweep started with, plus a bind group that
+    // reads it instead of the live one. Rebuilt per sweep, which is also what
+    // keeps it from outliving the scene buffers it points at.
+    wgpu::Buffer      calibGlobalsBuffer = nullptr;
+    wgpu::BindGroup   calibBindGroup     = nullptr;
+    bool              calibBindGroupReady = false;
+    bool EnsureCalibrationBindGroup(wgpu::Device device, wgpu::Queue queue, const GlobalsData& snapshot);
+    void ReleaseCalibrationBindGroup();
+    // Called from every scene-upload path; drops the pinned bind group and
+    // restarts an in-flight sweep. See the comment at the definition.
+    void OnSceneUploadChanged();
+
+    wgpu::Texture     calibTexture   = nullptr;
+    wgpu::TextureView calibView      = nullptr;
+    wgpu::Texture     calibIdTexture = nullptr;
+    wgpu::TextureView calibIdView    = nullptr;
+    uint32_t calibTargetSize = 0;   // edge length of the allocated probe target
+    uint32_t calibProbeSize  = 0;   // edge length the sweep wants
+
+    bool EnsureCalibrationTarget(wgpu::Device device, uint32_t size);
+    void ReleaseCalibrationTarget();
+
+    // The probe renders offscreen at its own square size rather than at the
+    // canvas size, so a sweep costs the same whatever window the user has open
+    // and cannot be skewed by a resize halfway through.
+    //
+    // The size is MEASURED, not fixed, for the same reason the export sizes its
+    // bands: a scene can be 40x heavier than another, and one constant cannot
+    // serve both. Too small and the probe is drowned by queue latency; too large
+    // and a sweep freezes the viewport for half a minute, or trips the OS GPU
+    // watchdog (Windows TDR = 2s) on a single unsplittable draw. Warmup starts
+    // deliberately small and converges on kCalibTargetMs before ranking begins.
+    static constexpr uint32_t kCalibStartSize = 96;
+    static constexpr uint32_t kCalibMinSize   = 64;
+    static constexpr uint32_t kCalibMaxSize   = 512;
+    static constexpr double   kCalibTargetMs  = 25.0;
+    // Below this the measurement is mostly queue latency and clock granularity —
+    // a fixed additive cost that would drown the differences being ranked.
+    static constexpr double kCalibMinProbeMs = 2.0;
+    // Generous because the FIRST probe of a sweep still has whatever the viewport
+    // had already queued ahead of it; every later probe runs against a drained
+    // queue (Application skips the viewport passes while a sweep is in flight).
+    static constexpr double kCalibStallSeconds = 10.0;
+
+    // Edge length that would land the next probe near kCalibTargetMs. Cost scales
+    // with pixel COUNT, so the edge scales with the square root of the ratio.
+    uint32_t NextProbeSize(uint32_t size, double ms) const;
+    // Set when the first probe of a sweep is actually submitted; see IsProbing().
+    bool calibProbingStarted = false;
+    // An empty or near-empty program early-outs in the shader before it ever
+    // touches the RPN stacks, so every variant would time identically and the
+    // "winner" would be pure noise.
+    static constexpr uint64_t kCalibMinProgramCommands = 8;
 
     wgpu::PipelineLayout pipelineLayout = nullptr;
     wgpu::BindGroupLayout bindGroupLayout = nullptr;
