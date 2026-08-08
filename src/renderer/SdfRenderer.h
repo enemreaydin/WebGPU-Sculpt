@@ -201,6 +201,12 @@ private:
         double ms       = 0.0;
         std::chrono::steady_clock::time_point start{};
     };
+    // Start of the current settle window (see kCalibSettleSeconds). Always written
+    // by RequestCalibration, which is the only way a sweep becomes Active, so
+    // StepCalibration can never read it uninitialised.
+    std::chrono::steady_clock::time_point calibSettleStart{};
+    bool calibSettleAnnounced = false;   // one-shot log when the window closes
+
     std::shared_ptr<CalibrationProbe> calibProbe;
     std::unique_ptr<wgpu::QueueWorkDoneCallback> calibCallback;
     std::vector<std::unique_ptr<wgpu::QueueWorkDoneCallback>> calibRetiredCallbacks;
@@ -239,7 +245,22 @@ private:
     // deliberately small and converges on kCalibTargetMs before ranking begins.
     static constexpr uint32_t kCalibStartSize = 96;
     static constexpr uint32_t kCalibMinSize   = 64;
-    static constexpr uint32_t kCalibMaxSize   = 512;
+    // 🔴 Raised from 512 because on a light scene the sizer HIT this ceiling and
+    // the sweep ranked below its target workload. Measured there: 3.2 ms @ 64px,
+    // 3.9 @ 128, 4.9 @ 256, ~8.1 @ 512 — 64x the pixels for 2.5x the time. A
+    // straight-line fit puts ~3.5 ms of that on a FIXED per-probe cost (submit,
+    // queue latency, the onSubmittedWorkDone round trip), i.e. nearly half of each
+    // reading was overhead common to all four candidates. That does not bias the
+    // ranking, it COMPRESSES it: the real differences get added to a large constant
+    // and then compared, which is how a genuine 2x on the shader work arrives
+    // looking like the 6% spread the calibrator then correctly calls noise.
+    //
+    // Diluting the constant is the only fix available (the round trip is the
+    // browser's, not ours), and the ceiling only ever binds on scenes cheap enough
+    // for it to be safe — the sizer converges DOWNWARD on a heavy scene and never
+    // reaches the cap. At kCalibTargetMs the worst case here is ~25 ms against a
+    // 2 s TDR budget.
+    static constexpr uint32_t kCalibMaxSize   = 1024;
     static constexpr double   kCalibTargetMs  = 25.0;
     // Below this the measurement is mostly queue latency and clock granularity —
     // a fixed additive cost that would drown the differences being ranked.
@@ -248,6 +269,26 @@ private:
     // had already queued ahead of it; every later probe runs against a drained
     // queue (Application skips the viewport passes while a sweep is in flight).
     static constexpr double kCalibStallSeconds = 10.0;
+
+    // Quiet period between the last scene change and the FIRST probe of a sweep.
+    //
+    // The calibrator already discards probes until the reading stops moving
+    // (StackDepthCalibrator's warmup), but that defence is statistical and can be
+    // fooled: a transient that is consistently wrong for five probes in a row
+    // passes the 8% spread test and ends warmup early, on the ramp. Right after a
+    // page load, a pipeline rebuild or a project open there is a lot of that —
+    // shader compilation, first-use allocation, the browser still doing layout —
+    // and it is transient in WALL-CLOCK time, which is the one axis a probe-count
+    // heuristic cannot see. So the two defences are deliberately different in kind:
+    // this one waits out the clock, warmup waits out the variance.
+    //
+    // 🔴 It is a DEBOUNCE, not a delay. RequestCalibration re-arms it, and every
+    // scene upload re-requests while a sweep is live, so the window restarts on
+    // each change and the sweep begins 10s after the LAST one. That is what keeps
+    // a slider drag from starting a sweep between two frames of the drag — which
+    // would pin a snapshot mid-edit and rank candidates against a scene that no
+    // longer exists.
+    static constexpr double kCalibSettleSeconds = 10.0;
 
     // Edge length that would land the next probe near kCalibTargetMs. Cost scales
     // with pixel COUNT, so the edge scales with the square root of the ratio.

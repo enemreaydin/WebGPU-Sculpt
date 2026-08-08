@@ -85,6 +85,13 @@ struct alignas(16) GlobalsData
                               // [0, accumCount) — never a layer left over from a previous camera/scene state,
                               // which is what used to ghost. Layers are always filled from index 0 upward after
                               // an invalidation, so "valid" is a prefix. 1 = show just this frame. See CLAUDE.md 7a.
+    // World-space box enclosing everything the CSG program can draw (CLAUDE.md 7b).
+    // The two w slots were the last free space in the struct and are now both spent:
+    //   min.w = SceneAABB::proxyMargin — STAGED, not read by any shader (P1b).
+    //   max.w = SceneAABB::cullMargin  — read by intersectObjectSpheres, the per-ray
+    //           enclosing-sphere cull (CLAUDE.md 7c). Inflates each object's
+    //           position.w bubble so the union of bubbles contains every surface.
+    // The next field must append a new 16-byte block (288 -> 304).
     float sceneBoundsMin[4] = {  1e30f,  1e30f,  1e30f, 0.0f };
     float sceneBoundsMax[4] = { -1e30f, -1e30f, -1e30f, 0.0f };
 

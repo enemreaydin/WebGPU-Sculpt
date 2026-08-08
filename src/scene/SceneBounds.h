@@ -20,9 +20,23 @@ struct SceneAABB {
     // SceneBounds.cpp.
     //
     // Published to globals.sceneBoundsMin.w. !! STAGED, NOT YET CONSUMED — the
-    // shader path that read it (P1a) was removed; per-ray sphere culling will use
-    // the same value to inflate the bubbles it tests against.
+    // shader path that read it (P1a) was removed. Kept for P1b's distance
+    // substitution; it is NOT what the per-ray sphere cull uses (see cullMargin).
     float proxyMargin = 0.0f;
+
+    // How far each object's bubble must be inflated before the union of bubbles is
+    // guaranteed to contain every surface the CSG program can draw. Same quantity
+    // the scene box is padded by, and for the same reason: a smooth blend pushes
+    // the surface outside both operands' bubbles.
+    //
+    // Deliberately NOT proxyMargin. That one carries kProxySafetyDistance (0.5
+    // world units), a knob for trusting a bubble as a *distance* — the cull only
+    // asks "could this ray touch the object at all", which needs nothing beyond
+    // enclosure. Reusing it would start every march up to half a unit early.
+    //
+    // Published to globals.sceneBoundsMax.w and consumed by intersectObjectSpheres
+    // in main.wgsl (CLAUDE.md 7c).
+    float cullMargin = 0.0f;
 
     bool IsEmpty() const;
 };

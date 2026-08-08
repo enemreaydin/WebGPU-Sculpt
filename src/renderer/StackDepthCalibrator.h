@@ -162,6 +162,21 @@ public:
     // Before the sweep finishes this returns the smallest valid candidate — never
     // a partially measured ranking, or the pipeline would flip between variants
     // mid-sweep and the sweep would be measuring its own churn.
+    //
+    // 🔴 A measured win is only acted on if it CLEARS THE NOISE FLOOR. Ranking four
+    // candidates always produces a winner, including when all four are the same
+    // speed — and "argmin of four samples from one distribution" is a coin flip, not
+    // a measurement. Observed directly: two consecutive sweeps of the same scene on
+    // the same machine returned depth 16 (spread 1.06x) and then depth 8 (spread
+    // 1.08x). Both spreads sit at or under this project's documented run-to-run
+    // noise of 6-10%, so both "winners" were noise, and the engine was silently
+    // running a different shader variant per session.
+    //
+    // That is worse than picking badly: it makes every before/after comparison the
+    // user runs unsound, because the variant can change underneath them between two
+    // runs that differ only in the thing being measured. So the rule is the standard
+    // one for acting on an effect — require it to exceed the noise floor, and
+    // otherwise keep the stable default.
     int32_t BestBucketAtLeast(int32_t required) const
     {
         // Two different floors. Once measured, correctness is the only constraint
@@ -174,6 +189,7 @@ public:
         int32_t smallestValid = -1;
         int32_t cheapest = -1;
         float   cheapestMs = 0.0f;
+        float   defaultMs  = 0.0f;   // measured cost of kPreMeasurementDepth; 0 = not eligible
 
         // kCandidates is ascending, so the first one clearing the floor is also
         // the smallest.
@@ -184,11 +200,27 @@ public:
             if (smallestValid < 0) smallestValid = candidate;
 
             if (phase != Phase::Done || bestMs[i] <= 0.0f) continue;
+            if (candidate == kPreMeasurementDepth) defaultMs = bestMs[i];
             if (cheapest < 0 || bestMs[i] < cheapestMs)
             {
                 cheapest = candidate;
                 cheapestMs = bestMs[i];
             }
+        }
+
+        // Keep the default unless beating it is worth more than the noise floor.
+        // Same threshold the Log() note uses, deliberately: what the engine reports
+        // as indistinguishable and what it acts on must not disagree.
+        //
+        // Note this can only ever RETAIN kPreMeasurementDepth, never select it when
+        // it is genuinely slower — a candidate that loses by more than the tolerance
+        // still loses. And it is skipped entirely when the default is below `floor`
+        // (defaultMs stays 0), so the depth requirement is never traded for
+        // stability.
+        if (cheapest >= 0 && defaultMs > 0.0f && cheapestMs > 0.0f &&
+            (defaultMs - cheapestMs) / cheapestMs < kStableTolerance)
+        {
+            return kPreMeasurementDepth;
         }
 
         if (cheapest >= 0) return cheapest;
@@ -233,6 +265,20 @@ public:
         if (second >= 0 && bestMs[second] > 0.0f &&
             (bestMs[second] - bestMs[best]) / bestMs[best] < kStableTolerance)
         {
+            // Also say what the selector will DO about it, or the next line
+            // ("scene now uses depth N") looks like it ignored the warning.
+            for (int i = 0; i < kCandidateCount; ++i)
+            {
+                if (kCandidates[i] != kPreMeasurementDepth) continue;
+                if (bestMs[i] > 0.0f && (bestMs[i] - bestMs[best]) / bestMs[best] < kStableTolerance)
+                {
+                    std::cout << "[Calibration] the win does not clear the noise floor, so the"
+                              << " default (depth " << kPreMeasurementDepth << ") is kept for"
+                              << " run-to-run stability unless the program needs a deeper one.\n";
+                }
+                break;
+            }
+
             std::cout << "[Calibration] note: depth " << kCandidates[second] << " is within "
                       << (kStableTolerance * 100.0f) << "% of the winner — this GPU is"
                       << " largely indifferent, and the choice is inside the noise floor.\n";

@@ -70,6 +70,13 @@ void SdfRenderer::RequestCalibration()
     calibrator.Begin();
     calibProbeSize = kCalibStartSize;
 
+    // Restart the settle window on every request, not just the first. This is the
+    // debounce: while a sweep is live every scene upload re-requests, so the clock
+    // resets on each change and probing begins kCalibSettleSeconds after the last
+    // one rather than kCalibSettleSeconds after the first.
+    calibSettleStart = std::chrono::steady_clock::now();
+    calibSettleAnnounced = false;
+
     // A probe already in flight belongs to the sweep being abandoned. Dropping our
     // shared_ptr orphans its result object — the callback still owns a copy, so it
     // writes into storage nobody reads, and the next sweep allocates a fresh one.
@@ -190,6 +197,22 @@ void SdfRenderer::ReleaseCalibrationTarget()
 bool SdfRenderer::StepCalibration(wgpu::Device device, wgpu::Queue queue, const GlobalsData& snapshot)
 {
     if (!calibrator.Active()) return false;
+
+    // ---- settle window ---------------------------------------------------------
+    //
+    // Sit out the first kCalibSettleSeconds after the most recent change before
+    // submitting anything. Placed above every other check so the clock runs while
+    // the sweep is still waiting on its preconditions, and above the probe
+    // bookkeeping so a re-arm mid-sweep cannot consume a result measured before the
+    // change. Safe to early-out here: RequestCalibration already parked any
+    // in-flight callback and cleared calibProbe, so nothing is left outstanding.
+    //
+    // The viewport keeps drawing normally throughout — calibProbingStarted is still
+    // false, so IsProbing() is false and Application does not suppress the frame.
+    // That is deliberate: the window is meant to be spent doing real work, which is
+    // what settles the clocks the sweep is about to measure.
+    if (SecondsSince(calibSettleStart) < kCalibSettleSeconds) return false;
+
     if (!device || !queue || !bindGroup || !pipelineLayout) return false;
 
     // Never compete with an export: it is already saturating the GPU, its band
@@ -203,6 +226,17 @@ bool SdfRenderer::StepCalibration(wgpu::Device device, wgpu::Queue queue, const 
     // zero-initialised, and a zero camera basis makes every ray degenerate. The
     // probe would then render nothing, time as instant, and calibrate on garbage.
     if (snapshot.resolution[0] <= 0.0f || snapshot.resolution[1] <= 0.0f) return false;
+
+    // Announced here, not at the top: the settle window can expire while the sweep
+    // is still blocked on a real CSG program or valid globals, and a "starting"
+    // line printed then would be a lie the user times their measurement against.
+    // This is the first point where a probe genuinely follows.
+    if (!calibSettleAnnounced)
+    {
+        calibSettleAnnounced = true;
+        std::cout << "[Calibration] " << kCalibSettleSeconds
+                  << "s quiet since the last scene change; starting sweep.\n";
+    }
 
     // ---- a probe is outstanding ------------------------------------------------
     if (calibProbe && calibProbe->inFlight)
@@ -650,7 +684,7 @@ void SdfRenderer::Initialize(wgpu::Device device, wgpu::TextureFormat format)
     // probe until a scene with a non-trivial CSG program exists, so this means
     // "sweep as soon as there is something real to measure" rather than "sweep
     // now against an empty scene", which would rank four identical early-outs.
-    RequestCalibration();
+    // RequestCalibration();
 
     std::cout << "[BILGI]: Pipeline basariyla olusturuldu.\n";
 }

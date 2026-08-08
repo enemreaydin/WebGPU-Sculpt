@@ -19,9 +19,12 @@
 //      the proxy OVERestimate the distance, and the marcher steps through the
 //      surface. Multiplicative so it scales with object size.
 //
-//   2. kSceneBoxPadding  (world units, per box face)
-//      "Is the scene box big enough for all the bubbles?" Absorbs f32 rounding
-//      on the CPU -> uniform -> shader round trip for the §7b ray clip.
+//   2. kSceneBoxPadding  (world units, per box face / per bubble)
+//      "Is the enclosure big enough once blending is accounted for?" Absorbs f32
+//      rounding on the CPU -> uniform -> shader round trip. Used twice, on purpose:
+//      the §7b scene box and the §7c per-object cull margin are the SAME
+//      enclosure claim at two granularities (the box is the union of the bubbles),
+//      so they must not drift apart.
 //
 //   3. kProxySafetyDistance  (world units, per evaluation)
 //      "Am I far enough from this bubble to trust it?" Guards the CSG operators,
@@ -219,18 +222,26 @@ SceneAABB SceneBounds::Compute(const std::vector<SdfObjectData>& objects, const 
         }
     }
 
-    // Both derived margins are built from the same measured quantity, because a
-    // smooth blend genuinely pushes surfaces outward: the box must contain that
-    // bulge, and the proxy must not be trusted anywhere inside a blend zone.
-    // Set before the early return below so delta is valid in every scene state.
+    // All three derived margins are built from the same measured quantity, because
+    // a smooth blend genuinely pushes surfaces outward: the box must contain that
+    // bulge, each bubble must contain its share of it, and the proxy must not be
+    // trusted anywhere inside a blend zone.
+    // Set before the early return below so they are valid in every scene state.
     bounds.proxyMargin = maxBlendRadius + kProxySafetyDistance;
+
+    // The per-object cull margin and the box margin are literally the same number,
+    // and that is the invariant: the box was DERIVED as the union of the inflated
+    // bubbles, so if the bubbles were inflated by less than the box, a ray could be
+    // culled by the bubbles after passing the box — i.e. clipped geometry. Computing
+    // both from one expression is what keeps that impossible.
+    const float boxMargin = maxBlendRadius + kSceneBoxPadding;
+    bounds.cullMargin = boxMargin;
 
     // Nothing contributed: leave it inverted. Inflating here would turn an empty
     // scene into a small valid box at the origin, and every ray through it would
     // march for nothing.
     if (bounds.IsEmpty()) return bounds;
 
-    const float boxMargin = maxBlendRadius + kSceneBoxPadding;
     for (int axis = 0; axis < 3; ++axis)
     {
         bounds.minBoxDistances[axis] -= boxMargin;

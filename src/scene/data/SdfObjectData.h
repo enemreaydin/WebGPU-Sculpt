@@ -21,10 +21,11 @@ struct alignas(16) SdfObjectData
                                      // w = enclosing-sphere radius, a DERIVED cache
                                      // written by SceneBounds::WriteEnclosingRadii on
                                      // every buffer refresh (the setters below zero it,
-                                     // so it cannot live anywhere else). Currently
-                                     // written but not read by any shader — reserved
-                                     // for per-ray sphere culling. A stale value in a
-                                     // .sdfp is harmless: loading triggers a refresh.
+                                     // so it cannot live anywhere else). READ BY THE
+                                     // SHADER: intersectObjectSpheres tests every ray
+                                     // against these bubbles to find its first entry
+                                     // point (CLAUDE.md 7c). A stale value in a .sdfp
+                                     // is harmless: loading triggers a refresh.
 
     std::array<float, 4> rotation;   // Quaternion (x,y,z,w), identity = (0,0,0,1).
                                      // Reserved for a future gizmo rotate mode.

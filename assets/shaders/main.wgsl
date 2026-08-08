@@ -89,7 +89,7 @@ struct RayShade {
     color : vec3f,
     id : u32,
 }
-const SCENE_BOUNDS_OPT_ENABLED = true;
+const SCENE_BOUNDS_OPT_ENABLED = false;
 
 struct SceneBoundsHit {
     hit : bool,
@@ -115,6 +115,37 @@ fn intersectSceneBounds(ro : vec3f, rd : vec3f) -> SceneBoundsHit {
     return SceneBoundsHit(hit, tEnter, tExit);
 }
 
+const OBJECT_SPHERE_OPT_ENABLED = true;
+
+const NO_BUBBLE_HIT = 1e30;
+
+fn firstBubbleEntry(ro : vec3f, rd : vec3f) -> f32 {
+
+    let margin = globals.sceneBoundsMax.w;
+    let count = arrayLength(&scene_objects);
+
+    var tEnter = NO_BUBBLE_HIT;
+
+    for (var i : u32 = 0u; i < count; i = i + 1u) {
+
+        let bubble = scene_objects[i].position;
+        let oc = bubble.xyz - ro;
+        let r = max(bubble.w, 0.0) + margin;
+
+        let b = dot(oc, rd);
+        let disc = b * b - dot(oc, oc) + r * r;
+
+        if (disc >= 0.0) {
+            let sq = sqrt(disc);
+            if (b + sq >= 0.0) {
+                tEnter = min(tEnter, max(b - sq, 0.0));
+            }
+        }
+    }
+
+    return tEnter;
+}
+
 fn shadeRay(uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, focalLength : f32) -> RayShade {
     let lightDirection = normalize(globals.lightDirection.xyz);
     let lightColor = globals.lightColor.xyz;
@@ -132,6 +163,12 @@ fn shadeRay(uv : vec2f, ro : vec3f, right : vec3f, up : vec3f, forward : vec3f, 
         boundsHit = bb.hit;
         tStart = max(bb.tEnter, 0.0);
         tLimit = min(bb.tExit, globals.maxDistance);
+    }
+
+    if (OBJECT_SPHERE_OPT_ENABLED && boundsHit) {
+        let tb = firstBubbleEntry(ro, rd);
+        boundsHit = tb < NO_BUBBLE_HIT;
+        tStart = max(tStart, min(tb, tLimit));
     }
 
     var t = tStart;

@@ -1815,6 +1815,7 @@ void Application::SyncRenderGlobals() {
     globals.sceneBoundsMin[1] = sceneSerializer.GetSceneBounds().minBoxDistances[1];
     globals.sceneBoundsMin[2] = sceneSerializer.GetSceneBounds().minBoxDistances[2];
     globals.sceneBoundsMin[3] = sceneSerializer.GetSceneBounds().proxyMargin;
+    globals.sceneBoundsMax[3] = sceneSerializer.GetSceneBounds().cullMargin;
     // The live viewport always renders at the viewport budget; the export builds
     // its own globals from exportQuality in StartFinalRender.
     ApplyQuality(s.viewportQuality, globals);
